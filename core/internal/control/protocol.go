@@ -50,6 +50,17 @@ func Serve(ctx context.Context, opts Options, in io.Reader, out io.Writer) error
 	svc := NewService(opts)
 	defer func() { _ = svc.Shutdown(context.Background(), false) }()
 
+	loopCtx, stopLoop := context.WithCancel(ctx)
+	loopDone := make(chan struct{})
+	go func() {
+		defer close(loopDone)
+		svc.runUpdateLoop(loopCtx)
+	}()
+	defer func() {
+		stopLoop()
+		<-loopDone
+	}()
+
 	lines := make(chan []byte, 16)
 	scanErr := make(chan error, 1)
 	go func() {
@@ -74,6 +85,10 @@ func Serve(ctx context.Context, opts Options, in io.Reader, out io.Writer) error
 		var req request
 		if err := json.Unmarshal(line, &req); err != nil {
 			continue
+		}
+		if req.Method == "shutdown" {
+			stopLoop()
+			<-loopDone
 		}
 		result, err := dispatch(ctx, svc, req)
 		if err != nil {

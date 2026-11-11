@@ -7,7 +7,7 @@
 | 04 | core-request-normalize | done | 2026-11-11 |
 | 05 | core-codex-config | done | 2026-11-11 |
 | 06 | core-control | done | 2026-11-11 |
-| 07 | core-update-check | pending | — |
+| 07 | core-update-check | done | 2026-11-11 |
 | 08 | macos-system | pending | — |
 | 09 | macos-ui | pending | — |
 | 10 | windows-system | pending | — |
@@ -22,6 +22,7 @@
 - 05 记录：首轮 Review 合规 15/17，自修一轮（存原文实现逐字节还原、先存状态后换配置、重复开启的接管、符号链接、权限、原子备份、写入前重读比较、类型校验）；独立复审 7/8 修好，剩悬空符号链接和 auto 下架语义。经用户同意再修一轮，并新增 PRD 03 C11（auto 下架时还原 model）；第三轮先 Red 后 Green，116 个用例通过。已知未处理：`[[desktop]]` 数组表写法会在写备份后才报 config_invalid（配置不变）。
 - 04 记录：Review 合规 15/18、0 安全问题；对照 Codex 源码确认压缩返回格式可被识别。自修一轮（先 Red 后 Green）：context_compaction 不发中台、总结请求单独 10 分钟等头超时、只有 data 行的 SSE 也记推理 id、官方请求只替换 input 段其余逐字节保留、字符串 input 只整理 tools。旧用例 `/v1/responses/compact` 多级路径改为 `/v1/responses/input_tokens`（compact 已由本工具接管）。未验证：官方 message/function_call 条目带的 encrypted 字段发到中台是否被拒，需用真实中台回放。
 - 06 记录：Review 合规 19/23；自修一轮（先 Red 后 Green）：刷新模型后重写接入项（C11）、请求处理中关 stdin 也 5 秒内退出、activate 失败写入 Status、协议文档补错误码与 keys 说明、save 失败整体回滚、关闭转发非 blocked 错误保持原状态、settings 原子写、save 只拉一次中台、重启后恢复 taken_over/restore_blocked；测试专用参数移入 `coretest` 构建标记，正式构建无这些参数。catalog.Build 增加 RelayIDs 以复用回退逻辑。
+- 07 记录：Review 合规 13/14；自修一轮：自动检查失败写一行日志（不含响应正文）、响应体 1MB 上限、shutdown 先停检查循环、发布页地址必须以 https://github.com/ 开头；补开发版本号、空 tag、并发测试（后三项为回归保护，首次即通过）。
 - 01 的 Windows 部分（.sln/.csproj 能否编译、冒烟测试）尚未在 Windows 上验证，等 GitHub 仓库建好后用 CI 验证；验证通过前不开始 10-windows-system。
 ## 阻塞
 （无）

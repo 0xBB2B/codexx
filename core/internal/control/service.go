@@ -3,6 +3,7 @@ package control
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -15,6 +16,7 @@ import (
 	"modelbridge/internal/catalog"
 	"modelbridge/internal/codexconfig"
 	"modelbridge/internal/proxy"
+	"modelbridge/internal/update"
 )
 
 const logFile = "model-bridge.log"
@@ -37,6 +39,9 @@ type Options struct {
 	CodexPath          string
 	ConfigPath         string
 	OnStatus           func(Status)
+	UpdateAPIBase      string
+	UpdateRepository   string
+	UpdateClock        update.Clock
 }
 
 type Error struct {
@@ -117,6 +122,7 @@ type Service struct {
 	levels         []string
 	takenOver      []string
 	restoreBlocked []string
+	update         UpdateInfo
 }
 
 func NewService(opts Options) *Service {
@@ -233,8 +239,44 @@ func (s *Service) RefreshModels(ctx context.Context) (Status, error) {
 	return s.statusLocked(), nil
 }
 
-func (s *Service) CheckUpdate(_ context.Context, _ bool) (UpdateResult, error) {
-	return UpdateResult{}, nil
+func (s *Service) CheckUpdate(ctx context.Context, manual bool) (UpdateResult, error) {
+	res, err := update.Check(ctx, update.Config{
+		APIBase:        s.opts.UpdateAPIBase,
+		Repository:     s.opts.UpdateRepository,
+		CurrentVersion: s.opts.Version,
+	})
+	if err != nil {
+		if manual {
+			return UpdateResult{}, &Error{Code: "update_unavailable"}
+		}
+		s.logUpdateFailure(err)
+		return UpdateResult{}, nil
+	}
+	if !res.IsNewer {
+		return UpdateResult{}, nil
+	}
+	s.mu.Lock()
+	s.update = UpdateInfo{LatestVersion: &res.LatestVersion, URL: &res.URL}
+	s.notifyLocked()
+	s.mu.Unlock()
+	return UpdateResult{LatestVersion: &res.LatestVersion, URL: &res.URL, IsNewer: true}, nil
+}
+
+func (s *Service) logUpdateFailure(err error) {
+	f, openErr := os.OpenFile(filepath.Join(s.opts.DataDir, logFile), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+	if openErr != nil {
+		return
+	}
+	defer f.Close()
+	_, _ = fmt.Fprintf(f, "更新检查失败：%v\n", err)
+}
+
+func (s *Service) runUpdateLoop(ctx context.Context) {
+	var clock update.Clock = update.RealClock{}
+	if s.opts.UpdateClock != nil {
+		clock = s.opts.UpdateClock
+	}
+	update.Loop(ctx, clock, func(ctx context.Context) { _, _ = s.CheckUpdate(ctx, false) })
 }
 
 func (s *Service) PrepareUninstall(_ context.Context) error {
@@ -487,6 +529,7 @@ func (s *Service) statusLocked() Status {
 		TakenOver:      append([]string{}, s.takenOver...),
 		RestoreBlocked: append([]string{}, s.restoreBlocked...),
 		ConfigPath:     s.configPath,
+		Update:         s.update,
 	}
 	if !s.fetchedAt.IsZero() {
 		at := s.fetchedAt

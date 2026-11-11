@@ -7,6 +7,7 @@ import (
 	"os"
 
 	"modelbridge/internal/control"
+	"modelbridge/internal/update"
 	"modelbridge/internal/version"
 )
 
@@ -26,7 +27,12 @@ func main() {
 		os.Exit(2)
 	}
 
-	opts := control.Options{DataDir: *dataDir, Version: version.Current()}
+	opts := control.Options{
+		DataDir:          *dataDir,
+		Version:          version.Current(),
+		UpdateAPIBase:    "https://api.github.com",
+		UpdateRepository: update.Repository(),
+	}
 	if err := applyTestFlags(&opts); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
