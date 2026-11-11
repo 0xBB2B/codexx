@@ -68,7 +68,7 @@ Windows 外壳能启动核心程序并按协议通信，能把 Key 存进凭据�
 界面层（11）通过持有以上对象的 AppModel 调用；启动顺序：SingleInstance → 读设置和 Key → CoreProcess.Start → init。卸载入口（12 的安装程序）以 `ModelBridge.exe --uninstall` 调用同一套流程。
 
 ## 验证方式
-- 测试入口：`dotnet test windows/ModelBridge.sln`（windows-2025 构建机）
+- 测试入口：`dotnet test --solution windows/ModelBridge.sln`（windows-2025 构建机）
 - 测试输入：假核心（测试用小控制台程序或脚本）；测试专用凭据目标名；测试专用注册表值名；临时目录
 - 预期结果：
 - [ ] CallAsync 按 id 收到响应；status 事件可订阅；假核心退出后重启一次并重新 init

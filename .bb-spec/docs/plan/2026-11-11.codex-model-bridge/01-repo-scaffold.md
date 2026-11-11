@@ -146,7 +146,7 @@ windows/**/obj/
 三个子项目互不依赖编译；后续计划由外壳在运行时启动 core 的可执行文件。
 
 ## 验证方式
-- 测试入口：`make test`（本机）；`dotnet test windows/ModelBridge.sln`（windows-2025 构建机）
+- 测试入口：`make test`（本机）；`dotnet test --solution windows/ModelBridge.sln`（windows-2025 构建机）
 - 测试输入：无
 - 预期结果：Go 和 Swift 测试全部通过；`version.Current()` 未注入时返回 `0.0.0-dev`，用 `-ldflags "-X modelbridge/internal/version.value=1.3.0"` 编译后返回 `1.3.0`
 - [ ] `make test` 通过

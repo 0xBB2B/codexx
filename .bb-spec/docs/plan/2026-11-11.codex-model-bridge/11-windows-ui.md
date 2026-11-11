@@ -62,7 +62,7 @@ Windows 上有原生的首次设置窗口、主窗口和任务栏通知区域菜
 视图 → AppModel → 系统层（10）。安装程序（12）卸载时调用 `ModelBridge.exe --uninstall` 并按退出码决定是否继续。
 
 ## 验证方式
-- 测试入口：`dotnet test windows/ModelBridge.sln`（AppModel 用假系统层）；界面在用户的 Windows 电脑上按验收清单实机检查
+- 测试入口：`dotnet test --solution windows/ModelBridge.sln`（AppModel 用假系统层）；界面在用户的 Windows 电脑上按验收清单实机检查
 - 测试输入：假 CoreProcess、假 ChatGPTApp、假 CredentialStore、假 LoginItem
 - 预期结果：
 - [ ] CompleteSetupAsync：空字段、错误格式不调用核心；relay_401 → 错误文字正确、未存凭据；成功 → 依次 save_connection、存凭据、set_forwarding true、写登录启动
