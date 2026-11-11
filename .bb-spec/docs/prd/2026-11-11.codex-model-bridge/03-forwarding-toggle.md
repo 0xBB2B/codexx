@@ -24,7 +24,7 @@ date: 2026-11-11
 
 ## 约束
 
-- C1 本工具在 Codex 用户配置文件里只写这几项，统称"接入项"：根上的 `openai_base_url`（指向本机转发服务）、`model_catalog_json`（指向本工具生成的合并模型目录）、`model`（中台有 `auto` 时才写）。另外把根上的 `model_provider` 移除。配置文件里的其他内容一律不改，也不整份覆盖。配置文件在 macOS 上是 `~/.codex/config.toml`，在 Windows 上是 `%USERPROFILE%\.codex\config.toml`。
+- C1 本工具在 Codex 用户配置文件里只写这几项，统称"接入项"：根上的 `openai_base_url`（指向本机转发服务）、`model_catalog_json`（指向本工具生成的合并模型目录）、`model`（中台有 `auto` 时才写）、`[desktop]` 表里的 `enabled-reasoning-efforts`（只追加中台模型需要、但列表里还没有的思考等级，用户原有的等级一个不删）。另外把根上的 `model_provider` 移除。配置文件里的其他内容一律不改，也不整份覆盖。配置文件在 macOS 上是 `~/.codex/config.toml`，在 Windows 上是 `%USERPROFILE%\.codex\config.toml`。
 - C2 打开转发前，先记下这几项原来的值（没有就记"原来没有"）。配置里已有不是本工具写的同名项时，先备份原值再覆盖，主窗口显示"已接管 Codex 原有的接入设置"。
 - C3 关闭转发时，把接入项逐项还原成打开前的值，原来没有的就删掉。还原后，接入项以外的内容和关闭前一致。
 - C4 关闭转发或卸载时，如果某个接入项的当前值和本工具写入的值不一致，就不改这一项，其他接入项照常还原；主窗口显示"没能自动还原 Codex 配置"，写明是哪一项和配置文件的位置，提供「打开所在文件夹」和「重新检查」。用户点「重新检查」后重新判断一次。

@@ -12,5 +12,5 @@
 | merged-catalog | 本工具生成的模型目录文件：官方模型在前，中台模型在后；Codex 的模型选择器按它显示 | 简体「合并模型目录」「合并目录」 |
 | local-proxy | 本工具在本机提供、只接受本机连接的转发服务；按请求里的模型把请求转到官方服务或中台 | 简体「本机转发服务」「本机代理」「本机分流」 |
 | forwarding | 本工具的开关状态：开启时 Codex 配置写入了接入项，Codex 请求经过本机转发服务；关闭时 Codex 配置是开启前的样子 | 简体「转发」 |
-| access-entries | 本工具在 Codex 用户配置里写入或移除的几项：`openai_base_url`、`model_catalog_json`、`model`，以及被移除的 `model_provider` | 简体「接入项」 |
+| access-entries | 本工具在 Codex 用户配置里写入或移除的几项：`openai_base_url`、`model_catalog_json`、`model`、`[desktop]` 表里的 `enabled-reasoning-efforts`，以及被移除的 `model_provider` | 简体「接入项」 |
 | login-start | 用户登录系统后自动启动本工具的设置，默认开启，可以在菜单里关闭 | 简体「登录时启动」 |
