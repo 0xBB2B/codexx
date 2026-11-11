@@ -2,6 +2,11 @@ name: ci
 on:
   push:
   pull_request:
+permissions:
+  contents: read
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 jobs:
   core-and-macos:
     runs-on: macos-26
@@ -10,6 +15,7 @@ jobs:
       - uses: actions/setup-go@v7.0.0
         with:
           go-version-file: core/go.mod
+          cache-dependency-path: core/go.sum
       - run: make test
   windows:
     runs-on: windows-2025
@@ -19,3 +25,42 @@ jobs:
         with:
           dotnet-version: '10.0.x'
       - run: dotnet test --solution windows/ModelBridge.sln
+  package:
+    if: github.event_name == 'pull_request'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-26, windows-2025]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-go@v7.0.0
+        with:
+          go-version-file: core/go.mod
+          cache-dependency-path: core/go.sum
+      - if: runner.os == 'macOS'
+        run: |
+          scripts/package-macos.sh 0.0.0 "${{ github.repository }}"
+          test -f dist/model-bridge-0.0.0-macos.dmg
+          MNT="$(mktemp -d)"
+          hdiutil attach dist/model-bridge-0.0.0-macos.dmg -mountpoint "$MNT" -nobrowse -quiet
+          APP="$MNT/ModelBridge.app"
+          test -L "$MNT/Applications"
+          test "$(lipo -archs "$APP/Contents/MacOS/ModelBridge")" = "arm64"
+          test "$(lipo -archs "$APP/Contents/MacOS/model-bridge-core")" = "arm64"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP/Contents/Info.plist")" = "0.0.0"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :LSMinimumSystemVersion' "$APP/Contents/Info.plist")" = "13.0"
+          codesign -dv "$APP" 2>&1 | grep -q 'Signature=adhoc'
+          test "$("$APP/Contents/MacOS/model-bridge-core" --version)" = "0.0.0"
+          hdiutil detach "$MNT" -quiet
+      - if: runner.os == 'Windows'
+        uses: actions/setup-dotnet@v6.1.0
+        with:
+          dotnet-version: '10.0.x'
+      - if: runner.os == 'Windows'
+        run: |
+          scripts/package-windows.sh 0.0.0 "${{ github.repository }}"
+          test -f dist/model-bridge-0.0.0-windows-setup.exe

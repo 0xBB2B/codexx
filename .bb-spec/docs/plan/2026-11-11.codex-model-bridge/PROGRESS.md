@@ -12,10 +12,10 @@
 | 09 | macos-ui | done | 2026-11-11 |
 | 10 | windows-system | done | 2026-11-11 |
 | 11 | windows-ui | done | 2026-11-11 |
-| 12 | windows-installer | pending | — |
-| 13 | release-pipeline | pending | — |
+| 12 | windows-installer | done | 2026-11-11 |
+| 13 | release-pipeline | done | 2026-11-11 |
 ## 当前
-下一步：`12-windows-installer`，之后 `13-release-pipeline`。
+全部 13 份完成，进入收尾：全量测试、界面对比、doc-update、删除 plan 目录。
 - 01 记录：Review 发现 Windows 冒烟测试断言写错、App 项目写死自包含会触发 NETSDK1151（依据 .NET SDK 源码报错原文，未实测），已由主流程修正；计划 01、13 同步改为发布时再指定 `-r win-x64 --self-contained`。修正后由主流程复核，未重派 Review。
 - 02 记录：Review 合规 17/19、0 违规；按意见自修一次（记录损坏/保存失败降级、默认等级校验、回传获取时间、8MB 上限、负 priority、Windows 环境变量大小写、补 4xx/非法正文测试），修后由主流程复跑通过，未重派 Review。参数表目前只有 auto，其他主流模型待调研结果补充。
 - 03 记录：Review 合规 17/19；按意见自修一次——安全：中台 trailer 原文泄漏、未挡 DNS 重绑定（加 Host 白名单、拒绝带 Origin 的请求）、路径 `..` 未规范化；鲁棒：上游响应头 60 秒超时、坏 zstd 改为原样转发官方、Base URL 解析失败返回规定 JSON、ErrorLog 改写注入日志。实现方未先跑 Red，主流程用变异检查确认三项安全测试能拦住回退。
@@ -27,6 +27,7 @@
 - 10 记录：Windows 测试经 ci/windows-wip 临时分支在 CI 运行（本机装了 ~/.dotnet 只做编译检查）。首跑 72 个中 2 个失败（DeleteAll 目录不存在、测试读日志与假核心写日志的文件占用冲突，均已修）。Review 合规 16/18；自修一轮：读循环异常隔离、按会话过滤 ChatGPT 进程、单实例管道按会话命名并 CurrentUserOnly、激活读取 2 秒超时、空凭据。最终 CI 88/88 通过（运行 42985878102）。
 - 09 记录：用户决定两端尽量用系统原生控件（菜单、NSAlert、按钮、输入框、开关、GroupBox），固定浅色；PRD 04 与 DESIGN.md 已同步。Review 合规 27/33；自修一轮（先 Red 后 Green）：退出还原失败不退出、废纸篓失败提示、真实运行状态、菜单开关禁用、首次设置后续步骤失败仍算成功、写钥匙串或设置失败时回滚核心与钥匙串、卸载残留逐项列出、启动只读一次钥匙串且在后台、设置窗口关闭不挡主窗口、文案修正、转圈 200ms 延迟。137 个测试通过。界面未目视验证，留待收尾对比原型。
 - 11 记录：WPF Fluent 主题固定浅色，原生 TaskDialog、ContextMenu、GroupBox、TextBox/PasswordBox、ToggleButton；首轮 CI 166/166。Review 合规 26/29；自修一轮：首次设置写入失败删新 Key 并重置核心、核心停止时开关不可用、退出 restore_blocked 有提示条、卸载显示进度、TaskDialog 自定义按钮、控件级强调色键（出处 dotnet/wpf release/10.0 Fluent.Light.xaml）、防重入、托盘操作结果唤起主窗口、去掉环境变量改为 IsAlreadyCleaned 判断、读设置异常不崩溃。最终 CI 182/182（运行 42990950423）。待 Windows 实机验证：TaskDialog 外观与 Esc、强调色是否生效（AccentButtonBorderBrushPointerOver 未覆盖，悬停可能有浅色细边）、LinkButton 外观、托盘卸载二次 --uninstall 直接返回 0、托盘菜单键盘导航。
+- 12/13 记录：声明式产物，以 CI 实际打包代替单元测试。修过：ISCC 的 /D 参数被 Git Bash 改写（MSYS2_ARG_CONV_EXCL）、构建机 Inno 6.7.1 无 ChineseSimplified.isl（按计划备用方案改 Default.isl，向导为英文）。Review 合规 11/14；自修一轮：打包任务只在 PR 跑并加 concurrency、release 改 released 触发并加 cleanup 任务删残缺文件与 --clobber、版本号校验、Windows 打包抽成 scripts/package-windows.sh、卸载时程序丢失可选择仍删除、AppMutex、MinVersion 对齐 10.0.17763（PRD 07 与决策记录已同步）。CI 打包全绿（运行 42993551928）。release.yml 尚未在真实发布上运行过。
 - 01 的 Windows 部分已在 CI（windows-2025）验证通过。
 ## 阻塞
 （无）
