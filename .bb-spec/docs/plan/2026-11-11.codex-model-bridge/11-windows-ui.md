@@ -8,7 +8,7 @@ description: Windows 外壳界面：首次设置窗口、主窗口、托盘菜�
 Windows 上有原生的首次设置窗口、主窗口和任务栏通知区域菜单，状态和弹窗与已确认原型一致。
 
 ## 业务规则（来源：PRD 01、02、03、04、05、06；已确认原型）
-样式全部按仓库根目录 `DESIGN.md`：主色 #0f766e、窗口宽 620px、分组卡片、按钮和输入框高 44px、菜单宽 286px、菜单项最小高 44px、聚焦描边 2px；窗口用系统标题栏（最小化、最大化、关闭）。
+尽量使用系统原生控件（用户决定）：应用级设置 WPF Fluent 主题并固定浅色（`ThemeMode="Light"`，DESIGN.md 只定义了浅色配色），按钮、输入框（TextBox/PasswordBox）、开关（ToggleButton/CheckBox）、确认对话框（MessageBox）都用 WPF 自带控件，主色 #0f766e 只作强调色；分组卡片、提示条、底部状态区按仓库根目录 `DESIGN.md` 自绘，窗口宽 620px；窗口用系统标题栏（最小化、最大化、关闭）。
 
 **首次设置窗口**（标题"设置模型接入助手"；没有保存过 Base URL 时打开应用就显示）
 - 标题"连接到中台"，说明"填写中台提供的 Base URL 和 API Key。设置完成后，Codex 的模型列表里会多出中台模型。"
@@ -22,7 +22,7 @@ Windows 上有原生的首次设置窗口、主窗口和任务栏通知区域菜
 - 顶部提示条按 Status：taken_over → "已接管 Codex 原有的接入设置"；relay.stale → "中台模型列表本次没有更新"+原因、上次时间、「重试」；从未成功 → "还没有获取到中台模型"+「重试」；restore_blocked → "没能自动还原 Codex 配置"+键名、config_path、「打开所在文件夹」「重新检查」；proxy.error → "本机转发服务没能启动"+「重试」。
 - 底部状态区：`v<版本>`、运行状态、「检查更新」/"发现新版本 X"+「打开下载页」。关闭按钮只隐藏窗口。
 
-**托盘菜单**（左键或右键点通知区域图标弹出，菜单在图标上方）
+**托盘菜单**（左键或右键点通知区域图标弹出，使用 WPF 原生 ContextMenu）
 - 标题"模型接入助手"+"转发已开启/已关闭 · 后台运行中"
 - 「转发到中台」（勾选）、「打开配置…」
 - 「登录时启动」（勾选；转发开着时取消 → 弹窗"关闭「登录时启动」？"「取消」「仍然关闭」）、「检查更新」或"发现新版本 X · 打开下载页"
@@ -37,9 +37,9 @@ Windows 上有原生的首次设置窗口、主窗口和任务栏通知区域菜
 - windows/ModelBridge.App/UI/AppModel.cs（新建）
 - windows/ModelBridge.App/UI/SetupWindow.xaml(.cs)（新建）
 - windows/ModelBridge.App/UI/MainWindow.xaml(.cs)（新建）
-- windows/ModelBridge.App/UI/TrayMenu.cs（新建：NotifyIcon + 自绘 WPF 弹出菜单）
-- windows/ModelBridge.App/UI/Dialogs.xaml(.cs)（新建）
-- windows/ModelBridge.App/UI/Theme.xaml（新建：按 DESIGN.md 的颜色、尺寸、控件样式）
+- windows/ModelBridge.App/UI/TrayMenu.cs（新建：NotifyIcon + WPF 原生 ContextMenu，第一行为不可点的状态说明）
+- windows/ModelBridge.App/UI/Dialogs.cs（新建：用 MessageBox 实现确认对话框，取消为默认按钮）
+- windows/ModelBridge.App/UI/Theme.xaml（新建：只放强调色和自绘的卡片、提示条、状态区样式）
 - windows/ModelBridge.Tests/AppModelTests.cs（新建）
 
 ## 函数清单

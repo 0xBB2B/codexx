@@ -15,6 +15,7 @@
 
 能检查的特征：
 - 原生桌面外观：macOS 用交通灯按钮和菜单栏入口，Windows 用系统窗口按钮和任务栏通知区域入口；不用网页导航、面包屑或官网式横幅。
+- 系统原生控件优先：按钮、输入框、开关、勾选、菜单、确认对话框都用系统控件（macOS 用 SwiftUI/AppKit 标准控件，Windows 用 WPF Fluent 主题）。两个平台都固定为浅色外观（macOS 设 aqua 外观，WPF 设 ThemeMode="Light"），因为本规范只定义了浅色配色。本文件的颜色只作强调色（如主操作按钮、开关打开、提示条图标）；控件的尺寸、圆角、悬停、按下、聚焦样式以系统为准，下面「组件」一节里的数值只约束自绘部分（分组卡片、提示条、状态区）。
 - 紧凑的分组表单：窗口默认宽 620px，内容分组放在白色卡片里，卡片内边距 24px。
 - 一个强调色：只有主色 #0f766e 用来表示主操作、开关打开和选中，其余都是中性色。
 
@@ -200,27 +201,8 @@
 
 ### 弹窗
 
-- 写法：
-
-```html
-<div class="scrim">
-  <div class="modal" role="alertdialog" aria-modal="true" aria-labelledby="mt">
-    <div class="modal-header"><svg class="ico">…</svg><h3 id="mt">标题</h3></div>
-    <div class="modal-body">说明会发生什么、会影响什么</div>
-    <div class="modal-footer"><button class="btn-secondary">取消</button><button class="btn-primary">确认操作</button></div>
-  </div>
-</div>
-```
-
-- 宽 520px，最大为视口宽度减 32px；背景 surface，圆角 12px，阴影 0 16px 48px #172b3a29；遮罩 scrim；头部内边距 24px 24px 0，正文 12px 24px 24px，底部 16px 24px，底部上方 1px border 分隔线；按钮靠右，间距 12px，确认按钮在最右并写明具体动作（如「关闭并重启」）
-
-| 状态 | 样子（关闭按钮、操作按钮） |
-|---|---|
-| 默认 | 操作按钮按「按钮」一节的默认样子 |
-| 悬停 | 按「按钮」一节 |
-| 按下 | 按「按钮」一节 |
-| 禁用 | 处理中时确认按钮禁用并显示转圈 |
-| 聚焦 | 打开后焦点落在「取消」上，Tab 只在弹窗内循环，Escape 等同于取消，关闭后焦点回到触发它的控件 |
+- 写法：用系统确认对话框（macOS 用 NSAlert，Windows 用 Fluent 主题下的 MessageBox 或 ContentDialog 风格的原生对话框）。标题、说明、按钮文字照各需求文档；确认按钮写明具体动作（如「关闭并重启」），取消按钮为默认焦点，Escape 等同于取消。
+- 样式、尺寸、阴影、遮罩都以系统为准。
 
 ### 提示条
 
@@ -237,28 +219,9 @@
 
 ### 菜单（菜单栏菜单 / 托盘菜单）
 
-- 写法：
-
-```html
-<div class="menu" role="menu" aria-label="模型接入助手">
-  <div class="menu-head"><svg class="ico">…</svg><div><strong>模型接入助手</strong><div class="mi-sub">转发已开启 · 后台运行中</div></div></div>
-  <div class="menu-sep"></div>
-  <div class="menu-item" role="menuitemcheckbox" aria-checked="true"><span class="mi-check"><svg class="si">…</svg></span><span class="mi-label">转发到中台</span></div>
-  <div class="menu-item" role="menuitem"><span class="mi-check"></span><span class="mi-label">打开配置…</span><span class="kbd">⌘,</span></div>
-</div>
-```
-
-- 宽 286px，内边距 4px，背景 surface，边框 1px border，圆角 12px，阴影 0 16px 48px #172b3a29；在平台入口旁边弹出（macOS 菜单栏图标下方，Windows 托盘图标上方）；分组之间用 1px border 分隔线（左右缩进 8px）
-- 菜单项：最小高度 44px，左 8px、右 12px，圆角 8px，字号 13px；左侧 16px 的位置放勾选图标（勾选菜单项打勾，普通项留空对齐）
-- 分组顺序：标题与状态 / 转发、打开配置 / 登录时启动、检查更新 / 卸载、退出
-
-| 状态 | 样子 |
-|---|---|
-| 默认 | 背景 surface，文字 text |
-| 悬停 | 背景 selected-bg |
-| 按下 | 背景 selected-bg，执行后菜单关闭 |
-| 禁用 | 文字 text-disabled，鼠标显示禁止 |
-| 聚焦 | 方向键移动焦点，2px focus 描边；Escape 关闭菜单 |
+- 写法：用系统原生菜单（macOS 用 MenuBarExtra 的菜单样式，Windows 用托盘图标的原生右键菜单）。第一行是不可点的状态说明「转发已开启/已关闭 · 后台运行中」，可勾选的项用系统勾选标记，快捷键用系统显示方式。
+- 分组顺序：状态 / 转发、打开配置 / 登录时启动、检查更新 / 卸载、退出，组之间用系统分隔线。
+- 宽度、行高、悬停、键盘导航以系统为准。
 
 ### 加载指示
 
