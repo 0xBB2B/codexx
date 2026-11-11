@@ -89,7 +89,7 @@ jobs:
           VERSION="${GITHUB_REF_NAME#v}"
           (cd core && go test ./... && GOOS=windows GOARCH=amd64 go build -ldflags "-H windowsgui -X modelbridge/internal/version.value=$VERSION -X modelbridge/internal/update.repository=${{ github.repository }}" -o ../dist/windows-amd64/model-bridge-core.exe ./cmd/model-bridge-core)
           dotnet test windows/ModelBridge.sln
-          dotnet publish windows/ModelBridge.App/ModelBridge.App.csproj -c Release -o dist/windows-amd64 -p:Version="$VERSION"
+          dotnet publish windows/ModelBridge.App/ModelBridge.App.csproj -c Release -r win-x64 --self-contained true -o dist/windows-amd64 -p:Version="$VERSION"
           "/c/Program Files (x86)/Inno Setup 6/ISCC.exe" windows/installer/model-bridge.iss "/DAppVersion=$VERSION" "/DSourceDir=$(cygpath -w "$PWD/dist/windows-amd64")"
           gh release upload "$GITHUB_REF_NAME" "dist/model-bridge-$VERSION-windows-setup.exe"
         env:

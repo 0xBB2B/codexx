@@ -66,8 +66,6 @@ let package = Package(
     <UseWPF>true</UseWPF>
     <UseWindowsForms>true</UseWindowsForms>
     <Nullable>enable</Nullable>
-    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
-    <SelfContained>true</SelfContained>
     <AssemblyName>ModelBridge</AssemblyName>
     <RootNamespace>ModelBridge</RootNamespace>
   </PropertyGroup>
