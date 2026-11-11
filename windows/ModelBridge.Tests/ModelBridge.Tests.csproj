@@ -4,8 +4,13 @@
     <UseWPF>true</UseWPF>
     <UseWindowsForms>true</UseWindowsForms>
     <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
   </PropertyGroup>
   <ItemGroup>
+    <Using Include="System.IO" />
+  </ItemGroup>
+  <ItemGroup>
     <ProjectReference Include="..\ModelBridge.App\ModelBridge.App.csproj" />
+    <ProjectReference Include="..\ModelBridge.FakeCore\ModelBridge.FakeCore.csproj" />
   </ItemGroup>
 </Project>
