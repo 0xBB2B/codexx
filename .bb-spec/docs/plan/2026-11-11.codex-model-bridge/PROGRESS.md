@@ -11,11 +11,11 @@
 | 08 | macos-system | done | 2026-11-11 |
 | 09 | macos-ui | done | 2026-11-11 |
 | 10 | windows-system | done | 2026-11-11 |
-| 11 | windows-ui | pending | — |
+| 11 | windows-ui | done | 2026-11-11 |
 | 12 | windows-installer | pending | — |
 | 13 | release-pipeline | pending | — |
 ## 当前
-下一组：`07-core-update-check`、`08-macos-system`（并行）；`10-windows-system` 等 GitHub 仓库和 01 的 Windows CI 验证。
+下一步：`12-windows-installer`，之后 `13-release-pipeline`。
 - 01 记录：Review 发现 Windows 冒烟测试断言写错、App 项目写死自包含会触发 NETSDK1151（依据 .NET SDK 源码报错原文，未实测），已由主流程修正；计划 01、13 同步改为发布时再指定 `-r win-x64 --self-contained`。修正后由主流程复核，未重派 Review。
 - 02 记录：Review 合规 17/19、0 违规；按意见自修一次（记录损坏/保存失败降级、默认等级校验、回传获取时间、8MB 上限、负 priority、Windows 环境变量大小写、补 4xx/非法正文测试），修后由主流程复跑通过，未重派 Review。参数表目前只有 auto，其他主流模型待调研结果补充。
 - 03 记录：Review 合规 17/19；按意见自修一次——安全：中台 trailer 原文泄漏、未挡 DNS 重绑定（加 Host 白名单、拒绝带 Origin 的请求）、路径 `..` 未规范化；鲁棒：上游响应头 60 秒超时、坏 zstd 改为原样转发官方、Base URL 解析失败返回规定 JSON、ErrorLog 改写注入日志。实现方未先跑 Red，主流程用变异检查确认三项安全测试能拦住回退。
@@ -26,6 +26,7 @@
 - 08 记录：Review 合规 13/17；自修一轮（先 Red 后 Green）：ChatGPT 退出等待 30 秒、核心重启延迟 2 秒、单实例改用分布式通知、稳定运行 60 秒后复位重启许可（产品决定）、取消即返回、写失败统一 processExited、重启后 init 出错先停进程、过期重启放弃、按 \n 切行、钥匙串设 AfterFirstUnlockThisDeviceOnly 并区分无权访问。待签名真机手动验证：覆盖写入后钥匙串属性仍在（未签名测试环境读不回该属性，用例 skip）。
 - 10 记录：Windows 测试经 ci/windows-wip 临时分支在 CI 运行（本机装了 ~/.dotnet 只做编译检查）。首跑 72 个中 2 个失败（DeleteAll 目录不存在、测试读日志与假核心写日志的文件占用冲突，均已修）。Review 合规 16/18；自修一轮：读循环异常隔离、按会话过滤 ChatGPT 进程、单实例管道按会话命名并 CurrentUserOnly、激活读取 2 秒超时、空凭据。最终 CI 88/88 通过（运行 42985878102）。
 - 09 记录：用户决定两端尽量用系统原生控件（菜单、NSAlert、按钮、输入框、开关、GroupBox），固定浅色；PRD 04 与 DESIGN.md 已同步。Review 合规 27/33；自修一轮（先 Red 后 Green）：退出还原失败不退出、废纸篓失败提示、真实运行状态、菜单开关禁用、首次设置后续步骤失败仍算成功、写钥匙串或设置失败时回滚核心与钥匙串、卸载残留逐项列出、启动只读一次钥匙串且在后台、设置窗口关闭不挡主窗口、文案修正、转圈 200ms 延迟。137 个测试通过。界面未目视验证，留待收尾对比原型。
+- 11 记录：WPF Fluent 主题固定浅色，原生 TaskDialog、ContextMenu、GroupBox、TextBox/PasswordBox、ToggleButton；首轮 CI 166/166。Review 合规 26/29；自修一轮：首次设置写入失败删新 Key 并重置核心、核心停止时开关不可用、退出 restore_blocked 有提示条、卸载显示进度、TaskDialog 自定义按钮、控件级强调色键（出处 dotnet/wpf release/10.0 Fluent.Light.xaml）、防重入、托盘操作结果唤起主窗口、去掉环境变量改为 IsAlreadyCleaned 判断、读设置异常不崩溃。最终 CI 182/182（运行 42990950423）。待 Windows 实机验证：TaskDialog 外观与 Esc、强调色是否生效（AccentButtonBorderBrushPointerOver 未覆盖，悬停可能有浅色细边）、LinkButton 外观、托盘卸载二次 --uninstall 直接返回 0、托盘菜单键盘导航。
 - 01 的 Windows 部分已在 CI（windows-2025）验证通过。
 ## 阻塞
 （无）

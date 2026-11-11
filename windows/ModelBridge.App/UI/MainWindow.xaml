@@ -1,0 +1,79 @@
+<Window x:Class="ModelBridge.UI.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:ui="clr-namespace:ModelBridge.UI"
+        Title="模型接入助手" Width="620" MinWidth="450" SizeToContent="Height"
+        MaxHeight="{x:Static SystemParameters.MaximizedPrimaryScreenHeight}"
+        WindowStartupLocation="CenterScreen" FontSize="13"
+        Background="{StaticResource BackgroundBrush}" Foreground="{StaticResource TextBrush}">
+    <DockPanel>
+        <Border DockPanel.Dock="Bottom" Style="{StaticResource StatusBar}">
+            <Grid>
+                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                    <TextBlock x:Name="VersionText" Style="{StaticResource StatusText}" FontFamily="Consolas" />
+                    <Ellipse x:Name="StatusDot" Width="8" Height="8" Margin="12,0,8,0" />
+                    <TextBlock x:Name="CoreText" Style="{StaticResource StatusText}" />
+                </StackPanel>
+                <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
+                    <TextBlock x:Name="UpdateText" Style="{StaticResource StatusText}" Margin="0,0,12,0" />
+                    <Button x:Name="UpdateButton" Style="{StaticResource LinkButton}" Click="UpdateClick" />
+                </StackPanel>
+            </Grid>
+        </Border>
+
+        <ScrollViewer VerticalScrollBarVisibility="Auto">
+            <StackPanel Margin="24">
+                <StackPanel x:Name="AlertHost" />
+
+                <GroupBox Padding="24" Margin="0,0,0,20">
+                    <GroupBox.Header>
+                        <TextBlock Text="转发" Style="{StaticResource CardTitle}" />
+                    </GroupBox.Header>
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="112" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Text="转发到中台" FontWeight="SemiBold" Margin="0,12,0,0" VerticalAlignment="Top" />
+                        <StackPanel Grid.Column="1" Margin="12,0,0,0">
+                            <ToggleButton x:Name="ForwardToggle" Width="96" Height="44" HorizontalAlignment="Left"
+                                          FontWeight="SemiBold" Click="ForwardClick" />
+                            <TextBlock x:Name="ForwardHelp" Style="{StaticResource HelpText}" />
+                        </StackPanel>
+                    </Grid>
+                </GroupBox>
+
+                <GroupBox Padding="24" Margin="0,0,0,20">
+                    <GroupBox.Header>
+                        <TextBlock Text="中台连接" Style="{StaticResource CardTitle}" />
+                    </GroupBox.Header>
+                    <StackPanel>
+                        <ui:ConnectionForm x:Name="Form" />
+                        <Button x:Name="SaveButton" Content="保存修改" HorizontalAlignment="Right" MinHeight="44"
+                                Padding="20,0" Margin="0,20,0,0" FontWeight="SemiBold" Click="SaveClick" />
+                    </StackPanel>
+                </GroupBox>
+
+                <GroupBox Padding="24">
+                    <GroupBox.Header>
+                        <TextBlock Text="运行状态" Style="{StaticResource CardTitle}" />
+                    </GroupBox.Header>
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="112" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                        </Grid.RowDefinitions>
+                        <TextBlock Text="ChatGPT" FontWeight="SemiBold" />
+                        <TextBlock x:Name="ChatGptValue" Grid.Column="1" Margin="12,0,0,0" TextWrapping="Wrap" />
+                        <TextBlock Text="中台模型" Grid.Row="1" FontWeight="SemiBold" Margin="0,12,0,0" />
+                        <TextBlock x:Name="RelayValue" Grid.Row="1" Grid.Column="1" Margin="12,12,0,0" TextWrapping="Wrap" />
+                    </Grid>
+                </GroupBox>
+            </StackPanel>
+        </ScrollViewer>
+    </DockPanel>
+</Window>

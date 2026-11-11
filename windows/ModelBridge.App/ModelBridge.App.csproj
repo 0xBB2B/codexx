@@ -8,5 +8,6 @@
     <Nullable>enable</Nullable>
     <AssemblyName>ModelBridge</AssemblyName>
     <RootNamespace>ModelBridge</RootNamespace>
+    <NoWarn>$(NoWarn);WPF0001</NoWarn>
   </PropertyGroup>
 </Project>
