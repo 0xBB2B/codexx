@@ -161,3 +161,18 @@ func TestEnable_Backup(t *testing.T) {
 		}
 	})
 }
+
+func TestTakenOverKeys(t *testing.T) {
+	c, _ := newFixture(t, sample{content: "model_provider = \"relay\"\nopenai_base_url = \"https://old.example.com/v1\"\n"})
+	keys, err := TakenOverKeys(c)
+	if err != nil || len(keys) != 0 {
+		t.Fatalf("无状态文件时 = %v, %v", keys, err)
+	}
+	if _, err := Enable(c, EnableInput{CatalogPath: catalogPath(c)}); err != nil {
+		t.Fatal(err)
+	}
+	keys, err = TakenOverKeys(c)
+	if err != nil || !reflect.DeepEqual(keys, []string{"model_provider", "openai_base_url"}) {
+		t.Fatalf("TakenOverKeys = %v, %v", keys, err)
+	}
+}

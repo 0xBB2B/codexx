@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 )
 
 const stateFileName = "access-state.json"
@@ -81,4 +82,19 @@ func firstErr(errs ...error) error {
 		}
 	}
 	return nil
+}
+
+func TakenOverKeys(c Config) ([]string, error) {
+	st, err := LoadState(c)
+	if err != nil || st == nil {
+		return nil, err
+	}
+	var keys []string
+	for k, e := range st.Entries {
+		if e.TakenOver {
+			keys = append(keys, k)
+		}
+	}
+	slices.Sort(keys)
+	return keys, nil
 }

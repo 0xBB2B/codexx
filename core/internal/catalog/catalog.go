@@ -12,6 +12,8 @@ type BuildOptions struct {
 	RelayTimeout time.Duration
 	DataDir      string
 	Params       []Param
+	// RelayIDs 非 nil 时视为调用方刚拉到的中台列表，Build 不再请求中台
+	RelayIDs []string
 }
 
 func Build(ctx context.Context, opts BuildOptions) (*Result, error) {
@@ -23,7 +25,10 @@ func Build(ctx context.Context, opts BuildOptions) (*Result, error) {
 
 	var storeErr error
 	var fetchedAt time.Time
-	ids, relayErr := FetchRelayIDs(ctx, opts.RelayBaseURL, opts.RelayKey, opts.RelayTimeout)
+	ids, relayErr := opts.RelayIDs, error(nil)
+	if ids == nil {
+		ids, relayErr = FetchRelayIDs(ctx, opts.RelayBaseURL, opts.RelayKey, opts.RelayTimeout)
+	}
 	if relayErr == nil {
 		fetchedAt = time.Now()
 		storeErr = store.SaveRelayModels(ids, fetchedAt)

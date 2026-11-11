@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -244,4 +245,47 @@ func TestBuild_RelaySuccess_SaveFails_StillWritesCatalog(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(dataDir, "model-bridge-catalog.json")); err != nil {
 		t.Errorf("合并目录没写出: %v", err)
 	}
+}
+
+func TestBuild_PrefetchedRelayIDs_SkipsRequest(t *testing.T) {
+	codex, _ := writeFakeCodex(t, officialJSON, 0)
+	var hits int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hits++
+		w.WriteHeader(500)
+	}))
+	t.Cleanup(srv.Close)
+	dataDir := t.TempDir()
+	opts := buildOpts(t, codex, srv.URL, dataDir)
+	opts.RelayIDs = []string{"auto"}
+
+	before := time.Now().Add(-time.Second)
+	res, err := catalog.Build(context.Background(), opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hits != 0 || res.RelayErr != nil {
+		t.Errorf("hits = %d, RelayErr = %v", hits, res.RelayErr)
+	}
+	if res.RelayFetchedAt.Before(before) {
+		t.Errorf("RelayFetchedAt = %v", res.RelayFetchedAt)
+	}
+	if !reflect.DeepEqual(slugs(t, res)[len(slugs(t, res))-1], "auto") {
+		t.Errorf("slugs = %v", slugs(t, res))
+	}
+	if !strings.Contains(readFileT(t, filepath.Join(dataDir, "model-bridge-catalog.json")), `"auto"`) {
+		t.Error("合并目录里没有传入的模型")
+	}
+	if !strings.Contains(readFileT(t, filepath.Join(dataDir, "relay-models.json")), `"auto"`) {
+		t.Error("没有保存 relay-models.json")
+	}
+}
+
+func readFileT(t *testing.T, path string) string {
+	t.Helper()
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
 }
