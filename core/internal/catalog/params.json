@@ -1,0 +1,12 @@
+{
+  "models": [
+    {
+      "id": "auto",
+      "context_window": 1000000,
+      "input_modalities": ["text", "image"],
+      "reasoning_levels": [],
+      "default_reasoning_level": null,
+      "source": "用户确认（2026-11-11）：中台 auto 模型，1M 上下文，支持文字和图片，思考等级由中台自动匹配"
+    }
+  ]
+}
