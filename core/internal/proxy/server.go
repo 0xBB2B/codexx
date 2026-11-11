@@ -13,17 +13,23 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"modelbridge/internal/normalize"
 )
 
 const DefaultListenAddr = "127.0.0.1:47311"
 
-var ResponseHeaderTimeout = 60 * time.Second
+var (
+	ResponseHeaderTimeout        = 60 * time.Second
+	SummaryResponseHeaderTimeout = 10 * time.Minute
+)
 
 type Config struct {
 	ListenAddr         string
 	OfficialAPIURL     string
 	OfficialChatGPTURL string
 	LogOutput          io.Writer
+	DataDir            string
 }
 
 type Error struct {
@@ -46,7 +52,9 @@ type Server struct {
 	officialChatGPTURL string
 	logOutput          io.Writer
 	relayState         relayState
+	reasoningIDs       *normalize.ReasoningIDs
 	transport          http.RoundTripper
+	summaryTransport   http.RoundTripper
 	httpServer         *http.Server
 	listener           net.Listener
 }
@@ -61,6 +69,14 @@ func New(cfg Config) *Server {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.ResponseHeaderTimeout = ResponseHeaderTimeout
 	s.transport = transport
+	summaryTransport := transport.Clone()
+	summaryTransport.ResponseHeaderTimeout = SummaryResponseHeaderTimeout
+	s.summaryTransport = summaryTransport
+	ids, err := normalize.OpenReasoningIDs(cfg.DataDir)
+	if err != nil {
+		ids, _ = normalize.OpenReasoningIDs("")
+	}
+	s.reasoningIDs = ids
 	if s.listenAddr == "" {
 		s.listenAddr = DefaultListenAddr
 	}
@@ -180,16 +196,88 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	body := raw
 	if rt.relay {
-		dest, body = "relay", plain
-	} else {
-		dest = "official"
+		dest = "relay"
+		isCompact := urlPath == "/v1/responses/compact"
+		if isCompact || normalize.HasCompactionTrigger(plain) {
+			s.takeOverCompaction(sw, r, rt, plain, isCompact)
+			return
+		}
+		body, tap := plain, false
+		if urlPath == "/v1/responses" {
+			if cleaned, err := normalize.ForRelay(plain); err == nil {
+				body, tap = cleaned, true
+			}
+		}
+		s.forward(sw, r, rt, body, forwardOpts{tapReasoning: tap})
+		return
 	}
-	s.forward(sw, r, rt, body)
+	dest = "official"
+	body := raw
+	opts := forwardOpts{}
+	if out, changed, err := normalize.ForOfficial(plain, s.reasoningIDs); err == nil && changed {
+		body, opts.dropEncoding = out, true
+	}
+	s.forward(sw, r, rt, body, opts)
 }
 
-func (s *Server) forward(w http.ResponseWriter, r *http.Request, rt route, body []byte) {
+type forwardOpts struct {
+	tapReasoning bool
+	dropEncoding bool
+}
+
+func (s *Server) takeOverCompaction(w http.ResponseWriter, r *http.Request, rt route, plain []byte, isCompact bool) {
+	reqBody, err := normalize.SummaryRequest(plain)
+	if err != nil {
+		http.Error(w, errBadBody.Error(), http.StatusBadRequest)
+		return
+	}
+	u := *rt.target
+	u.Path = strings.TrimSuffix(u.Path, "/compact")
+	req, err := http.NewRequestWithContext(r.Context(), http.MethodPost, u.String(), bytes.NewReader(reqBody))
+	if err != nil {
+		writeUnreachable(w)
+		return
+	}
+	req.Header = r.Header.Clone()
+	rewriteRelayHeaders(req.Header, rt.key)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json")
+	resp, err := s.summaryTransport.RoundTrip(req)
+	if err != nil {
+		writeUnreachable(w)
+		return
+	}
+	defer resp.Body.Close()
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, maxBodySize))
+	if err != nil {
+		writeUnreachable(w)
+		return
+	}
+	status := resp.StatusCode
+	var summary string
+	if status < 400 {
+		if summary, err = normalize.SummaryFromResponse(respBody); err != nil {
+			status = http.StatusBadGateway
+		}
+	}
+	if status >= 400 {
+		code, msg := neutralRelayError(status)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(status)
+		_, _ = w.Write(relayErrorBody(code, msg))
+		return
+	}
+	if isCompact {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(normalize.CompactionOutput(summary))
+		return
+	}
+	w.Header().Set("Content-Type", "text/event-stream")
+	_, _ = w.Write(normalize.CompactionStream(summary))
+}
+
+func (s *Server) forward(w http.ResponseWriter, r *http.Request, rt route, body []byte, opts forwardOpts) {
 	rp := &httputil.ReverseProxy{
 		Transport:     s.transport,
 		FlushInterval: -1,
@@ -199,6 +287,9 @@ func (s *Server) forward(w http.ResponseWriter, r *http.Request, rt route, body 
 			pr.Out.Host = ""
 			pr.Out.Body = io.NopCloser(bytes.NewReader(body))
 			pr.Out.ContentLength = int64(len(body))
+			if opts.dropEncoding {
+				pr.Out.Header.Del("Content-Encoding")
+			}
 			if rt.relay {
 				rewriteRelayHeaders(pr.Out.Header, rt.key)
 			}
@@ -207,6 +298,12 @@ func (s *Server) forward(w http.ResponseWriter, r *http.Request, rt route, body 
 	if rt.relay {
 		rp.ModifyResponse = func(resp *http.Response) error {
 			if resp.StatusCode < 400 {
+				if opts.tapReasoning {
+					resp.Body = struct {
+						io.Reader
+						io.Closer
+					}{normalize.TapReasoningIDs(resp.Body, s.reasoningIDs), resp.Body}
+				}
 				return nil
 			}
 			code, msg := neutralRelayError(resp.StatusCode)

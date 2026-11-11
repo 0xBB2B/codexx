@@ -33,7 +33,7 @@ func TestRoute_RelayModel(t *testing.T) {
 		wantPath string
 	}{
 		{"responses", relayModel, "/v1/responses", "/v1/responses"},
-		{"多级路径", "relay-model-b", "/v1/responses/compact", "/v1/responses/compact"},
+		{"多级路径", "relay-model-b", "/v1/responses/input_tokens", "/v1/responses/input_tokens"},
 		{"chat completions", relayModel, "/v1/chat/completions", "/v1/chat/completions"},
 	}
 	for _, tt := range tests {
