@@ -303,21 +303,22 @@ func TestServe_ScheduledUpdateCheck(t *testing.T) {
 	}
 	clock.Advance(time.Minute)
 	waitUntil(t, "启动后首次检查", func() bool { return g.hits() == 1 })
-
-	st := c.result("status", nil)
-	up, _ := st["update"].(map[string]any)
-	if up["latest_version"] != "1.3.0" || up["url"] != "https://github.com/acme/model-bridge/releases/tag/v1.3.0" {
-		t.Errorf("status.update = %v", up)
-	}
-	pushed := false
-	for _, ev := range c.statusEvents() {
-		data, _ := ev["data"].(map[string]any)
-		if u, _ := data["update"].(map[string]any); u["latest_version"] == "1.3.0" {
-			pushed = true
+	var up map[string]any
+	waitUntil(t, "status 记下新版并推送 status 事件", func() bool {
+		up, _ = c.result("status", nil)["update"].(map[string]any)
+		if up["latest_version"] != "1.3.0" {
+			return false
 		}
-	}
-	if !pushed {
-		t.Error("自动检查发现新版后应推送 status 事件")
+		for _, ev := range c.statusEvents() {
+			data, _ := ev["data"].(map[string]any)
+			if u, _ := data["update"].(map[string]any); u["latest_version"] == "1.3.0" {
+				return true
+			}
+		}
+		return false
+	})
+	if up["url"] != "https://github.com/acme/model-bridge/releases/tag/v1.3.0" {
+		t.Errorf("status.update = %v", up)
 	}
 
 	waitUntil(t, "24 小时定时器登记", func() bool { return clock.pending() == 1 })
