@@ -1226,6 +1226,29 @@ public class AppModelTests
     }
 
     [TestMethod]
+    public async Task TrayStatusText_CoreStopped_IsStoppedOnly()
+    {
+        var h = new Harness();
+        await h.Model.StartAsync();
+
+        h.Core.RaiseFailed("核心进程反复崩溃");
+
+        Assert.AreEqual("后台服务已停止", h.Model.TrayStatusText);
+    }
+
+    [TestMethod]
+    public async Task TrayStatusText_CoreRunning_ForwardingOffAndOn()
+    {
+        var h = new Harness();
+        await h.Model.StartAsync();
+        Assert.AreEqual("转发已关闭 · 后台运行中", h.Model.TrayStatusText);
+
+        h.Push(s => s["forwarding"] = true);
+
+        Assert.AreEqual("转发已开启 · 后台运行中", h.Model.TrayStatusText);
+    }
+
+    [TestMethod]
     public async Task CoreRunning_FailedEvent_FalseWithNotice()
     {
         var h = new Harness();

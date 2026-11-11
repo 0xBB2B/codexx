@@ -1,5 +1,72 @@
 import AppKit
 import Combine
+import SwiftUI
+
+private final class DialogPanel: NSPanel {
+    override var canBecomeKey: Bool { true }
+}
+
+private final class DialogResult {
+    var action: DialogAction
+    init(_ action: DialogAction) { self.action = action }
+}
+
+private struct DialogView: View {
+    let model: DialogContent
+    let onAction: (DialogAction) -> Void
+    @FocusState private var focusedIndex: Int?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 8) {
+                Image(systemName: "exclamationmark.triangle").font(.system(size: 16)).foregroundColor(Palette.primary)
+                Text(model.title).font(Fonts.sectionTitle).foregroundColor(Palette.text)
+            }
+            .padding(.top, 24).padding(.horizontal, 24)
+            .accessibilityAddTraits(.isHeader)
+            Group {
+                if let alert = model.alert {
+                    AlertBar(tone: alert.tone, title: alert.title, detail: alert.message)
+                } else {
+                    Text(model.message)
+                        .font(.system(size: 14))
+                        .foregroundColor(Palette.text)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
+            .padding(.top, 12).padding(.horizontal, 24).padding(.bottom, 24)
+            Rectangle().fill(Palette.border).frame(height: 1)
+            HStack(spacing: 12) {
+                Spacer(minLength: 0)
+                ForEach(Array(model.buttons.enumerated()), id: \.offset) { index, button in
+                    Button(button.label) { onAction(button.action) }
+                        .buttonStyle(AppButtonStyle(kind: button.style == .primary ? .primary : .secondary))
+                        .focusable()
+                        .focused($focusedIndex, equals: index)
+                }
+            }
+            .padding(.vertical, 16).padding(.horizontal, 24)
+        }
+        .frame(width: 520)
+        .background(RoundedRectangle(cornerRadius: 12).fill(Palette.surface))
+        .shadow(color: Color(hex: 0x172b3a).opacity(0.16), radius: 24, x: 0, y: 16)
+        .padding(48)
+        .background {
+            Button("") { onAction(model.escapeAction) }
+                .keyboardShortcut(.cancelAction)
+                .opacity(0)
+                .accessibilityHidden(true)
+        }
+        .preferredColorScheme(.light)
+        .onAppear {
+            let index = model.buttons.firstIndex { $0.isDefaultFocus }
+            DispatchQueue.main.async { focusedIndex = index }
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(model.title)
+    }
+}
 
 @MainActor
 final class DialogPresenter {
@@ -13,12 +80,7 @@ final class DialogPresenter {
             Task { @MainActor in await self?.present(value) }
         }.store(in: &subscriptions)
         model.onTrashFailure = { [weak self] path in
-            let failure = self?.makeAlert(
-                title: "没能把模型接入助手移到废纸篓",
-                message: "请手动把它拖到废纸篓：\n\(path)"
-            )
-            failure?.addButton(withTitle: "好")
-            if let failure { _ = self?.run(failure) }
+            _ = self?.run(InfoDialogModel.trashFailure(path: path))
         }
         model.$uninstallPhase.sink { [weak self] phase in
             Task { @MainActor in await self?.present(phase) }
@@ -28,11 +90,7 @@ final class DialogPresenter {
     private func present(_ confirmation: Confirmation) async {
         guard !presenting else { return }
         presenting = true
-        let alert = makeAlert(title: confirmation.title, message: confirmation.message)
-        alert.addButton(withTitle: confirmation.confirmLabel)
-        alert.addButton(withTitle: confirmation.cancelLabel)
-        focusCancel(alert, index: 1)
-        let confirmed = run(alert) == .alertFirstButtonReturn
+        let confirmed = run(ConfirmDialogModel(confirmation: confirmation)) == .confirm
         presenting = false
         if confirmed { await model.confirmPending() } else { model.cancelPending() }
     }
@@ -43,64 +101,45 @@ final class DialogPresenter {
             guard !presenting else { return }
             presenting = true
             while true {
-                let alert = makeAlert(
-                    title: "卸载暂停：有设置被手动改过",
-                    message: "这些设置项被手动改过，为了不覆盖你的修改，助手没有还原它们：\n\(keys.joined(separator: "、"))\n\n配置文件：\(configPath ?? "未知")\n\n请手动处理后点「重新检查」。"
-                )
-                alert.addButton(withTitle: "重新检查")
-                alert.addButton(withTitle: "打开所在文件夹")
-                alert.addButton(withTitle: "取消卸载")
-                focusCancel(alert, index: 2)
-                let choice = run(alert)
-                if choice == .alertSecondButtonReturn {
+                let choice = run(UninstallPausedDialogModel(keys: keys, configPath: configPath))
+                if choice == .revealFolder {
                     MainWindow.reveal(configPath)
                     continue
                 }
                 presenting = false
-                if choice == .alertFirstButtonReturn { await model.recheckUninstall() } else { model.cancelUninstall() }
+                if choice == .recheck { await model.recheckUninstall() } else { model.cancelUninstall() }
                 return
             }
         case .finished:
             guard !presenting else { return }
             presenting = true
-            var message = "已卸载模型接入助手。"
-            if !model.uninstallLeftovers.isEmpty {
-                message += "\n\n以下内容没有删除干净，请手动处理：\(model.uninstallLeftovers.joined(separator: "、"))"
-            }
             let running = model.isChatGPTRunning
-            if running { message += "\n\nChatGPT 需要重启一次，Codex 的模型列表才会恢复成只有官方模型。" }
-            let alert = makeAlert(title: "已卸载模型接入助手", message: message)
-            if running {
-                alert.addButton(withTitle: "立即重启 ChatGPT")
-                alert.addButton(withTitle: "稍后自己重启")
-            } else {
-                alert.addButton(withTitle: "好")
-            }
-            focusCancel(alert, index: alert.buttons.count - 1)
-            let response = run(alert)
+            let response = run(InfoDialogModel.uninstallFinished(leftovers: model.uninstallLeftovers, chatGPTRunning: running))
             presenting = false
-            if running, response == .alertFirstButtonReturn { await model.restartChatGPT() }
+            if running, response == .restartChatGPT { await model.restartChatGPT() }
             await model.finishUninstall()
         case .idle, .running:
             break
         }
     }
 
-    private func makeAlert(title: String, message: String) -> NSAlert {
-        let alert = NSAlert()
-        alert.messageText = title
-        alert.informativeText = message
-        return alert
-    }
-
-    private func focusCancel(_ alert: NSAlert, index: Int) {
-        alert.buttons.forEach { $0.keyEquivalent = "" }
-        alert.buttons[index].keyEquivalent = "\u{1b}"
-        alert.window.initialFirstResponder = alert.buttons[index]
-    }
-
-    private func run(_ alert: NSAlert) -> NSApplication.ModalResponse {
+    private func run(_ content: DialogContent) -> DialogAction {
+        let result = DialogResult(content.escapeAction)
+        let panel = DialogPanel(contentRect: .zero, styleMask: [.borderless], backing: .buffered, defer: false)
+        let host = NSHostingView(rootView: DialogView(model: content) { action in
+            result.action = action
+            NSApp.stopModal()
+        })
+        panel.contentView = host
+        panel.setContentSize(host.fittingSize)
+        panel.isOpaque = false
+        panel.backgroundColor = .clear
+        panel.hasShadow = false
+        panel.isReleasedWhenClosed = false
+        panel.center()
         NSApp.activate(ignoringOtherApps: true)
-        return alert.runModal()
+        NSApp.runModal(for: panel)
+        panel.orderOut(nil)
+        return result.action
     }
 }

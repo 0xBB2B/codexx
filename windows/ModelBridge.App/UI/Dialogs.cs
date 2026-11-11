@@ -8,41 +8,52 @@ using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Automation.Peers;
 using System.Windows.Controls;
-using System.Windows.Interop;
 using System.Windows.Media;
-using Forms = System.Windows.Forms;
 
 namespace ModelBridge.UI;
 
-public sealed class TaskDialogConfirmer : IConfirmer
+public sealed class WindowConfirmer : IConfirmer
 {
     public Task<bool> ConfirmAsync(ConfirmRequest request) =>
-        Task.FromResult(Dialogs.Choose(request.Title, request.Message, [request.CancelText, request.ConfirmText]) == 1);
+        Task.FromResult(Dialogs.Show(DialogModel.ForConfirm(request)) == 1);
 }
 
 static class Dialogs
 {
-    const string Caption = "模型接入助手";
+    public static DialogWindow? Current { get; private set; }
 
-    public static int Choose(string heading, string text, string[] buttons)
+    public static int Show(DialogModel model)
     {
-        var page = new Forms.TaskDialogPage
+        var dialog = new DialogWindow(model);
+        Current = dialog;
+        var owner = Application.Current.Windows.OfType<Window>().FirstOrDefault(w => w.IsVisible && w.IsActive && w is not TrayPanelWindow);
+        if (owner != null)
         {
-            Caption = Caption,
-            Heading = heading,
-            Text = text,
-            AllowCancel = true,
-            Icon = Forms.TaskDialogIcon.None,
-        };
-        foreach (var label in buttons) page.Buttons.Add(new Forms.TaskDialogButton(label));
-        page.DefaultButton = page.Buttons[0];
+            dialog.Owner = owner;
+            dialog.WindowStartupLocation = WindowStartupLocation.CenterOwner;
+        }
+        else dialog.ShowInTaskbar = true;
+        try { dialog.ShowDialog(); }
+        finally { Current = null; }
+        return dialog.Result;
+    }
+}
 
-        var owner = Application.Current.Windows.OfType<Window>().FirstOrDefault(w => w.IsVisible && w.IsActive);
-        var clicked = owner == null
-            ? Forms.TaskDialog.ShowDialog(page)
-            : Forms.TaskDialog.ShowDialog(new WindowInteropHelper(owner).Handle, page);
-        var index = page.Buttons.IndexOf(clicked);
-        return index < 0 ? 0 : index;
+static class Motion
+{
+    public static Duration SwitchDuration =>
+        new(SystemParameters.ClientAreaAnimation ? TimeSpan.FromMilliseconds(200) : TimeSpan.Zero);
+}
+
+public sealed class Spinner : Control
+{
+    public static readonly DependencyProperty IsAnimatedProperty =
+        DependencyProperty.Register(nameof(IsAnimated), typeof(bool), typeof(Spinner), new PropertyMetadata(SystemParameters.ClientAreaAnimation));
+
+    public bool IsAnimated
+    {
+        get => (bool)GetValue(IsAnimatedProperty);
+        set => SetValue(IsAnimatedProperty, value);
     }
 }
 
@@ -107,7 +118,7 @@ static class AlertView
                 Margin = new Thickness(0, 4, 0, 0),
             });
         if (showProgress)
-            text.Children.Add(new ProgressBar { IsIndeterminate = true, Height = 4, Margin = new Thickness(0, 12, 0, 0) });
+            text.Children.Add(new Spinner { Margin = new Thickness(0, 12, 0, 0), HorizontalAlignment = HorizontalAlignment.Left });
         if (actions.Length > 0)
         {
             var row = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 12, 0, 0) };

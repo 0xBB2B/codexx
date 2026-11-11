@@ -24,7 +24,6 @@ public partial class App : Application
     protected override async void OnStartup(StartupEventArgs e)
     {
         base.OnStartup(e);
-        System.Windows.Forms.Application.EnableVisualStyles();
         var uninstall = e.Args.Contains("--uninstall");
 
         singleInstance = new SingleInstance();
@@ -32,9 +31,9 @@ public partial class App : Application
         if (acquired != SingleInstanceResult.Acquired)
         {
             if (acquired == SingleInstanceResult.ActivationFailed)
-                MessageBox.Show(AppModel.ActivationFailedMessage, AppTitle, MessageBoxButton.OK, MessageBoxImage.Warning);
+                Dialogs.Show(DialogModel.ForInfo(AppTitle, AppModel.ActivationFailedMessage));
             else if (uninstall)
-                MessageBox.Show("模型接入助手正在运行，请先从任务栏通知区域退出它，再卸载。", AppTitle, MessageBoxButton.OK, MessageBoxImage.Warning);
+                Dialogs.Show(DialogModel.ForInfo(AppTitle, "模型接入助手正在运行，请先从任务栏通知区域退出它，再卸载。"));
             Shutdown(uninstall ? 1 : 0);
             return;
         }
@@ -48,7 +47,7 @@ public partial class App : Application
             new SettingsAdapter(new ShellSettings(Path.Combine(localAppData, "ModelBridge"))),
             new LoginAdapter(new LoginItem(installDir)),
             new ChatGptAdapter(chatGptApp, new ChatGptRestarter(chatGptApp)),
-            new TaskDialogConfirmer());
+            new WindowConfirmer());
         model.ExitRequested += ExitApp;
 
         if (uninstall)
@@ -100,7 +99,7 @@ public partial class App : Application
         await model!.StartAsync();
         var code = await RunUninstallAsync();
         if (code == 1 && model.Notice is { } notice)
-            MessageBox.Show($"{notice.Title}\n{notice.Detail}", AppTitle, MessageBoxButton.OK, MessageBoxImage.Warning);
+            Dialogs.Show(DialogModel.ForInfo(notice.Title, notice.Detail));
         await model.StopCoreAsync();
         return code;
     }
@@ -111,21 +110,14 @@ public partial class App : Application
         while (code == 2)
         {
             var pause = model.UninstallPause!;
-            var choice = Dialogs.Choose(
-                "卸载暂停：有设置被手动改过",
-                $"安装后，有人手动改过本助手写入的设置项：{string.Join("、", pause.Keys)}。为了不覆盖这些修改，助手没有改动它，也还没有删除任何东西。\n\n请检查 {pause.ConfigPath}，处理后重新检查。",
-                ["取消卸载", "打开所在文件夹", "重新检查"]);
+            var choice = Dialogs.Show(DialogModel.ForUninstallPause(pause));
             if (choice == 1) ExternalOpen.FolderOf(pause.ConfigPath);
             else if (choice == 2) code = await model.RecheckUninstallAsync();
             else return 2;
         }
 
         if (code == 0 && model.Uninstalled is { Leftovers.Count: > 0 } outcome)
-            MessageBox.Show(
-                "以下内容没能自动清理，请手动处理：\n· " + string.Join("\n· ", outcome.Leftovers),
-                AppTitle,
-                MessageBoxButton.OK,
-                MessageBoxImage.Warning);
+            Dialogs.Show(DialogModel.ForInfo("以下内容没能自动清理", "请手动处理：\n· " + string.Join("\n· ", outcome.Leftovers)));
         return code;
     }
 

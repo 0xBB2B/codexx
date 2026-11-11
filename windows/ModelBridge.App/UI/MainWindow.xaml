@@ -25,10 +25,9 @@
             <StackPanel Margin="24">
                 <StackPanel x:Name="AlertHost" />
 
-                <GroupBox Padding="24" Margin="0,0,0,20">
-                    <GroupBox.Header>
-                        <TextBlock Text="转发" Style="{StaticResource CardTitle}" />
-                    </GroupBox.Header>
+                <Border Style="{StaticResource Card}" Margin="0,0,0,20">
+                    <StackPanel>
+                    <TextBlock Text="转发" Style="{StaticResource CardTitle}" Margin="0,0,0,20" />
                     <Grid>
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="112" />
@@ -36,28 +35,26 @@
                         </Grid.ColumnDefinitions>
                         <TextBlock Text="转发到中台" FontWeight="SemiBold" Margin="0,12,0,0" VerticalAlignment="Top" />
                         <StackPanel Grid.Column="1" Margin="12,0,0,0">
-                            <ToggleButton x:Name="ForwardToggle" Width="96" Height="44" HorizontalAlignment="Left"
-                                          FontWeight="SemiBold" Click="ForwardClick" />
+                            <ToggleButton x:Name="ForwardToggle" Style="{StaticResource SwitchToggle}" HorizontalAlignment="Left"
+                                          AutomationProperties.Name="转发到中台" Click="ForwardClick" />
                             <TextBlock x:Name="ForwardHelp" Style="{StaticResource HelpText}" />
                         </StackPanel>
                     </Grid>
-                </GroupBox>
-
-                <GroupBox Padding="24" Margin="0,0,0,20">
-                    <GroupBox.Header>
-                        <TextBlock Text="中台连接" Style="{StaticResource CardTitle}" />
-                    </GroupBox.Header>
-                    <StackPanel>
-                        <ui:ConnectionForm x:Name="Form" />
-                        <Button x:Name="SaveButton" Content="保存修改" HorizontalAlignment="Right" MinHeight="44"
-                                Padding="20,0" Margin="0,20,0,0" FontWeight="SemiBold" Click="SaveClick" />
                     </StackPanel>
-                </GroupBox>
+                </Border>
 
-                <GroupBox Padding="24">
-                    <GroupBox.Header>
-                        <TextBlock Text="运行状态" Style="{StaticResource CardTitle}" />
-                    </GroupBox.Header>
+                <Border Style="{StaticResource Card}" Margin="0,0,0,20">
+                    <StackPanel>
+                        <TextBlock Text="中台连接" Style="{StaticResource CardTitle}" Margin="0,0,0,20" />
+                        <ui:ConnectionForm x:Name="Form" />
+                        <Button x:Name="SaveButton" Content="保存修改" HorizontalAlignment="Right" Margin="0,20,0,0"
+                                Click="SaveClick" />
+                    </StackPanel>
+                </Border>
+
+                <Border Style="{StaticResource Card}">
+                    <StackPanel>
+                    <TextBlock Text="运行状态" Style="{StaticResource CardTitle}" Margin="0,0,0,20" />
                     <Grid>
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="112" />
@@ -72,7 +69,8 @@
                         <TextBlock Text="中台模型" Grid.Row="1" FontWeight="SemiBold" Margin="0,12,0,0" />
                         <TextBlock x:Name="RelayValue" Grid.Row="1" Grid.Column="1" Margin="12,12,0,0" TextWrapping="Wrap" />
                     </Grid>
-                </GroupBox>
+                    </StackPanel>
+                </Border>
             </StackPanel>
         </ScrollViewer>
     </DockPanel>

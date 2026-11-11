@@ -150,7 +150,8 @@ struct ModelBridgeApp: App {
 
     var body: some Scene {
         MenuBarExtra("模型接入助手", systemImage: "arrow.left.arrow.right.circle") {
-            StatusMenu(model: delegate.model) { delegate.showMainWindow() }
+            MenuPanel(model: delegate.model) { delegate.showMainWindow() }
         }
+        .menuBarExtraStyle(.window)
     }
 }

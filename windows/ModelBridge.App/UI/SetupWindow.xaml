@@ -11,21 +11,20 @@
             <TextBlock Text="填写中台提供的 Base URL 和 API Key。设置完成后，Codex 的模型列表里会多出中台模型。"
                        TextWrapping="Wrap" Margin="0,8,0,20" Foreground="{StaticResource TextMutedBrush}" />
             <StackPanel x:Name="ErrorHost" />
-            <Border Padding="24" CornerRadius="12" BorderThickness="1"
-                    Background="{StaticResource SurfaceBrush}" BorderBrush="{StaticResource DividerBrush}">
+            <Border Style="{StaticResource Card}">
                 <ui:ConnectionForm x:Name="Form" />
             </Border>
-            <Button x:Name="SubmitButton" Content="完成设置" Style="{DynamicResource AccentButtonStyle}"
-                    HorizontalAlignment="Right" MinHeight="44" Padding="20,0" Margin="0,20,0,0" FontWeight="SemiBold"
+            <Button x:Name="SubmitButton" Content="完成设置" Style="{StaticResource PrimaryButton}"
+                    HorizontalAlignment="Right" Margin="0,20,0,0"
                     Click="SubmitClick" />
         </StackPanel>
 
         <StackPanel x:Name="DonePanel" Visibility="Collapsed">
             <StackPanel x:Name="DoneHost" />
             <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
-                <Button Content="稍后自己重启" MinHeight="44" Padding="20,0" FontWeight="SemiBold" Click="LaterClick" />
-                <Button Content="立即重启 ChatGPT" Style="{DynamicResource AccentButtonStyle}" MinHeight="44" Padding="20,0"
-                        Margin="12,0,0,0" FontWeight="SemiBold" Click="RestartClick" />
+                <Button Content="稍后自己重启" Click="LaterClick" />
+                <Button Content="立即重启 ChatGPT" Style="{StaticResource PrimaryButton}" 
+                        Margin="12,0,0,0" Click="RestartClick" />
             </StackPanel>
         </StackPanel>
     </Grid>

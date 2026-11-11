@@ -13,10 +13,15 @@ extension Color {
 
 enum Palette {
     static let primary = Color(hex: 0x0f766e)
+    static let primaryHover = Color(hex: 0x115e59)
     static let background = Color(hex: 0xf5f7fa)
     static let surface = Color.white
     static let text = Color(hex: 0x172b3a)
     static let textMuted = Color(hex: 0x536575)
+    static let textDisabled = Color(hex: 0x586878)
+    static let disabledBg = Color(hex: 0xe9edf1)
+    static let selectedBg = Color(hex: 0xe7f2f0)
+    static let focus = Color(hex: 0x0f766e)
     static let border = Color(hex: 0xe2e7ec)
     static let borderStrong = Color(hex: 0x7b8998)
     static let success = Color(hex: 0x16734b)
@@ -46,7 +51,7 @@ struct BusyLabel: View {
     var body: some View {
         HStack(spacing: 8) {
             if busy && showSpinner {
-                ProgressView().controlSize(.small).frame(width: 16, height: 16)
+                Spinner()
             }
             Text(text)
         }
@@ -59,36 +64,23 @@ struct BusyLabel: View {
     }
 }
 
-extension View {
-    func primaryAction() -> some View {
-        buttonStyle(.borderedProminent).tint(Palette.primary)
-    }
-
-    func secondaryAction() -> some View {
-        buttonStyle(.bordered)
-    }
-}
-
 struct SecretInput: View {
     let placeholder: String
     @Binding var text: String
+    var invalid = false
+    var errorText: String?
     @State private var revealed = false
 
     var body: some View {
         HStack(spacing: 8) {
-            Group {
-                if revealed {
-                    TextField(placeholder, text: $text)
-                } else {
-                    SecureField(placeholder, text: $text)
-                }
-            }
-            .textFieldStyle(.roundedBorder)
-            .font(Fonts.mono)
+            AppTextField(
+                label: "API Key", placeholder: placeholder, text: $text,
+                secure: !revealed, mono: true, invalid: invalid, errorText: errorText
+            )
             Button { revealed.toggle() } label: {
                 Image(systemName: revealed ? "eye.slash" : "eye")
             }
-            .secondaryAction()
+            .buttonStyle(AppButtonStyle(kind: .icon, toggled: revealed))
             .accessibilityLabel(revealed ? "隐藏 API Key" : "显示 API Key")
             .accessibilityAddTraits(revealed ? .isSelected : [])
         }
@@ -129,15 +121,14 @@ struct Card<Content: View>: View {
     @ViewBuilder let content: Content
 
     var body: some View {
-        GroupBox {
-            VStack(alignment: .leading, spacing: 20) {
-                content
-            }
-            .padding(12)
-            .frame(maxWidth: .infinity, alignment: .leading)
-        } label: {
-            if let title { Text(title).font(Fonts.sectionTitle) }
+        VStack(alignment: .leading, spacing: 20) {
+            if let title { Text(title).font(Fonts.sectionTitle).foregroundColor(Palette.text) }
+            content
         }
+        .padding(24)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: 12).fill(Palette.surface))
+        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Palette.border, lineWidth: 1))
     }
 }
 

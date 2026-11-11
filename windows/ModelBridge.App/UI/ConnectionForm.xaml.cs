@@ -59,8 +59,7 @@ public partial class ConnectionForm : UserControl
         System.Windows.Automation.AutomationProperties.SetHelpText(box, message ?? "");
         error.Visibility = message == null ? Visibility.Collapsed : Visibility.Visible;
         help.Visibility = message == null ? Visibility.Visible : Visibility.Collapsed;
-        if (message == null) box.ClearValue(Control.BorderBrushProperty);
-        else box.BorderBrush = AlertView.Brush("DangerBrush");
+        FieldState.SetHasError(box, message != null);
     }
 
     void UrlChanged(object sender, TextChangedEventArgs e)

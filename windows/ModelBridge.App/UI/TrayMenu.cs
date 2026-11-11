@@ -1,11 +1,8 @@
 using System;
-using System.ComponentModel;
 using System.Drawing;
 using System.Runtime.InteropServices;
 using System.Threading.Tasks;
 using System.Windows;
-using System.Windows.Controls;
-using System.Windows.Controls.Primitives;
 using System.Windows.Interop;
 using Forms = System.Windows.Forms;
 
@@ -14,64 +11,19 @@ namespace ModelBridge.UI;
 public sealed class TrayMenu : IDisposable
 {
     readonly AppModel model;
-    bool disposed;
+    readonly Action openMain;
+    readonly Func<Task> uninstall;
     readonly Forms.NotifyIcon icon;
     readonly Icon iconImage;
-    readonly ContextMenu menu = new();
-    readonly MenuItem status = new() { IsEnabled = false };
-    readonly MenuItem forwarding = new() { Header = "转发到中台" };
-    readonly MenuItem loginStart = new() { Header = "登录时启动" };
-    readonly MenuItem update = new();
-    readonly MenuItem remove = new() { Header = "卸载模型接入助手…" };
-    readonly MenuItem quit = new() { Header = "退出模型接入助手" };
+    TrayPanelWindow? panel;
+    DateTime lastClosed = DateTime.MinValue;
+    bool disposed;
 
-    public TrayMenu(AppModel appModel, Action openMain, Func<Task> uninstall)
+    public TrayMenu(AppModel appModel, Action openMainWindow, Func<Task> uninstallApp)
     {
         model = appModel;
-
-        forwarding.Click += async (_, _) =>
-        {
-            await model.ToggleForwardingAsync();
-            ShowNotice(openMain);
-        };
-        var openConfig = new MenuItem { Header = "打开配置…" };
-        openConfig.Click += (_, _) => openMain();
-        loginStart.Click += async (_, _) =>
-        {
-            await model.SetLoginStartAsync(!model.LoginStartEnabled);
-            ShowNotice(openMain);
-        };
-        update.Click += async (_, _) =>
-        {
-            if (model.UpdateVersion == null)
-            {
-                await model.CheckUpdateAsync();
-                ShowNotice(openMain);
-            }
-            else ExternalOpen.Url(model.UpdateUrl);
-        };
-        remove.Click += async (_, _) => await uninstall();
-        quit.Click += async (_, _) =>
-        {
-            await model.QuitAsync();
-            ShowNotice(openMain);
-        };
-
-        menu.Items.Add(status);
-        menu.Items.Add(new Separator());
-        menu.Items.Add(forwarding);
-        menu.Items.Add(openConfig);
-        menu.Items.Add(new Separator());
-        menu.Items.Add(loginStart);
-        menu.Items.Add(update);
-        menu.Items.Add(new Separator());
-        menu.Items.Add(remove);
-        menu.Items.Add(quit);
-        menu.Placement = PlacementMode.AbsolutePoint;
-        menu.Opened += (_, _) =>
-        {
-            if (PresentationSource.FromVisual(menu) is HwndSource source) SetForegroundWindow(source.Handle);
-        };
+        openMain = openMainWindow;
+        uninstall = uninstallApp;
 
         iconImage = CreateIcon();
         icon = new Forms.NotifyIcon { Icon = iconImage, Text = "模型接入助手", Visible = true };
@@ -79,49 +31,76 @@ public sealed class TrayMenu : IDisposable
         {
             if (e.Button is Forms.MouseButtons.Left or Forms.MouseButtons.Right) Show();
         };
-        model.PropertyChanged += OnModelChanged;
-        Refresh();
     }
 
     public void Show()
     {
-        Refresh();
-        using var graphics = Graphics.FromHwnd(IntPtr.Zero);
-        var scale = graphics.DpiX / 96.0;
+        if (Dialogs.Current is { } dialog)
+        {
+            dialog.Activate();
+            return;
+        }
+
+        // 点托盘图标会先让打开着的面板失去焦点而关闭，随后的鼠标抬起不应又把它打开
+        if (disposed || panel != null || DateTime.UtcNow - lastClosed < TimeSpan.FromMilliseconds(300)) return;
+
         var cursor = Forms.Cursor.Position;
-        menu.HorizontalOffset = cursor.X / scale;
-        menu.VerticalOffset = cursor.Y / scale;
-        menu.IsOpen = true;
+        panel = new TrayPanelWindow(model, cursor, Run);
+        panel.Closed += (_, _) =>
+        {
+            panel = null;
+            lastClosed = DateTime.UtcNow;
+        };
+        panel.Show();
+        if (PresentationSource.FromVisual(panel) is HwndSource source) SetForegroundWindow(source.Handle);
     }
 
     public void Dispose()
     {
         if (disposed) return;
         disposed = true;
-        model.PropertyChanged -= OnModelChanged;
+        panel?.Close();
         icon.Visible = false;
         icon.Dispose();
         iconImage.Dispose();
     }
 
-    void OnModelChanged(object? sender, PropertyChangedEventArgs e) => Refresh();
-
-    void ShowNotice(Action openMain)
+    async void Run(TrayMenuCommand command)
     {
-        if (model.Notice != null) openMain();
+        switch (command)
+        {
+            case TrayMenuCommand.ToggleForwarding:
+                await model.ToggleForwardingAsync();
+                ShowNotice();
+                break;
+            case TrayMenuCommand.OpenConfig:
+                openMain();
+                break;
+            case TrayMenuCommand.ToggleLoginStart:
+                await model.SetLoginStartAsync(!model.LoginStartEnabled);
+                ShowNotice();
+                break;
+            case TrayMenuCommand.CheckUpdate:
+                if (model.UpdateVersion == null)
+                {
+                    await model.CheckUpdateAsync();
+                    ShowNotice();
+                }
+                else ExternalOpen.Url(model.UpdateUrl);
+                break;
+            case TrayMenuCommand.Uninstall:
+                await uninstall();
+                break;
+            case TrayMenuCommand.Quit:
+                await model.QuitAsync();
+                ShowNotice();
+                break;
+        }
     }
 
-    void Refresh()
+    void ShowNotice()
     {
-        status.Header = model.TrayStatusText;
-        forwarding.IsChecked = model.ForwardingEnabled;
-        forwarding.IsEnabled = model.ToggleEnabled;
-        loginStart.IsChecked = model.LoginStartEnabled;
-        loginStart.IsEnabled = !model.IsBusy;
-        update.IsEnabled = !model.IsBusy;
-        remove.IsEnabled = !model.IsBusy;
-        quit.IsEnabled = !model.IsBusy;
-        update.Header = model.UpdateVersion == null ? "检查更新" : $"发现新版本 {model.UpdateVersion} · 打开下载页";
+        if (model.Notice != null) openMain();
     }
 
     static Icon CreateIcon()

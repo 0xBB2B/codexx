@@ -234,7 +234,7 @@ public sealed class AppModel : INotifyPropertyChanged
 
     public string CoreStatusText => coreRunning ? "后台运行中" : "后台服务已停止";
 
-    public string TrayStatusText => (forwardingEnabled ? "转发已开启" : "转发已关闭") + " · " + CoreStatusText;
+    public string TrayStatusText => coreRunning ? (forwardingEnabled ? "转发已开启" : "转发已关闭") + " · " + CoreStatusText : CoreStatusText;
 
     public string ChatGptText => chatGptFound ? "已检测到" : "未找到";
 

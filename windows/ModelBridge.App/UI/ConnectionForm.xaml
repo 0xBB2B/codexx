@@ -51,7 +51,7 @@
                                  FontFamily="Consolas" FontSize="12" TextChanged="KeyTextChanged" Visibility="Collapsed"
                                  AutomationProperties.Name="API Key" />
                     </Grid>
-                    <ToggleButton x:Name="KeyToggle" Grid.Column="1" Width="44" Height="44" Margin="8,0,0,0"
+                    <ToggleButton x:Name="KeyToggle" Grid.Column="1" Style="{StaticResource IconToggleButton}" Margin="8,0,0,0"
                                   Content="&#xE7B3;" FontFamily="Segoe MDL2 Assets" FontSize="16"
                                   Click="KeyToggleClick" AutomationProperties.Name="显示 API Key" />
                 </Grid>

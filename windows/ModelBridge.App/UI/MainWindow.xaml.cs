@@ -28,7 +28,6 @@ public partial class MainWindow : Window
     void Refresh()
     {
         ForwardToggle.SetCurrentValue(ToggleButton.IsCheckedProperty, model.ForwardingEnabled);
-        ForwardToggle.Content = model.ForwardingEnabled ? "已开启" : "已关闭";
         ForwardToggle.IsEnabled = model.ToggleEnabled;
         ForwardHelp.Text = !model.ChatGptFound
             ? "找到 ChatGPT 后才能打开。"

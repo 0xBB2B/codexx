@@ -31,7 +31,7 @@ struct MainWindow: View {
     private var notice: some View {
         if let notice = model.notice {
             AlertBar(tone: tone(notice.kind), title: notice.title, detail: notice.detail) {
-                Button("知道了") { model.dismissNotice() }.buttonStyle(.link)
+                Button("知道了") { model.dismissNotice() }.linkAction()
             }
         }
     }
@@ -55,12 +55,12 @@ struct MainWindow: View {
         AlertBar(tone: tone, title: banner.title, detail: banner.detail, keys: banner.keys, path: banner.configPath) {
             switch banner.action {
             case .refreshModels:
-                Button("重试") { Task { await model.refreshModels() } }.secondaryAction()
+                Button("重试") { Task { await model.refreshModels() } }.secondaryAction(compact: true)
             case .recheckStatus:
-                Button("重新检测") { Task { await model.recheckStatus() } }.secondaryAction()
+                Button("重新检测") { Task { await model.recheckStatus() } }.secondaryAction(compact: true)
             case .restoreHelp:
-                Button("打开所在文件夹") { Self.reveal(banner.configPath) }.secondaryAction()
-                Button("重新检查") { Task { await model.recheckStatus() } }.buttonStyle(.link)
+                Button("打开所在文件夹") { Self.reveal(banner.configPath) }.secondaryAction(compact: true)
+                Button("重新检查") { Task { await model.recheckStatus() } }.linkAction()
             case nil:
                 EmptyView()
             }
@@ -82,20 +82,11 @@ struct MainWindow: View {
                         : "已关闭：Codex 配置已还原为开启前的样子，只显示官方模型。")
                     : "找到 ChatGPT 后才能打开。"
             ) {
-                HStack(spacing: 12) {
-                    Toggle("转发到中台", isOn: Binding(
-                        get: { model.forwardingEnabled },
-                        set: { value in Task { await model.toggleForwarding(enabled: value) } }
-                    ))
-                    .toggleStyle(.switch)
-                    .labelsHidden()
-                    .tint(Palette.primary)
-                    .disabled(model.forwardingToggleDisabled)
-                    Text(model.forwardingEnabled ? "已开启" : "已关闭")
-                        .font(Fonts.label)
-                        .foregroundColor(Palette.text)
-                }
-                .frame(minHeight: 44)
+                SwitchRow(label: "转发到中台", isOn: Binding(
+                    get: { model.forwardingEnabled },
+                    set: { value in Task { await model.toggleForwarding(enabled: value) } }
+                ))
+                .disabled(model.forwardingToggleDisabled)
             }
         }
     }
@@ -103,12 +94,16 @@ struct MainWindow: View {
     private var connectionCard: some View {
         Card(title: "中台连接") {
             FieldRow(label: "Base URL", error: model.setupFieldErrors[.baseURL]) {
-                TextField("https://relay.example.com/v1", text: $model.baseURL)
-                    .textFieldStyle(.roundedBorder)
-                    .font(Fonts.mono)
+                AppTextField(
+                    label: "Base URL", placeholder: "https://relay.example.com/v1", text: $model.baseURL,
+                    mono: true, invalid: model.setupFieldErrors[.baseURL] != nil, errorText: model.setupFieldErrors[.baseURL]
+                )
             }
             FieldRow(label: "API Key", help: "保存在系统钥匙串中。", error: model.setupFieldErrors[.apiKey]) {
-                SecretInput(placeholder: "", text: $model.apiKey)
+                SecretInput(
+                    placeholder: "", text: $model.apiKey,
+                    invalid: model.setupFieldErrors[.apiKey] != nil, errorText: model.setupFieldErrors[.apiKey]
+                )
             }
             .disabled(model.isSaving)
             HStack {
@@ -154,9 +149,9 @@ struct MainWindow: View {
                 Button("打开下载页") {
                     if let url = URL(string: update.url) { NSWorkspace.shared.open(url) }
                 }
-                .buttonStyle(.link)
+                .linkAction()
             } else {
-                Button("检查更新") { Task { await model.checkUpdate() } }.buttonStyle(.link)
+                Button("检查更新") { Task { await model.checkUpdate() } }.linkAction()
             }
         }
         .padding(.horizontal, 24)

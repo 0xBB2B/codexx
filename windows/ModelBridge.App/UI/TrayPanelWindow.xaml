@@ -1,0 +1,17 @@
+<Window x:Class="ModelBridge.UI.TrayPanelWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        WindowStyle="None" AllowsTransparency="True" Background="Transparent" ResizeMode="NoResize"
+        SizeToContent="WidthAndHeight" ShowInTaskbar="False" Topmost="True" ShowActivated="True"
+        FontSize="13" Foreground="{StaticResource TextBrush}" UseLayoutRounding="True"
+        KeyboardNavigation.TabNavigation="Cycle" Opacity="0">
+    <Grid Margin="48,32,48,64">
+        <Border x:Name="PanelBorder" Background="{StaticResource SurfaceBrush}" BorderBrush="{StaticResource DividerBrush}"
+                BorderThickness="1" CornerRadius="12" Padding="4">
+            <Border.Effect>
+                <DropShadowEffect BlurRadius="48" ShadowDepth="16" Direction="270" Color="#172B3A" Opacity="0.16" />
+            </Border.Effect>
+            <StackPanel x:Name="ItemHost" />
+        </Border>
+    </Grid>
+</Window>

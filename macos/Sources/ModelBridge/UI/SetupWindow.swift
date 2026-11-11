@@ -36,9 +36,10 @@ struct SetupWindow: View {
                 help: "以 https:// 开头的完整地址。",
                 error: model.setupFieldErrors[.baseURL]
             ) {
-                TextField("https://relay.example.com/v1", text: $model.baseURL)
-                    .textFieldStyle(.roundedBorder)
-                    .font(Fonts.mono)
+                AppTextField(
+                    label: "Base URL", placeholder: "https://relay.example.com/v1", text: $model.baseURL,
+                    mono: true, invalid: model.setupFieldErrors[.baseURL] != nil, errorText: model.setupFieldErrors[.baseURL]
+                )
             }
             FieldRow(
                 label: "API Key",
@@ -46,7 +47,10 @@ struct SetupWindow: View {
                 help: "保存在系统钥匙串中。",
                 error: model.setupFieldErrors[.apiKey]
             ) {
-                SecretInput(placeholder: "", text: $model.apiKey)
+                SecretInput(
+                    placeholder: "", text: $model.apiKey,
+                    invalid: model.setupFieldErrors[.apiKey] != nil, errorText: model.setupFieldErrors[.apiKey]
+                )
             }
         }
         .disabled(connecting)
