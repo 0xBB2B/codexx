@@ -82,3 +82,10 @@ struct ChatGPTApp: Sendable {
         }
     }
 }
+
+protocol ChatGPTControlling: Sendable {
+    func isRunning() -> Bool
+    func restart() async -> ChatGPTRestartResult
+}
+
+extension ChatGPTApp: ChatGPTControlling {}

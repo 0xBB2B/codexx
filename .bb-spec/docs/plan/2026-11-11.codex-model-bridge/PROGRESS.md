@@ -9,7 +9,7 @@
 | 06 | core-control | done | 2026-11-11 |
 | 07 | core-update-check | done | 2026-11-11 |
 | 08 | macos-system | done | 2026-11-11 |
-| 09 | macos-ui | pending | — |
+| 09 | macos-ui | done | 2026-11-11 |
 | 10 | windows-system | done | 2026-11-11 |
 | 11 | windows-ui | pending | — |
 | 12 | windows-installer | pending | — |
@@ -25,6 +25,7 @@
 - 07 记录：Review 合规 13/14；自修一轮：自动检查失败写一行日志（不含响应正文）、响应体 1MB 上限、shutdown 先停检查循环、发布页地址必须以 https://github.com/ 开头；补开发版本号、空 tag、并发测试（后三项为回归保护，首次即通过）。
 - 08 记录：Review 合规 13/17；自修一轮（先 Red 后 Green）：ChatGPT 退出等待 30 秒、核心重启延迟 2 秒、单实例改用分布式通知、稳定运行 60 秒后复位重启许可（产品决定）、取消即返回、写失败统一 processExited、重启后 init 出错先停进程、过期重启放弃、按 \n 切行、钥匙串设 AfterFirstUnlockThisDeviceOnly 并区分无权访问。待签名真机手动验证：覆盖写入后钥匙串属性仍在（未签名测试环境读不回该属性，用例 skip）。
 - 10 记录：Windows 测试经 ci/windows-wip 临时分支在 CI 运行（本机装了 ~/.dotnet 只做编译检查）。首跑 72 个中 2 个失败（DeleteAll 目录不存在、测试读日志与假核心写日志的文件占用冲突，均已修）。Review 合规 16/18；自修一轮：读循环异常隔离、按会话过滤 ChatGPT 进程、单实例管道按会话命名并 CurrentUserOnly、激活读取 2 秒超时、空凭据。最终 CI 88/88 通过（运行 42985878102）。
+- 09 记录：用户决定两端尽量用系统原生控件（菜单、NSAlert、按钮、输入框、开关、GroupBox），固定浅色；PRD 04 与 DESIGN.md 已同步。Review 合规 27/33；自修一轮（先 Red 后 Green）：退出还原失败不退出、废纸篓失败提示、真实运行状态、菜单开关禁用、首次设置后续步骤失败仍算成功、写钥匙串或设置失败时回滚核心与钥匙串、卸载残留逐项列出、启动只读一次钥匙串且在后台、设置窗口关闭不挡主窗口、文案修正、转圈 200ms 延迟。137 个测试通过。界面未目视验证，留待收尾对比原型。
 - 01 的 Windows 部分已在 CI（windows-2025）验证通过。
 ## 阻塞
 （无）

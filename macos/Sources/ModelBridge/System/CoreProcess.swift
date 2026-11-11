@@ -246,3 +246,11 @@ private extension JSONDecoder {
         return decoder
     }
 }
+
+protocol CoreClient: Sendable {
+    func call<P: Encodable & Sendable>(_ method: String, params: P) async throws -> Data
+    func statusEvents() -> AsyncStream<CoreStatus>
+    func lifecycleEvents() -> AsyncStream<CoreLifecycleEvent>
+}
+
+extension CoreProcess: CoreClient {}

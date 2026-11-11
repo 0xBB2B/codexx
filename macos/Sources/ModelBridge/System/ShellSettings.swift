@@ -37,3 +37,11 @@ struct ShellSettings: Sendable {
         try FileManager.default.removeItem(at: fileURL)
     }
 }
+
+protocol SettingsStoring: Sendable {
+    func loadBaseURL() throws -> String?
+    func saveBaseURL(_ baseURL: String) throws
+    func deleteAll() throws
+}
+
+extension ShellSettings: SettingsStoring {}

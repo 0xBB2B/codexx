@@ -52,3 +52,10 @@ struct LoginItem: Sendable {
         return reason == OSType(keyAELaunchedAsLogInItem)
     }
 }
+
+protocol LoginItemControlling: Sendable {
+    func enable() throws
+    func disable() throws
+}
+
+extension LoginItem: LoginItemControlling {}

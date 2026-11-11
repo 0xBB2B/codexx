@@ -75,3 +75,11 @@ struct KeychainStore: Sendable {
         guard status == errSecSuccess || status == errSecItemNotFound else { throw KeychainError(status: status) }
     }
 }
+
+protocol KeyStoring: Sendable {
+    func save(_ value: String) throws
+    func load() throws -> String?
+    func delete() throws
+}
+
+extension KeychainStore: KeyStoring {}
