@@ -24,6 +24,8 @@ type State struct {
 	Entries map[string]*entry `json:"entries"`
 	// ConfigMissing 为 true 表示开启前配置文件不存在，还原到空内容时直接删除文件
 	ConfigMissing bool `json:"config_missing,omitempty"`
+	// RelayOnly 记录写入时用的方式；缺省视为官方加中台
+	RelayOnly bool `json:"relay_only,omitempty"`
 }
 
 func stateFilePath(c Config) string { return filepath.Join(c.DataDir, stateFileName) }

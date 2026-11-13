@@ -21,6 +21,12 @@ const (
 	keyProvider = "model_provider"
 	keyEfforts  = "desktop.enabled-reasoning-efforts"
 
+	ProviderID = "modelbridge"
+
+	keyProviderName = "model_providers." + ProviderID + ".name"
+	keyProviderURL  = "model_providers." + ProviderID + ".base_url"
+	keyProviderWire = "model_providers." + ProviderID + ".wire_api"
+
 	proxyBaseURL = "http://127.0.0.1:47311/v1"
 	autoModel    = "relay-auto"
 )
@@ -37,6 +43,7 @@ type EnableInput struct {
 	CatalogPath  string
 	HasAutoModel bool
 	Efforts      []string
+	RelayOnly    bool
 }
 
 type Error struct {
@@ -126,14 +133,29 @@ func Enable(c Config, in EnableInput) ([]string, error) {
 	if err := Validate(orig); err != nil {
 		return nil, err
 	}
-	managed := []string{keyBaseURL, keyCatalog, keyProvider}
+	efforts := in.Efforts
+	kvs := []struct{ key, val string }{{keyBaseURL, proxyBaseURL}, {keyCatalog, in.CatalogPath}}
+	managed := []string{keyProvider, keyCatalog}
+	if in.RelayOnly {
+		efforts = nil
+		kvs = []struct{ key, val string }{
+			{keyProvider, ProviderID},
+			{keyProviderName, "模型接入助手"},
+			{keyProviderURL, proxyBaseURL},
+			{keyProviderWire, "responses"},
+			{keyCatalog, in.CatalogPath},
+		}
+		managed = append(managed, keyProviderName, keyProviderURL, keyProviderWire)
+	} else {
+		managed = append(managed, keyBaseURL)
+	}
 	if in.HasAutoModel {
 		managed = append(managed, keyModel)
 	}
-	if len(in.Efforts) > 0 {
+	if len(efforts) > 0 {
 		managed = append(managed, keyEfforts)
 	}
-	if len(in.Efforts) > 0 {
+	if len(efforts) > 0 {
 		if _, plain, err := get(orig, "desktop"); err != nil {
 			return nil, err
 		} else if plain {
@@ -165,8 +187,20 @@ func Enable(c Config, in EnableInput) ([]string, error) {
 	}
 	badSet := map[string]bool{}
 	var modelEntry *entry
+	configMissing := !existed
+	text := orig
+	if st != nil && st.RelayOnly != in.RelayOnly {
+		restored, bad, err := restoreText(orig, st)
+		if err != nil {
+			return nil, err
+		}
+		for _, k := range bad {
+			badSet[k] = true
+		}
+		text, configMissing, st = restored, st.ConfigMissing, nil
+	}
 	if st == nil {
-		st = &State{Entries: map[string]*entry{}, ConfigMissing: !existed}
+		st = &State{Entries: map[string]*entry{}, ConfigMissing: configMissing, RelayOnly: in.RelayOnly}
 	} else {
 		modelEntry = st.Entries[keyModel]
 		bad, err := tampered(orig, st)
@@ -179,7 +213,7 @@ func Enable(c Config, in EnableInput) ([]string, error) {
 		}
 	}
 
-	text, eol := orig, detectEOL(orig)
+	eol := detectEOL(orig)
 	var taken []string
 	if modelEntry != nil && !in.HasAutoModel {
 		switch {
@@ -219,22 +253,24 @@ func Enable(c Config, in EnableInput) ([]string, error) {
 		return ""
 	}
 
-	it, had, err := get(text, keyProvider)
-	if err != nil {
-		return nil, err
-	}
-	var line *int
-	var removed string
-	if had {
-		var l int
-		if text, l, removed, err = removeKey(text, keyProvider); err != nil {
+	if !in.RelayOnly {
+		it, had, err := get(text, keyProvider)
+		if err != nil {
 			return nil, err
 		}
-		line = &l
+		var line *int
+		var removed string
+		if had {
+			var l int
+			if text, l, removed, err = removeKey(text, keyProvider); err != nil {
+				return nil, err
+			}
+			line = &l
+		}
+		record(keyProvider, origStr(it, had), removed, had, nil, had, line)
 	}
-	record(keyProvider, origStr(it, had), removed, had, nil, had, line)
 
-	for _, kv := range []struct{ key, val string }{{keyBaseURL, proxyBaseURL}, {keyCatalog, in.CatalogPath}} {
+	for _, kv := range kvs {
 		it, had, err := get(text, kv.key)
 		if err != nil {
 			return nil, err
@@ -258,13 +294,13 @@ func Enable(c Config, in EnableInput) ([]string, error) {
 		record(keyModel, origStr(it, had), raw, had, autoModel, false, nil)
 	}
 
-	if len(in.Efforts) > 0 {
+	if len(efforts) > 0 {
 		it, had, err := get(text, keyEfforts)
 		if err != nil {
 			return nil, err
 		}
 		merged := slices.Clone(it.strs)
-		for _, e := range in.Efforts {
+		for _, e := range efforts {
 			if !slices.Contains(merged, e) {
 				merged = append(merged, e)
 			}
@@ -358,27 +394,11 @@ func Restore(c Config) error { return restore(c, false) }
 
 func RestoreAll(c Config) error { return restore(c, true) }
 
-func restore(c Config, all bool) error {
-	c.ConfigPath = resolvePath(c.ConfigPath)
-	st, err := LoadState(c)
-	if err != nil || st == nil {
-		return err
-	}
-	orig, _, err := readConfig(c.ConfigPath)
-	if err != nil {
-		return err
-	}
-	if err := Validate(orig); err != nil {
-		return err
-	}
+func restoreText(orig string, st *State) (string, []string, error) {
 	bad, err := tampered(orig, st)
 	if err != nil {
-		return err
+		return "", nil, err
 	}
-	if all && len(bad) > 0 {
-		return &Error{Code: CodeRestoreBlocked, Keys: bad}
-	}
-
 	text, eol := orig, detectEOL(orig)
 	var reinsert []string
 	for _, key := range slices.Sorted(maps.Keys(st.Entries)) {
@@ -395,19 +415,42 @@ func restore(c Config, all bool) error {
 			text, err = setValue(text, key, e.OriginalRaw, eol)
 		}
 		if err != nil {
-			return err
+			return "", nil, err
 		}
 	}
 	for _, key := range reinsert {
 		e := st.Entries[key]
 		at, err := rootOffset(text)
 		if err != nil {
-			return err
+			return "", nil, err
 		}
 		if e.Line != nil {
 			at = min(at, lineOff(text, *e.Line))
 		}
 		text = splice(text, at, e.OriginalRaw, eol)
+	}
+	return text, bad, nil
+}
+
+func restore(c Config, all bool) error {
+	c.ConfigPath = resolvePath(c.ConfigPath)
+	st, err := LoadState(c)
+	if err != nil || st == nil {
+		return err
+	}
+	orig, _, err := readConfig(c.ConfigPath)
+	if err != nil {
+		return err
+	}
+	if err := Validate(orig); err != nil {
+		return err
+	}
+	text, bad, err := restoreText(orig, st)
+	if err != nil {
+		return err
+	}
+	if all && len(bad) > 0 {
+		return &Error{Code: CodeRestoreBlocked, Keys: bad}
 	}
 
 	if text != orig {

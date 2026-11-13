@@ -1,14 +1,18 @@
 package codexconfig
 
 import (
+	"encoding/json"
 	"errors"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
+
+	toml "github.com/pelletier/go-toml/v2"
 )
 
 func fullInput(c Config) EnableInput {
@@ -744,6 +748,489 @@ func TestEnable_DesktopNotPlainTableReturnsConfigInvalidBeforeBackup(t *testing.
 			if _, err := os.Stat(statePath(c)); !os.IsNotExist(err) {
 				t.Fatal("不应写 access-state.json")
 			}
+		})
+	}
+}
+
+func relayOnlyInput(c Config) EnableInput {
+	in := fullInput(c)
+	in.RelayOnly = true
+	return in
+}
+
+func parseConfig(t *testing.T, text string) map[string]any {
+	t.Helper()
+	var m map[string]any
+	if err := toml.Unmarshal([]byte(text), &m); err != nil {
+		t.Fatalf("配置不是合法 TOML: %v\n%s", err, text)
+	}
+	return m
+}
+
+func providerTable(t *testing.T, m map[string]any) map[string]any {
+	t.Helper()
+	providers, _ := m["model_providers"].(map[string]any)
+	tbl, _ := providers[ProviderID].(map[string]any)
+	return tbl
+}
+
+func TestEnable_RelayOnly_WritesProviderAndSkipsOfficialItems(t *testing.T) {
+	tests := []struct {
+		name string
+		auto bool
+	}{
+		{"有自动模型", true},
+		{"无自动模型", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c, cfg := newFixture(t, sample{content: "sandbox = \"read-only\"\n\n[mcp_servers.x]\ncommand = \"foo\"\n"})
+			in := relayOnlyInput(c)
+			in.HasAutoModel = tt.auto
+			if _, err := Enable(c, in); err != nil {
+				t.Fatal(err)
+			}
+			text := readFile(t, cfg)
+			m := parseConfig(t, text)
+
+			if ProviderID != "modelbridge" {
+				t.Fatalf("ProviderID = %q", ProviderID)
+			}
+			if m["model_provider"] != "modelbridge" {
+				t.Fatalf("model_provider = %v", m["model_provider"])
+			}
+			want := map[string]any{"name": "模型接入助手", "base_url": "http://127.0.0.1:47311/v1", "wire_api": "responses"}
+			if got := providerTable(t, m); !reflect.DeepEqual(got, want) {
+				t.Fatalf("model_providers.modelbridge = %v, 期望 %v", got, want)
+			}
+			if m["model_catalog_json"] != in.CatalogPath {
+				t.Fatalf("model_catalog_json = %v", m["model_catalog_json"])
+			}
+			if tt.auto {
+				if m["model"] != "relay-auto" {
+					t.Fatalf("model = %v", m["model"])
+				}
+			} else if _, ok := m["model"]; ok {
+				t.Fatalf("无自动模型时不应写 model: %v", m["model"])
+			}
+			if _, ok := m["openai_base_url"]; ok {
+				t.Fatal("不应写 openai_base_url")
+			}
+			if d, ok := m["desktop"].(map[string]any); ok {
+				if _, ok := d["enabled-reasoning-efforts"]; ok {
+					t.Fatal("不应写 desktop.enabled-reasoning-efforts")
+				}
+			}
+			if m["sandbox"] != "read-only" {
+				t.Fatalf("sandbox = %v", m["sandbox"])
+			}
+			if l, ok := findLine(text, "sandbox"); !ok || l != `sandbox = "read-only"` {
+				t.Fatalf("sandbox 行应原样保留: %q", l)
+			}
+			if mcp, _ := m["mcp_servers"].(map[string]any); mcp["x"] == nil {
+				t.Fatal("其他表应保留")
+			}
+		})
+	}
+}
+
+func TestRestore_RelayOnly_RoundTripByteExact(t *testing.T) {
+	for _, s := range append(append([]sample{}, samples...), rawFormSamples...) {
+		for _, auto := range []bool{true, false} {
+			suffix := "/noauto"
+			if auto {
+				suffix = "/auto"
+			}
+			t.Run(s.name+suffix, func(t *testing.T) {
+				c, cfg := newFixture(t, s)
+				in := relayOnlyInput(c)
+				in.HasAutoModel = auto
+				if _, err := Enable(c, in); err != nil {
+					t.Fatal(err)
+				}
+				parseConfig(t, readFile(t, cfg))
+				if err := Restore(c); err != nil {
+					t.Fatalf("Restore 错误: %v", err)
+				}
+				if s.missing {
+					if _, err := os.Stat(cfg); !os.IsNotExist(err) {
+						t.Fatalf("原来没有配置文件, 还原后应删除: %v", err)
+					}
+				} else if got := readFile(t, cfg); got != s.content {
+					t.Fatalf("还原后 = %q, 期望 %q", got, s.content)
+				}
+				if _, err := os.Stat(statePath(c)); !os.IsNotExist(err) {
+					t.Fatalf("access-state.json 应被删除: %v", err)
+				}
+			})
+		}
+	}
+}
+
+func TestEnable_RelayOnly_TakesOverExistingModelProvider(t *testing.T) {
+	orig := "model_provider = \"custom\"\nsandbox = \"read-only\"\n"
+	c, cfg := newFixture(t, sample{content: orig})
+	taken, err := Enable(c, relayOnlyInput(c))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(taken, "model_provider") {
+		t.Fatalf("接管列表 = %v, 应含 model_provider", taken)
+	}
+	keys, err := TakenOverKeys(c)
+	if err != nil || !slices.Contains(keys, "model_provider") {
+		t.Fatalf("TakenOverKeys = %v, %v", keys, err)
+	}
+	if got := parseConfig(t, readFile(t, cfg))["model_provider"]; got != "modelbridge" {
+		t.Fatalf("model_provider = %v", got)
+	}
+	if err := Restore(c); err != nil {
+		t.Fatal(err)
+	}
+	if got := readFile(t, cfg); got != orig {
+		t.Fatalf("还原后 = %q, 期望 %q", got, orig)
+	}
+	if got := parseConfig(t, readFile(t, cfg))["model_provider"]; got != "custom" {
+		t.Fatalf("model_provider = %v", got)
+	}
+}
+
+func TestEnable_RelayOnly_TakesOverExistingProviderTable(t *testing.T) {
+	orig := "[model_providers.modelbridge]\nbase_url = \"http://other.example.com\"\n\n[tui]\nnotifications = true\n"
+	c, cfg := newFixture(t, sample{content: orig})
+	taken, err := Enable(c, relayOnlyInput(c))
+	if err != nil {
+		t.Fatal(err)
+	}
+	const key = "model_providers.modelbridge.base_url"
+	if !slices.Contains(taken, key) {
+		t.Fatalf("接管列表 = %v, 应含 %s", taken, key)
+	}
+	keys, err := TakenOverKeys(c)
+	if err != nil || !slices.Contains(keys, key) {
+		t.Fatalf("TakenOverKeys = %v, %v", keys, err)
+	}
+	if got := providerTable(t, parseConfig(t, readFile(t, cfg)))["base_url"]; got != proxyURL {
+		t.Fatalf("base_url = %v", got)
+	}
+	if err := Restore(c); err != nil {
+		t.Fatal(err)
+	}
+	if got := readFile(t, cfg); got != orig {
+		t.Fatalf("还原后 = %q, 期望 %q", got, orig)
+	}
+	if got := providerTable(t, parseConfig(t, readFile(t, cfg)))["base_url"]; got != "http://other.example.com" {
+		t.Fatalf("base_url = %v", got)
+	}
+}
+
+func TestEnable_SwitchModeAfterRestoreEqualsDirectEnable(t *testing.T) {
+	const catalog = "/fixed/merged-catalog.json"
+	modes := []struct {
+		name      string
+		relayOnly bool
+	}{
+		{"官方加中台", false},
+		{"只用中台", true},
+	}
+	input := func(relayOnly bool) EnableInput {
+		return EnableInput{CatalogPath: catalog, HasAutoModel: true, Efforts: []string{"none", "high"}, RelayOnly: relayOnly}
+	}
+	for _, first := range modes {
+		for _, second := range modes {
+			if first.relayOnly == second.relayOnly {
+				continue
+			}
+			for _, s := range append(append([]sample{}, samples...), rawFormSamples...) {
+				t.Run(first.name+"到"+second.name+"/"+s.name, func(t *testing.T) {
+					c, cfg := newFixture(t, s)
+					if _, err := Enable(c, input(first.relayOnly)); err != nil {
+						t.Fatal(err)
+					}
+					if err := Restore(c); err != nil {
+						t.Fatal(err)
+					}
+					if _, err := Enable(c, input(second.relayOnly)); err != nil {
+						t.Fatal(err)
+					}
+					direct, dcfg := newFixture(t, s)
+					if _, err := Enable(direct, input(second.relayOnly)); err != nil {
+						t.Fatal(err)
+					}
+					if got, want := readFile(t, cfg), readFile(t, dcfg); got != want {
+						t.Fatalf("切换后 = %q, 直接开启 = %q", got, want)
+					}
+				})
+			}
+		}
+	}
+}
+
+func TestRestore_RelayOnly_BlockedByHandEditedProviderBaseURL(t *testing.T) {
+	orig := "sandbox = \"read-only\"\n"
+	c, cfg := newFixture(t, sample{content: orig})
+	if _, err := Enable(c, relayOnlyInput(c)); err != nil {
+		t.Fatal(err)
+	}
+	handEdit(t, cfg, proxyURL, "http://proxy.example.org/v1")
+
+	const key = "model_providers.modelbridge.base_url"
+	requireCode(t, Restore(c), CodeRestoreBlocked, []string{key})
+
+	m := parseConfig(t, readFile(t, cfg))
+	tbl := providerTable(t, m)
+	if tbl["base_url"] != "http://proxy.example.org/v1" {
+		t.Fatalf("手改的 base_url 应保留: %v", tbl)
+	}
+	if _, ok := tbl["name"]; ok {
+		t.Fatalf("name 应已还原: %v", tbl)
+	}
+	if _, ok := tbl["wire_api"]; ok {
+		t.Fatalf("wire_api 应已还原: %v", tbl)
+	}
+	for _, k := range []string{"model_provider", "model_catalog_json", "model"} {
+		if _, ok := m[k]; ok {
+			t.Fatalf("%s 应已还原删除", k)
+		}
+	}
+	if m["sandbox"] != "read-only" {
+		t.Fatalf("sandbox = %v", m["sandbox"])
+	}
+	if _, err := os.Stat(statePath(c)); err != nil {
+		t.Fatalf("state 应保留未还原项: %v", err)
+	}
+}
+
+func switchInput(relayOnly bool) EnableInput {
+	return EnableInput{CatalogPath: "/fixed/merged-catalog.json", HasAutoModel: true, Efforts: []string{"none", "high"}, RelayOnly: relayOnly}
+}
+
+func requireRestoredTo(t *testing.T, c Config, cfg string, s sample) {
+	t.Helper()
+	if err := Restore(c); err != nil {
+		t.Fatalf("Restore 错误: %v", err)
+	}
+	if s.missing {
+		if _, err := os.Stat(cfg); !os.IsNotExist(err) {
+			t.Fatalf("原来没有配置文件, 还原后应删除: %v", err)
+		}
+		return
+	}
+	if got := readFile(t, cfg); got != s.content {
+		t.Fatalf("还原后 = %q, 期望 %q", got, s.content)
+	}
+}
+
+func TestEnable_SwitchModeWithoutRestoreEqualsDirectEnable(t *testing.T) {
+	modes := []struct {
+		name      string
+		relayOnly bool
+	}{
+		{"官方加中台到只用中台", false},
+		{"只用中台到官方加中台", true},
+	}
+	all := append([]sample{{name: "custom 提供方", content: "model_provider = \"custom\"\nsandbox = \"a\"\n"}}, samples...)
+	all = append(all, rawFormSamples...)
+	for _, m := range modes {
+		for _, s := range all {
+			t.Run(m.name+"/"+s.name, func(t *testing.T) {
+				c, cfg := newFixture(t, s)
+				if _, err := Enable(c, switchInput(m.relayOnly)); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := Enable(c, switchInput(!m.relayOnly)); err != nil {
+					t.Fatalf("直接换方式 Enable 错误: %v", err)
+				}
+				direct, dcfg := newFixture(t, s)
+				if _, err := Enable(direct, switchInput(!m.relayOnly)); err != nil {
+					t.Fatal(err)
+				}
+				if got, want := readFile(t, cfg), readFile(t, dcfg); got != want {
+					t.Fatalf("换方式后 = %q, 直接开启 = %q", got, want)
+				}
+				requireRestoredTo(t, c, cfg, s)
+			})
+		}
+	}
+}
+
+const handEditedURL = "http://mine"
+
+var handEditOrig = "model_provider = \"relay\"\nsandbox = \"a\"\n\n[desktop]\nenabled-reasoning-efforts = [\"low\"]\n"
+
+func originalWith(t *testing.T, orig string, extra map[string]any) map[string]any {
+	t.Helper()
+	m := parseConfig(t, orig)
+	for k, v := range extra {
+		m[k] = v
+	}
+	return m
+}
+
+func TestEnable_SwitchModeWithHandEditedItemKeepsUserValue(t *testing.T) {
+	c, cfg := newFixture(t, sample{content: handEditOrig})
+	if _, err := Enable(c, switchInput(false)); err != nil {
+		t.Fatal(err)
+	}
+	handEdit(t, cfg, proxyURL, handEditedURL)
+
+	if _, err := Enable(c, switchInput(true)); err != nil {
+		t.Fatalf("换方式 Enable 错误: %v", err)
+	}
+	m := parseConfig(t, readFile(t, cfg))
+	if m["openai_base_url"] != handEditedURL {
+		t.Fatalf("openai_base_url = %v, 应保持手改值", m["openai_base_url"])
+	}
+	if d, _ := m["desktop"].(map[string]any); !reflect.DeepEqual(d["enabled-reasoning-efforts"], []any{"low"}) {
+		t.Fatalf("思考等级应已还原: %v", m["desktop"])
+	}
+	if m["model_provider"] != "modelbridge" || m["model_catalog_json"] != "/fixed/merged-catalog.json" {
+		t.Fatalf("只用中台的项应已写入: %v", m)
+	}
+	if providerTable(t, m)["base_url"] != proxyURL {
+		t.Fatalf("model_providers.modelbridge = %v", providerTable(t, m))
+	}
+
+	if err := Restore(c); err != nil {
+		t.Fatalf("Restore 错误: %v", err)
+	}
+	want := originalWith(t, handEditOrig, map[string]any{"openai_base_url": handEditedURL})
+	if got := parseConfig(t, readFile(t, cfg)); !reflect.DeepEqual(got, want) {
+		t.Fatalf("还原后 = %v, 期望 %v", got, want)
+	}
+}
+
+func TestEnable_SwitchModeAfterBlockedRestoreSucceeds(t *testing.T) {
+	c, cfg := newFixture(t, sample{content: handEditOrig})
+	if _, err := Enable(c, switchInput(false)); err != nil {
+		t.Fatal(err)
+	}
+	handEdit(t, cfg, proxyURL, handEditedURL)
+	requireCode(t, Restore(c), CodeRestoreBlocked, []string{"openai_base_url"})
+
+	if _, err := Enable(c, switchInput(true)); err != nil {
+		t.Fatalf("换方式 Enable 错误: %v", err)
+	}
+	if err := Restore(c); err != nil {
+		t.Fatalf("Restore 不应再被阻止: %v", err)
+	}
+	want := originalWith(t, handEditOrig, map[string]any{"openai_base_url": handEditedURL})
+	if got := parseConfig(t, readFile(t, cfg)); !reflect.DeepEqual(got, want) {
+		t.Fatalf("还原后 = %v, 期望 %v", got, want)
+	}
+}
+
+func TestEnable_SwitchModeFromRelayOnlyKeepsHandEditedProviderBaseURL(t *testing.T) {
+	orig := "sandbox = \"a\"\n"
+	c, cfg := newFixture(t, sample{content: orig})
+	if _, err := Enable(c, switchInput(true)); err != nil {
+		t.Fatal(err)
+	}
+	handEdit(t, cfg, proxyURL, handEditedURL)
+
+	if _, err := Enable(c, switchInput(false)); err != nil {
+		t.Fatalf("换方式 Enable 错误: %v", err)
+	}
+	m := parseConfig(t, readFile(t, cfg))
+	tbl := providerTable(t, m)
+	if tbl["base_url"] != handEditedURL {
+		t.Fatalf("手改的 base_url 应保留: %v", tbl)
+	}
+	if _, ok := tbl["name"]; ok {
+		t.Fatalf("name 应已还原: %v", tbl)
+	}
+	if _, ok := tbl["wire_api"]; ok {
+		t.Fatalf("wire_api 应已还原: %v", tbl)
+	}
+	if m["openai_base_url"] != proxyURL {
+		t.Fatalf("官方加中台的项应已写入: %v", m)
+	}
+	if _, ok := m["model_provider"]; ok {
+		t.Fatalf("model_provider 应已还原删除: %v", m["model_provider"])
+	}
+}
+
+func TestEnable_SwitchModeReplaceFailureChangesNothing(t *testing.T) {
+	c, cfg := newFixture(t, sample{content: "sandbox = \"a\"\n"})
+	if _, err := Enable(c, switchInput(false)); err != nil {
+		t.Fatal(err)
+	}
+	beforeCfg := readFile(t, cfg)
+	beforeState := readFile(t, statePath(c))
+	boom := errors.New("替换失败")
+	c.Replace = func(tmp, dst string) error { return boom }
+
+	if _, err := Enable(c, switchInput(true)); !errors.Is(err, boom) {
+		t.Fatalf("应返回替换步骤的错误, 得到 %v", err)
+	}
+	if got := readFile(t, cfg); got != beforeCfg {
+		t.Fatalf("配置文件被改动: %q", got)
+	}
+	if got := readFile(t, statePath(c)); got != beforeState {
+		t.Fatalf("state 被改动: %q", got)
+	}
+}
+
+func TestRestore_StateWithoutRelayOnlyFieldAndRelayOnlyState(t *testing.T) {
+	orig := "model_provider = \"relay\"\nsandbox = \"a\"\n"
+	t.Run("旧状态文件没有 relay_only 字段", func(t *testing.T) {
+		c, cfg := newFixture(t, sample{content: orig})
+		if _, err := Enable(c, switchInput(false)); err != nil {
+			t.Fatal(err)
+		}
+		var raw map[string]any
+		if err := json.Unmarshal([]byte(readFile(t, statePath(c))), &raw); err != nil {
+			t.Fatal(err)
+		}
+		delete(raw, "relay_only")
+		b, err := json.Marshal(raw)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(statePath(c), b, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := Restore(c); err != nil {
+			t.Fatalf("Restore 错误: %v", err)
+		}
+		if got := readFile(t, cfg); got != orig {
+			t.Fatalf("还原后 = %q, 期望 %q", got, orig)
+		}
+	})
+	t.Run("只用中台开启后还原", func(t *testing.T) {
+		c, cfg := newFixture(t, sample{content: orig})
+		if _, err := Enable(c, switchInput(true)); err != nil {
+			t.Fatal(err)
+		}
+		if err := Restore(c); err != nil {
+			t.Fatalf("Restore 错误: %v", err)
+		}
+		if got := readFile(t, cfg); got != orig {
+			t.Fatalf("还原后 = %q, 期望 %q", got, orig)
+		}
+	})
+}
+
+func TestEnable_RelayOnly_WithExistingModelProvidersTables(t *testing.T) {
+	tests := []sample{
+		{name: "空表头", content: "[model_providers]\n\n[tui]\nx = true\n"},
+		{name: "已有其他提供方", content: "[model_providers.other]\nbase_url = \"http://other.example.com\"\n"},
+	}
+	want := map[string]any{"name": "模型接入助手", "base_url": "http://127.0.0.1:47311/v1", "wire_api": "responses"}
+	for _, s := range tests {
+		t.Run(s.name, func(t *testing.T) {
+			c, cfg := newFixture(t, s)
+			if _, err := Enable(c, relayOnlyInput(c)); err != nil {
+				t.Fatalf("Enable 错误: %v", err)
+			}
+			m := parseConfig(t, readFile(t, cfg))
+			if got := providerTable(t, m); !reflect.DeepEqual(got, want) {
+				t.Fatalf("model_providers.modelbridge = %v, 期望 %v", got, want)
+			}
+			if m["model_provider"] != "modelbridge" {
+				t.Fatalf("model_provider = %v", m["model_provider"])
+			}
+			requireRestoredTo(t, c, cfg, s)
 		})
 	}
 }

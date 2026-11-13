@@ -182,7 +182,10 @@ func setValue(text, path, raw, eol string) (string, error) {
 			return text[:it.valStart] + raw + text[it.valEnd:], nil
 		}
 	}
-	if dot := strings.LastIndex(path, "."); dot >= 0 {
+	for dot := len(path) - 1; dot >= 0; dot-- {
+		if path[dot] != '.' {
+			continue
+		}
 		for i, h := range items {
 			if h.header && h.path == path[:dot] {
 				last := h.line
