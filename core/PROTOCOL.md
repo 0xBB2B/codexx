@@ -21,6 +21,8 @@
 | save_connection | {"base_url": 字符串, "api_key": 字符串} | {"models_changed": 布尔, "relay_model_count": 整数} |
 | set_forwarding | {"enabled": 布尔} | Status |
 | refresh_models | {} | Status |
+| detect_access | {} | Status（只检测登录状态，更新 access.target 和 access.detect，不改 Codex 配置） |
+| apply_access | {} | Status（转发开着且 access.target 与 access.mode 不同时，按 target 切换接入方式；否则不改动） |
 | check_update | {"manual": 布尔} | {"latest_version": 字符串或 null, "url": 字符串或 null, "is_newer": 布尔} |
 | prepare_uninstall | {} | {} |
 | shutdown | {"restore": 布尔} | {}（随后进程退出） |
@@ -35,8 +37,11 @@
   "taken_over": ["openai_base_url"],
   "restore_blocked": [],
   "config_path": "/Users/x/.codex/config.toml",
-  "update": {"latest_version": null, "url": null}
+  "update": {"latest_version": null, "url": null},
+  "access": {"mode": "both", "target": "relay", "detect": "not_logged_in"}
 }
+
+`access` 是接入方式：`mode` 为 Codex 配置当前按哪种方式写入（`both` 官方 + 中台，`relay` 只用中台；转发关着为 null），`target` 为最近一次检测得出的目标方式（没检测过为 null），`detect` 为最近一次检测结果（`logged_in`、`not_logged_in`、`failed`，没检测过为 null）。
 
 ## 错误码
 | 码 | 界面说明 |
