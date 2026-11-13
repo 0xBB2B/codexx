@@ -97,7 +97,7 @@ struct MainWindow: View {
                         Button { Task { await model.recheckAccess() } } label: {
                             BusyLabel(text: model.isDetectingAccess ? "正在检测…" : "重新检测", busy: model.isDetectingAccess)
                         }
-                        .secondaryAction(compact: true)
+                        .secondaryAction()
                         .disabled(model.isDetectingAccess)
                     }
                     .frame(minHeight: 44, alignment: .center)

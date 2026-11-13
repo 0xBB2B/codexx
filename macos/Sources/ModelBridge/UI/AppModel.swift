@@ -642,6 +642,7 @@ final class AppModel: ObservableObject {
     }
 
     private func applyAccess() async -> Bool {
+        forwardingFailure = nil
         do {
             let data = try await core.call("apply_access", params: Empty())
             if let value = try? JSONDecoder.snakeCase.decode(CoreStatus.self, from: data) { apply(value) }

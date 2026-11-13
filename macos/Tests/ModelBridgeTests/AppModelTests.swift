@@ -1399,6 +1399,25 @@ final class AppModelTests: XCTestCase {
         XCTAssertTrue(h.model.banners.contains { $0.title == "没能自动还原 Codex 配置" })
     }
 
+    func testRecheckAccess_ApplySucceedsAfterEarlierFailure_ClearsFailureAndBanner() async throws {
+        let h = Harness(
+            responses: [
+                "detect_access": accessResult(mode: "relay", target: "both", detect: "logged_in"),
+                "apply_access": remote("restore_blocked", keys: ["openai_base_url"]),
+            ],
+            chatGPTRunning: false,
+            status: try accessStatus(mode: "relay", target: "relay", detect: "not_logged_in")
+        )
+        await h.model.recheckAccess()
+        XCTAssertEqual(h.model.forwardingFailure?.code, "restore_blocked")
+        XCTAssertFalse(h.model.banners.isEmpty)
+
+        h.core.setResponse("apply_access", accessResult(mode: "both", target: "both", detect: "logged_in"))
+        await h.model.recheckAccess()
+        XCTAssertNil(h.model.forwardingFailure)
+        XCTAssertFalse(h.model.banners.contains { $0.keys == ["openai_base_url"] })
+    }
+
     func testRecheckAccess_ApplyFailsWhileChatGPTRunning_NoSuccessNoticeAndNoRestart() async throws {
         let h = Harness(
             responses: [
