@@ -2,7 +2,7 @@
 | 序号 | Plan | 状态 | 完成时间 |
 |---|---|---|---|
 | 01 | relay-only-config | pending | — |
-| 02 | login-detect | pending | — |
+| 02 | login-detect | done | 2026-11-13 |
 | 03 | relay-only-catalog | pending | — |
 | 04 | relay-only-proxy | pending | — |
 | 05 | access-mode-service | pending | — |
