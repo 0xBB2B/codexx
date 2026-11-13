@@ -1,6 +1,7 @@
 package catalog_test
 
 import (
+	"reflect"
 	"testing"
 
 	"modelbridge/internal/catalog"
@@ -57,6 +58,26 @@ func TestBuiltinParams_ContainsAuto(t *testing.T) {
 	if auto.DefaultReasoningLevel != nil {
 		t.Errorf("default_reasoning_level = %v, want nil", *auto.DefaultReasoningLevel)
 	}
+}
+
+func TestBuiltinParams_ContainsDeepseekV41Flash(t *testing.T) {
+	t.Parallel()
+	params, err := catalog.BuiltinParams()
+	if err != nil {
+		t.Fatalf("BuiltinParams: %v", err)
+	}
+	for _, p := range params {
+		if p.ID != "deepseek-v4.1-flash" {
+			continue
+		}
+		if p.ContextWindow != 1000000 || !reflect.DeepEqual(p.InputModalities, []string{"text", "image"}) ||
+			!reflect.DeepEqual(p.ReasoningLevels, []string{"none", "low", "high", "max"}) ||
+			p.DefaultReasoningLevel == nil || *p.DefaultReasoningLevel != "high" {
+			t.Errorf("deepseek-v4.1-flash 参数不对: %+v", p)
+		}
+		return
+	}
+	t.Fatal("参数表缺少 deepseek-v4.1-flash")
 }
 
 func TestLoadParams(t *testing.T) {

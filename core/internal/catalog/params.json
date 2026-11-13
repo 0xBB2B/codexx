@@ -27,6 +27,22 @@
       "source": "https://api-docs.deepseek.com/quick_start/pricing（2026-11-11 核对）"
     },
     {
+      "id": "deepseek-v4.1-flash",
+      "context_window": 1000000,
+      "input_modalities": [
+        "text",
+        "image"
+      ],
+      "reasoning_levels": [
+        "none",
+        "low",
+        "high",
+        "max"
+      ],
+      "default_reasoning_level": "high",
+      "source": "https://api-docs.deepseek.com/quick_start/pricing 与 https://api-docs.deepseek.com/guides/thinking_mode（2026-11-13 核对，即 DeepSeek-V4.1-Flash）"
+    },
+    {
       "id": "deepseek-flash",
       "context_window": 1000000,
       "input_modalities": [
