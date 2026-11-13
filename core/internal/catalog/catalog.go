@@ -15,7 +15,8 @@ type BuildOptions struct {
 	ModelsCachePath string
 	Params          []Param
 	// RelayIDs 非 nil 时视为调用方刚拉到的中台列表，Build 不再请求中台
-	RelayIDs []string
+	RelayIDs  []string
+	RelayOnly bool
 }
 
 func Build(ctx context.Context, opts BuildOptions) (*Result, error) {
@@ -49,7 +50,11 @@ func Build(ctx context.Context, opts BuildOptions) (*Result, error) {
 		res.RelayModels = append(res.RelayModels, p.ID)
 		res.RelayFromParams = append(res.RelayFromParams, p.ID)
 	}
-	res.Models = append(FilterOfficial(official, AccountSlugs(opts.ModelsCachePath)), res.Models[len(official):]...)
+	if opts.RelayOnly {
+		res.Models = res.Models[len(official):]
+	} else {
+		res.Models = append(FilterOfficial(official, AccountSlugs(opts.ModelsCachePath)), res.Models[len(official):]...)
+	}
 	res.RelayModels = append(res.RelayModels, sameName...)
 	res.RelayShown = ShownRelayNames(paramOnly, sameName, official)
 	res.RelayErr = relayErr

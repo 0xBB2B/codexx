@@ -546,3 +546,144 @@ func TestBuild_DisplayName_GptPrefixedNamesUseLeadingLabel(t *testing.T) {
 		})
 	}
 }
+
+func relayOnlyParams() []catalog.Param {
+	return []catalog.Param{
+		{ID: "glm-5.3", ContextWindow: 128000, InputModalities: []string{"text", "image"}, ReasoningLevels: []string{"low", "max"}, DefaultReasoningLevel: strp("max"), Source: "s"},
+	}
+}
+
+func buildRelayOnly(t *testing.T, relayOnly bool, cachePath, officialStdout string, exitCode int) (*catalog.Result, []map[string]any, error) {
+	t.Helper()
+	codex, _ := writeFakeCodex(t, officialStdout, exitCode)
+	dataDir := t.TempDir()
+	opts := buildOpts(t, codex, "", dataDir)
+	opts.Params = relayOnlyParams()
+	opts.RelayIDs = []string{"glm-5.3", "gpt-a", "unknown-x"}
+	opts.ModelsCachePath = cachePath
+	opts.RelayOnly = relayOnly
+	res, err := catalog.Build(context.Background(), opts)
+	if err != nil {
+		return nil, nil, err
+	}
+	var file struct {
+		Models []map[string]any `json:"models"`
+	}
+	if err := json.Unmarshal([]byte(readFileT(t, filepath.Join(dataDir, "model-bridge-catalog.json"))), &file); err != nil {
+		t.Fatal(err)
+	}
+	return res, file.Models, nil
+}
+
+func accountCache(t *testing.T) string {
+	t.Helper()
+	p := filepath.Join(t.TempDir(), "models_cache.json")
+	if err := os.WriteFile(p, []byte(`{"models":[{"slug":"gpt-a"}]}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+func slugsOf(models []map[string]any) []any {
+	var out []any
+	for _, m := range models {
+		out = append(out, m["slug"])
+	}
+	return out
+}
+
+func relayPrefixed(models []map[string]any) []map[string]any {
+	var out []map[string]any
+	for _, m := range models {
+		if s, _ := m["slug"].(string); strings.HasPrefix(s, "relay-") {
+			out = append(out, m)
+		}
+	}
+	return out
+}
+
+func TestBuild_RelayOnly(t *testing.T) {
+	missingCache := filepath.Join(t.TempDir(), "missing", "models_cache.json")
+	tests := []struct {
+		name  string
+		cache func(t *testing.T) string
+	}{
+		{"账号缓存只含 gpt-a", accountCache},
+		{"账号缓存文件不存在", func(*testing.T) string { return missingCache }},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			res, fileModels, err := buildRelayOnly(t, true, tt.cache(t), officialJSON, 0)
+			if err != nil {
+				t.Fatalf("Build: %v", err)
+			}
+			want := []any{"relay-glm-5.3", "relay-gpt-a"}
+			if got := slugsOf(fileModels); !reflect.DeepEqual(got, want) {
+				t.Errorf("目录文件 slugs = %v, want %v", got, want)
+			}
+			if got := slugs(t, res); !reflect.DeepEqual(got, want) {
+				t.Errorf("Result.Models slugs = %v, want %v", got, want)
+			}
+		})
+	}
+}
+
+func TestBuild_RelayOnly_RelayEntriesMatchFullCatalog(t *testing.T) {
+	cache := accountCache(t)
+	_, onlyModels, err := buildRelayOnly(t, true, cache, officialJSON, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, fullModels, err := buildRelayOnly(t, false, cache, officialJSON, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantRelay := relayPrefixed(fullModels)
+	if len(wantRelay) != 2 {
+		t.Fatalf("对照目录里的中台条目 = %d, want 2", len(wantRelay))
+	}
+	if !reflect.DeepEqual(onlyModels, wantRelay) {
+		t.Errorf("RelayOnly 条目与完整目录中 relay- 条目不同:\n got  %v\n want %v", onlyModels, wantRelay)
+	}
+}
+
+func TestBuild_RelayOnly_ResultFieldsMatchFullCatalog(t *testing.T) {
+	cache := accountCache(t)
+	only, _, err := buildRelayOnly(t, true, cache, officialJSON, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	full, _, err := buildRelayOnly(t, false, cache, officialJSON, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tests := []struct {
+		name      string
+		got, want any
+	}{
+		{"RelayModels", only.RelayModels, full.RelayModels},
+		{"RelayShown", only.RelayShown, full.RelayShown},
+		{"RelayFromParams", only.RelayFromParams, full.RelayFromParams},
+		{"ReasoningLevels", only.ReasoningLevels, full.ReasoningLevels},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if !reflect.DeepEqual(tt.got, tt.want) {
+				t.Errorf("RelayOnly = %v, 完整目录 = %v", tt.got, tt.want)
+			}
+		})
+	}
+	if len(full.RelayModels) == 0 || len(full.ReasoningLevels) == 0 {
+		t.Errorf("对照结果为空，用例无效: %v %v", full.RelayModels, full.ReasoningLevels)
+	}
+}
+
+func TestBuild_RelayOnly_OfficialListFails_ReturnsError(t *testing.T) {
+	_, _, err := buildRelayOnly(t, true, accountCache(t), "", 1)
+	if err == nil {
+		t.Fatal("假 codex 失败时 Build 应返回错误")
+	}
+	if got := catalog.ErrorCode(err); got != "chatgpt_unsupported" {
+		t.Errorf("code = %q (err=%v)", got, err)
+	}
+}
