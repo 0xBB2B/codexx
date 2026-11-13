@@ -35,6 +35,8 @@ func TestDetect_ExitCodeAndOutput(t *testing.T) {
 		{"stdout 输出带尾随换行且 exit 1", "printf 'Not logged in\\n'\nexit 1", codexauth.NotLoggedIn},
 		{"首尾空白被去掉", "printf '  Not logged in \\n\\n'\nexit 1", codexauth.NotLoggedIn},
 		{"exit 1 但输出是错误信息", "echo 'Error checking login status: boom' >&2\nexit 1", codexauth.Failed},
+		{"退出登录后登录文件为空", "echo 'Error checking login status: failed to deserialize CLI auth from file: EOF while parsing a value at line 1 column 0' >&2\nexit 1", codexauth.NotLoggedIn},
+		{"登录文件读不出但退出码不是 1", "echo 'Error checking login status: failed to deserialize CLI auth from file: x' >&2\nexit 2", codexauth.Failed},
 		{"exit 1 且输出为空", "exit 1", codexauth.Failed},
 		{"exit 1 输出只是包含 Not logged in", "echo 'Not logged in to anything else' >&2\nexit 1", codexauth.Failed},
 		{"exit 2", "echo 'Not logged in' >&2\nexit 2", codexauth.Failed},
