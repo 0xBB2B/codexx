@@ -9,6 +9,7 @@ using System.Windows;
 using System.Windows.Automation.Peers;
 using System.Windows.Controls;
 using System.Windows.Media;
+using System.Windows.Media.Effects;
 
 namespace ModelBridge.UI;
 
@@ -36,6 +37,17 @@ static class Dialogs
         try { dialog.ShowDialog(); }
         finally { Current = null; }
         return dialog.Result;
+    }
+}
+
+static class RestoreHelp
+{
+    public static void Show(AppModel model, AppBanner banner)
+    {
+        int choice;
+        while ((choice = Dialogs.Show(DialogModel.ForRestoreHelp(banner.Code, banner.Keys, banner.ConfigPath))) == 1)
+            ExternalOpen.FolderOf(banner.ConfigPath);
+        if (choice == 2) _ = model.RecheckAsync();
     }
 }
 
@@ -87,6 +99,7 @@ static class AlertView
         AppSeverity severity,
         string title,
         string detail,
+        Action? onClose = null,
         bool showProgress = false,
         params (string Label, Action Click)[] actions)
     {
@@ -134,6 +147,7 @@ static class AlertView
         var grid = new Grid();
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         grid.ColumnDefinitions.Add(new ColumnDefinition());
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         grid.Children.Add(new TextBlock
         {
             Text = glyph,
@@ -146,11 +160,27 @@ static class AlertView
         Grid.SetColumn(text, 1);
         grid.Children.Add(text);
 
+        if (onClose != null)
+        {
+            var close = new Button
+            {
+                Style = (Style)Application.Current.FindResource("AlertCloseButton"),
+                Content = "\uE711",
+                Margin = new Thickness(12, -12, -12, -12),
+                VerticalAlignment = VerticalAlignment.Top,
+            };
+            System.Windows.Automation.AutomationProperties.SetName(close, "关闭提示");
+            close.Click += (_, _) => onClose();
+            Grid.SetColumn(close, 2);
+            grid.Children.Add(close);
+        }
+
         var border = new Border
         {
             Style = (Style)Application.Current.FindResource("AlertBorder"),
             BorderBrush = foreground,
             Background = Brush(bg),
+            Effect = onClose == null ? null : (Effect)Application.Current.FindResource("FloatShadow"),
             Child = grid,
         };
         System.Windows.Automation.AutomationProperties.SetLiveSetting(
@@ -168,7 +198,7 @@ static class AlertView
         host.Children.Clear();
         foreach (var alert in alerts)
         {
-            ((FrameworkElement)alert).Margin = new Thickness(0, 0, 0, 20);
+            ((FrameworkElement)alert).Margin = new Thickness(0, host.Children.Count == 0 ? 0 : 8, 0, 0);
             host.Children.Add(alert);
             UIElementAutomationPeer.CreatePeerForElement(alert)?.RaiseAutomationEvent(AutomationEvents.LiveRegionChanged);
         }

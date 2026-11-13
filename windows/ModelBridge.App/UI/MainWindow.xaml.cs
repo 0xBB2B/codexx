@@ -11,8 +11,9 @@ public partial class MainWindow : Window
 {
     readonly AppModel model;
     object? shownBanners;
-    object? shownNotice;
+    object? shownNotices;
     string? shownProgress;
+    string? dismissedProgress;
 
     public MainWindow(AppModel appModel)
     {
@@ -24,6 +25,8 @@ public partial class MainWindow : Window
     }
 
     public bool AllowClose { get; set; }
+
+    void OverlaySizeChanged(object sender, SizeChangedEventArgs e) => AlertHost.Width = System.Math.Max(0, Overlay.ActualWidth - 48);
 
     void Refresh()
     {
@@ -44,10 +47,16 @@ public partial class MainWindow : Window
         UpdateText.Text = model.UpdateVersion == null ? "" : $"发现新版本 {model.UpdateVersion}";
         UpdateButton.Content = model.UpdateVersion == null ? "检查更新" : "打开下载页";
 
-        if (ReferenceEquals(shownBanners, model.Banners) && ReferenceEquals(shownNotice, model.Notice) && shownProgress == model.ProgressText)
+        if (model.ProgressText == null) dismissedProgress = null;
+        if (ReferenceEquals(shownBanners, model.Banners) && ReferenceEquals(shownNotices, model.Notices) && shownProgress == model.ProgressText)
             return;
+        Rebuild();
+    }
+
+    void Rebuild()
+    {
         shownBanners = model.Banners;
-        shownNotice = model.Notice;
+        shownNotices = model.Notices;
         shownProgress = model.ProgressText;
         AlertView.Fill(AlertHost, BuildAlerts());
     }
@@ -55,34 +64,38 @@ public partial class MainWindow : Window
     List<UIElement> BuildAlerts()
     {
         var alerts = new List<UIElement>();
-        if (model.ProgressText is { } progress)
-            alerts.Add(AlertView.Create(AppSeverity.Info, progress, "完成前请不要关闭本窗口。", true));
-        if (model.Notice is { } notice)
-            alerts.Add(AlertView.Create(notice.Severity, notice.Title, notice.Detail, false, ("知道了", model.ClearNotice)));
+        if (model.ProgressText is { } progress && progress != dismissedProgress)
+            alerts.Add(AlertView.Create(AppSeverity.Info, progress, "完成前请不要关闭本窗口。", () =>
+            {
+                dismissedProgress = progress;
+                Rebuild();
+            }, true));
+        foreach (var notice in model.Notices)
+            alerts.Add(AlertView.Create(notice.Severity, notice.Title, notice.Detail, () => model.DismissNotice(notice.Id)));
         foreach (var banner in model.Banners)
             alerts.Add(AlertView.Create(
                 banner.Severity,
                 banner.Title,
                 banner.Detail,
+                () => model.DismissBanner(banner),
                 false,
-                banner.Actions.Select(a => (Label(a), (Action)(() => Run(a)))).ToArray()));
+                banner.Actions.Select(a => (Label(a), (Action)(() => Run(a, banner)))).ToArray()));
         return alerts;
     }
 
     static string Label(BannerAction action) => action switch
     {
         BannerAction.Retry => "重试",
-        BannerAction.OpenConfigFolder => "打开所在文件夹",
-        BannerAction.Recheck => "重新检查",
+        BannerAction.ShowDetail => "查看详情",
         _ => "重新检测",
     };
 
-    void Run(BannerAction action)
+    void Run(BannerAction action, AppBanner banner)
     {
         switch (action)
         {
             case BannerAction.Retry: _ = model.RetryAsync(); break;
-            case BannerAction.OpenConfigFolder: ExternalOpen.FolderOf(model.ConfigPath); break;
+            case BannerAction.ShowDetail: RestoreHelp.Show(model, banner); break;
             default: _ = model.RecheckAsync(); break;
         }
     }

@@ -1,7 +1,6 @@
 using System;
 using System.Collections.Generic;
 using System.Text.Json;
-using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Threading;
 using ModelBridge.Services;
@@ -64,9 +63,8 @@ public sealed class LoginAdapter(LoginItem item) : ILoginStart
     public void Disable() => item.Disable();
 }
 
-public sealed class ChatGptAdapter(ChatGptApp app, ChatGptRestarter restarter) : IChatGptControl
+public sealed class ChatGptAdapter(ChatGptApp app) : IChatGptControl
 {
     public string? Locate() => app.Locate();
     public bool IsRunning() => app.IsRunning();
-    public Task<ChatGptRestartResult> RestartAsync(CancellationToken ct) => restarter.RestartAsync(ct);
 }

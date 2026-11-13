@@ -171,24 +171,13 @@ sealed class FakeLogin(List<string> log) : ILoginStart
     }
 }
 
-sealed class FakeChatGpt(List<string> log) : IChatGptControl
+sealed class FakeChatGpt : IChatGptControl
 {
     public bool Running { get; set; }
     public string? LocatedDir { get; set; } = @"C:\Apps\ChatGPT";
-    public ChatGptRestartResult Result { get; set; } = ChatGptRestartResult.Restarted;
-    public Action? OnRestart { get; set; }
-    public int RestartCount { get; private set; }
 
     public string? Locate() => LocatedDir;
     public bool IsRunning() => Running;
-
-    public Task<ChatGptRestartResult> RestartAsync(CancellationToken ct)
-    {
-        RestartCount++;
-        log.Add("restart");
-        OnRestart?.Invoke();
-        return Task.FromResult(Result);
-    }
 }
 
 sealed class FakeConfirmer(List<string> log) : IConfirmer
@@ -224,7 +213,7 @@ sealed class Harness
         Vault = new FakeVault(Log);
         Settings = new FakeSettings(Log);
         Login = new FakeLogin(Log);
-        ChatGpt = new FakeChatGpt(Log);
+        ChatGpt = new FakeChatGpt();
         Confirmer = new FakeConfirmer(Log);
         Model = new AppModel(Core, Vault, Settings, Login, ChatGpt, Confirmer);
         Model.ShowMainWindowRequested += () => ShowMainCount++;
@@ -251,6 +240,23 @@ public class AppModelTests
     const string CredentialWriteFailed = "无法写入系统凭据管理器";
 
     static string Text(AppNotice? n) => n == null ? "" : n.Title + n.Detail;
+
+    static string AllText(Harness h) => string.Concat(h.Model.Notices.Select(Text));
+
+    static AppNotice? Find(Harness h, string title) => h.Model.Notices.FirstOrDefault(n => n.Title == title);
+
+    static string[] Titles(Harness h) => h.Model.Notices.Select(n => n.Title).ToArray();
+
+    static async Task WaitUntilAsync(Func<bool> condition)
+    {
+        var deadline = DateTime.UtcNow.AddSeconds(5);
+        while (!condition() && DateTime.UtcNow < deadline) await Task.Delay(20);
+    }
+
+    const string RestartHint = "重启 ChatGPT 后生效。";
+    const string UpToDate = "已是最新版本";
+    const string UpdateUnavailable = "暂时无法检查更新，请稍后再试";
+    const string CoreDown = "后台服务没能启动，请退出后重新打开";
 
     static string Msg(string code) => CoreErrorMessages.Messages[code];
 
@@ -397,8 +403,8 @@ public class AppModelTests
 
         await h.Model.CompleteSetupAsync();
 
-        Assert.AreEqual(NoSave, h.Model.Notice?.Title);
-        Assert.AreEqual(CredentialWriteFailed, h.Model.Notice?.Detail);
+        Assert.AreEqual(NoSave, Find(h, NoSave)?.Title);
+        Assert.AreEqual(CredentialWriteFailed, Find(h, NoSave)?.Detail);
         Assert.AreEqual(AppPage.Setup, h.Model.Page);
         Assert.AreEqual(0, h.Core.Count("set_forwarding"));
         Assert.AreEqual(0, h.Login.EnableCount);
@@ -418,7 +424,7 @@ public class AppModelTests
         Assert.AreEqual(AppPage.Success, h.Model.Page);
         Assert.AreEqual("设置完成，转发已开启", h.Model.SuccessTitle);
         Assert.AreEqual("已获取 6 个", h.Model.ModelCountText);
-        Assert.IsNull(h.Model.Notice);
+        Assert.AreEqual(0, h.Model.Notices.Count);
     }
 
     [TestMethod]
@@ -431,7 +437,7 @@ public class AppModelTests
         await h.Model.CompleteSetupAsync();
 
         Assert.AreEqual(AppPage.Success, h.Model.Page);
-        StringAssert.Contains(Text(h.Model.Notice), Msg("config_invalid"));
+        StringAssert.Contains(AllText(h), Msg("config_invalid"));
     }
 
     [TestMethod]
@@ -444,7 +450,47 @@ public class AppModelTests
         await h.Model.CompleteSetupAsync();
 
         Assert.AreEqual(AppPage.Success, h.Model.Page);
-        StringAssert.Contains(Text(h.Model.Notice), "没能开启登录时启动");
+        StringAssert.Contains(AllText(h), "没能开启登录时启动");
+    }
+
+    [TestMethod]
+    public async Task Setup_Success_TextEndsWithRestartChatGptLine()
+    {
+        var h = new Harness();
+        h.FillInputs();
+        await h.Model.CompleteSetupAsync();
+
+        StringAssert.Contains(h.Model.SuccessText, "已获取 6 个中台模型");
+        Assert.IsTrue(
+            h.Model.SuccessText.EndsWith(
+                "\n请重启 ChatGPT 后使用。助手会在你登录电脑时自动启动，在任务栏通知区域里常驻。",
+                StringComparison.Ordinal),
+            h.Model.SuccessText);
+    }
+
+    [TestMethod]
+    public async Task Setup_LoginStartFails_TextStillHasAutoStartLine()
+    {
+        var h = new Harness();
+        h.FillInputs();
+        h.Login.EnableException = new UnauthorizedAccessException();
+
+        await h.Model.CompleteSetupAsync();
+
+        StringAssert.Contains(h.Model.SuccessText, "助手会在你登录电脑时自动启动，在任务栏通知区域里常驻。");
+    }
+
+    [TestMethod]
+    public async Task FinishSetup_GoesToMainPage_WithoutAskingOrTouchingChatGpt()
+    {
+        var h = new Harness();
+        h.FillInputs();
+        await h.Model.CompleteSetupAsync();
+
+        h.Model.FinishSetup();
+
+        Assert.AreEqual(AppPage.Main, h.Model.Page);
+        Assert.AreEqual(0, h.Confirmer.Requests.Count);
     }
 
     #endregion
@@ -452,96 +498,110 @@ public class AppModelTests
     #region 转发开关
 
     [TestMethod]
-    public async Task Toggle_ChatGptRunning_TurnOn_AsksWithTitle()
-    {
-        var h = new Harness();
-        h.ChatGpt.Running = true;
-        h.Confirmer.Answer = _ => false;
-
-        await h.Model.ToggleForwardingAsync();
-
-        Assert.AreEqual("打开转发并重启 ChatGPT？", h.Confirmer.Requests.Single().Title);
-    }
-
-    [TestMethod]
-    public async Task Toggle_ChatGptRunning_TurnOff_AsksWithTitle()
-    {
-        var h = new Harness();
-        h.ForwardingOn();
-        h.ChatGpt.Running = true;
-        h.Confirmer.Answer = _ => false;
-
-        await h.Model.ToggleForwardingAsync();
-
-        Assert.AreEqual("关闭转发并重启 ChatGPT？", h.Confirmer.Requests.Single().Title);
-    }
-
-    [TestMethod]
-    public async Task Toggle_ChatGptRunning_Cancel_CoreNotCalled()
-    {
-        var h = new Harness();
-        h.ChatGpt.Running = true;
-        h.Confirmer.Answer = _ => false;
-
-        await h.Model.ToggleForwardingAsync();
-
-        Assert.AreEqual(0, h.Core.Count("set_forwarding"));
-        Assert.AreEqual(0, h.ChatGpt.RestartCount);
-        Assert.IsFalse(h.Model.ForwardingEnabled);
-    }
-
-    [TestMethod]
-    public async Task Toggle_ChatGptRunning_Confirm_SetsForwardingThenRestarts()
+    public async Task Toggle_ChatGptRunning_TurnOn_CallsCoreDirectlyWithoutConfirm()
     {
         var h = new Harness();
         h.ChatGpt.Running = true;
 
         await h.Model.ToggleForwardingAsync();
 
-        CollectionAssert.AreEqual(new[] { "confirm", "call:set_forwarding", "restart" }, h.Log);
+        Assert.AreEqual(0, h.Confirmer.Requests.Count);
+        CollectionAssert.AreEqual(new[] { "call:set_forwarding" }, h.Log);
         Assert.AreEqual(true, h.Core.ParamsOf("set_forwarding")["enabled"]);
         Assert.IsTrue(h.Model.ForwardingEnabled);
     }
 
     [TestMethod]
-    public async Task Toggle_ChatGptRunning_TurnOn_ProgressText()
-    {
-        var h = new Harness();
-        h.ChatGpt.Running = true;
-        string? progress = null;
-        h.ChatGpt.OnRestart = () => progress = h.Model.ProgressText;
-
-        await h.Model.ToggleForwardingAsync();
-
-        Assert.AreEqual("正在打开转发并重启 ChatGPT", progress);
-    }
-
-    [TestMethod]
-    public async Task Toggle_ChatGptRunning_TurnOff_ProgressText()
+    public async Task Toggle_ChatGptRunning_TurnOff_CallsCoreDirectlyWithoutConfirm()
     {
         var h = new Harness();
         h.ForwardingOn();
         h.ChatGpt.Running = true;
-        string? progress = null;
-        h.ChatGpt.OnRestart = () => progress = h.Model.ProgressText;
-
-        await h.Model.ToggleForwardingAsync();
-
-        Assert.AreEqual("正在还原 Codex 配置并重启 ChatGPT", progress);
-    }
-
-    [TestMethod]
-    public async Task Toggle_ChatGptNotRunning_SwitchesDirectlyWithoutRestart()
-    {
-        var h = new Harness();
-        h.ChatGpt.Running = false;
 
         await h.Model.ToggleForwardingAsync();
 
         Assert.AreEqual(0, h.Confirmer.Requests.Count);
+        CollectionAssert.AreEqual(new[] { "call:set_forwarding" }, h.Log);
+        Assert.AreEqual(false, h.Core.ParamsOf("set_forwarding")["enabled"]);
+        Assert.IsFalse(h.Model.ForwardingEnabled);
+    }
+
+    [TestMethod]
+    public async Task Toggle_ChatGptRunning_TurnOn_SuccessNoticeRestartToTakeEffect()
+    {
+        var h = new Harness();
+        h.ChatGpt.Running = true;
+
+        await h.Model.ToggleForwardingAsync();
+
+        var notice = h.Model.Notices.Last();
+        Assert.AreEqual("已打开转发", notice.Title);
+        Assert.AreEqual(RestartHint, notice.Detail);
+        Assert.AreEqual(AppSeverity.Success, notice.Severity);
+    }
+
+    [TestMethod]
+    public async Task Toggle_ChatGptRunning_TurnOff_SuccessNoticeRestartToTakeEffect()
+    {
+        var h = new Harness();
+        h.ForwardingOn();
+        h.ChatGpt.Running = true;
+
+        await h.Model.ToggleForwardingAsync();
+
+        var notice = h.Model.Notices.Last();
+        Assert.AreEqual("已关闭转发", notice.Title);
+        Assert.AreEqual(RestartHint, notice.Detail);
+        Assert.AreEqual(AppSeverity.Success, notice.Severity);
+    }
+
+    [TestMethod]
+    public async Task Toggle_ChatGptNotRunning_SwitchesDirectlyWithoutNotice()
+    {
+        foreach (var startOn in new[] { false, true })
+        {
+            var h = new Harness();
+            if (startOn) h.ForwardingOn();
+            h.ChatGpt.Running = false;
+
+            await h.Model.ToggleForwardingAsync();
+
+            Assert.AreEqual(0, h.Confirmer.Requests.Count, "startOn=" + startOn);
+            Assert.AreEqual(1, h.Core.Count("set_forwarding"), "startOn=" + startOn);
+            Assert.AreEqual(!startOn, h.Model.ForwardingEnabled, "startOn=" + startOn);
+            Assert.AreEqual(0, h.Model.Notices.Count, "startOn=" + startOn);
+        }
+    }
+
+    [TestMethod]
+    public async Task Toggle_ChatGptRunning_CoreFails_NoRestartHintNotice()
+    {
+        var h = new Harness();
+        h.ChatGpt.Running = true;
+        h.Core.Fail("set_forwarding", "config_invalid");
+
+        await h.Model.ToggleForwardingAsync();
+
+        Assert.IsFalse(h.Model.Notices.Any(n => n.Detail == RestartHint));
+        Assert.IsFalse(h.Model.ForwardingEnabled);
+    }
+
+    [TestMethod]
+    public async Task Toggle_WhileInFlight_SecondCallIgnored()
+    {
+        var h = new Harness();
+        h.ChatGpt.Running = true;
+        var gate = new TaskCompletionSource<JsonElement>();
+        h.Core.OnAsync("set_forwarding", _ => gate.Task);
+
+        var first = h.Model.ToggleForwardingAsync();
+        await h.Model.ToggleForwardingAsync();
+
         Assert.AreEqual(1, h.Core.Count("set_forwarding"));
-        Assert.AreEqual(0, h.ChatGpt.RestartCount);
-        Assert.IsTrue(h.Model.ForwardingEnabled);
+        Assert.IsTrue(h.Model.IsBusy);
+        gate.SetResult(Json.Status(s => s["forwarding"] = true));
+        await first;
+        Assert.IsFalse(h.Model.IsBusy);
     }
 
     [TestMethod]
@@ -556,19 +616,6 @@ public class AppModelTests
         Assert.AreEqual("restore_blocked", h.Model.LastError?.Code);
         CollectionAssert.AreEqual(new[] { "model_provider", "openai_base_url" }, h.Model.LastError?.Keys.ToArray());
         Assert.AreEqual(1, h.ShowMainCount);
-    }
-
-    [TestMethod]
-    public async Task Toggle_RestoreBlocked_ChatGptNotRestarted()
-    {
-        var h = new Harness();
-        h.ForwardingOn();
-        h.ChatGpt.Running = true;
-        h.Core.Fail("set_forwarding", "restore_blocked", "model_provider");
-
-        await h.Model.ToggleForwardingAsync();
-
-        Assert.AreEqual(0, h.ChatGpt.RestartCount);
     }
 
     [TestMethod]
@@ -607,38 +654,6 @@ public class AppModelTests
         Assert.IsTrue(h.Model.ToggleEnabled);
     }
 
-    [TestMethod]
-    public async Task Toggle_RestartResults_ShowMatchingNotice()
-    {
-        var cases = new[]
-        {
-            (ChatGptRestartResult.CloseTimedOut, "ChatGPT 没有退出"),
-            (ChatGptRestartResult.OpenFailed, "没能打开 ChatGPT，请手动打开"),
-            (ChatGptRestartResult.NotFound, "没有找到 ChatGPT"),
-        };
-        foreach (var (result, text) in cases)
-        {
-            var h = new Harness();
-            h.ChatGpt.Running = true;
-            h.ChatGpt.Result = result;
-
-            await h.Model.ToggleForwardingAsync();
-
-            StringAssert.Contains(Text(h.Model.Notice), text, result.ToString());
-        }
-    }
-
-    [TestMethod]
-    public async Task Toggle_RestartSucceeded_NoNotice()
-    {
-        var h = new Harness();
-        h.ChatGpt.Running = true;
-
-        await h.Model.ToggleForwardingAsync();
-
-        Assert.IsNull(h.Model.Notice);
-    }
-
     #endregion
 
     #region 保存修改
@@ -652,8 +667,8 @@ public class AppModelTests
 
         await h.Model.SaveConnectionAsync();
 
-        Assert.AreEqual(NoSave, h.Model.Notice?.Title);
-        Assert.AreEqual(Msg("relay_403"), h.Model.Notice?.Detail);
+        Assert.AreEqual(NoSave, Find(h, NoSave)?.Title);
+        Assert.AreEqual(Msg("relay_403"), Find(h, NoSave)?.Detail);
         Assert.AreEqual(0, h.Vault.Saved.Count);
         Assert.AreEqual("https://relay.example.com", h.Model.BaseUrlInput);
         Assert.AreEqual("sk-example-0000", h.Model.ApiKeyInput);
@@ -685,8 +700,8 @@ public class AppModelTests
         var rollback = h.Core.Calls.Last(c => c.Method == "save_connection").Params;
         Assert.AreEqual(OldUrl, rollback["base_url"]);
         Assert.AreEqual(OldKey, rollback["api_key"]);
-        Assert.AreEqual(NoSave, h.Model.Notice?.Title);
-        Assert.AreEqual(CredentialWriteFailed, h.Model.Notice?.Detail);
+        Assert.AreEqual(NoSave, Find(h, NoSave)?.Title);
+        Assert.AreEqual(CredentialWriteFailed, Find(h, NoSave)?.Detail);
     }
 
     [TestMethod]
@@ -705,29 +720,15 @@ public class AppModelTests
         Assert.AreEqual(OldUrl, rollback["base_url"]);
         Assert.AreEqual(OldKey, rollback["api_key"]);
         Assert.AreEqual(OldKey, h.Vault.Stored);
-        Assert.AreEqual(NoSave, h.Model.Notice?.Title);
+        Assert.AreEqual(NoSave, Find(h, NoSave)?.Title);
     }
 
-    [TestMethod]
-    public async Task Save_ModelsChangedAndChatGptRunning_AsksToRestart()
-    {
-        var h = new Harness();
-        h.FillInputs();
-        h.ChatGpt.Running = true;
-        h.Core.On("save_connection", _ => Json.Parse("""{"models_changed":true,"relay_model_count":7}"""));
-        h.Confirmer.Answer = _ => false;
-
-        await h.Model.SaveConnectionAsync();
-
-        var ask = h.Confirmer.Requests.Single();
-        Assert.AreEqual("已保存，重启 ChatGPT 以更新模型列表？", ask.Title);
-        Assert.AreEqual("稍后", ask.CancelText);
-        Assert.AreEqual("立即重启", ask.ConfirmText);
-        Assert.AreEqual(0, h.ChatGpt.RestartCount);
-    }
+    const string SavedNeedsRestartTitle = "已保存";
+    const string SavedNoRestartTitle = "已保存，不需要重启 ChatGPT";
+    const string SavedNoRestartDetail = "已重新获取中台模型，不需要重启 ChatGPT。";
 
     [TestMethod]
-    public async Task Save_ModelsChangedAndRestartConfirmed_RestartsChatGpt()
+    public async Task Save_ModelsChangedAndChatGptRunning_SuccessNoticeWithCountAndRestartHint_NoConfirm()
     {
         var h = new Harness();
         h.FillInputs();
@@ -736,11 +737,15 @@ public class AppModelTests
 
         await h.Model.SaveConnectionAsync();
 
-        Assert.AreEqual(1, h.ChatGpt.RestartCount);
+        var notice = h.Model.Notices.Last();
+        Assert.AreEqual(SavedNeedsRestartTitle, notice.Title);
+        Assert.AreEqual("现在可用 7 个中台模型。重启 ChatGPT 后，Codex 里会显示新的列表。", notice.Detail);
+        Assert.AreEqual(AppSeverity.Success, notice.Severity);
+        Assert.AreEqual(0, h.Confirmer.Requests.Count);
     }
 
     [TestMethod]
-    public async Task Save_ModelsChangedButChatGptNotRunning_DoesNotAsk()
+    public async Task Save_ModelsChangedButChatGptNotRunning_NoRestartNeededNotice()
     {
         var h = new Harness();
         h.FillInputs();
@@ -749,21 +754,30 @@ public class AppModelTests
 
         await h.Model.SaveConnectionAsync();
 
+        var notice = h.Model.Notices.Last();
+        Assert.AreEqual(SavedNoRestartTitle, notice.Title);
+        Assert.AreEqual(SavedNoRestartDetail, notice.Detail);
+        Assert.AreEqual(AppSeverity.Success, notice.Severity);
         Assert.AreEqual(0, h.Confirmer.Requests.Count);
-        Assert.AreEqual(0, h.ChatGpt.RestartCount);
     }
 
     [TestMethod]
-    public async Task Save_ModelsUnchanged_NoticeNoRestartNeeded()
+    public async Task Save_ModelsUnchanged_NoRestartNeededNotice()
     {
-        var h = new Harness();
-        h.FillInputs();
-        h.ChatGpt.Running = true;
+        foreach (var running in new[] { true, false })
+        {
+            var h = new Harness();
+            h.FillInputs();
+            h.ChatGpt.Running = running;
 
-        await h.Model.SaveConnectionAsync();
+            await h.Model.SaveConnectionAsync();
 
-        Assert.AreEqual("已保存，不需要重启 ChatGPT", h.Model.Notice?.Title);
-        Assert.AreEqual(0, h.Confirmer.Requests.Count);
+            var notice = h.Model.Notices.Last();
+            Assert.AreEqual(SavedNoRestartTitle, notice.Title, "running=" + running);
+            Assert.AreEqual(SavedNoRestartDetail, notice.Detail, "running=" + running);
+            Assert.AreEqual(AppSeverity.Success, notice.Severity, "running=" + running);
+            Assert.AreEqual(0, h.Confirmer.Requests.Count, "running=" + running);
+        }
     }
 
     #endregion
@@ -1023,32 +1037,19 @@ public class AppModelTests
     }
 
     [TestMethod]
-    public async Task Uninstall_ChatGptRunning_AsksToRestartAfterCleanup()
+    public async Task Uninstall_ChatGptRunning_OnlyTheUninstallAsk_RecordsRunningInOutcome()
     {
         var h = new Harness();
         h.ChatGpt.Running = true;
 
         await h.Model.UninstallAsync();
 
-        Assert.AreEqual(2, h.Confirmer.Requests.Count);
-        Assert.AreEqual(1, h.ChatGpt.RestartCount);
+        Assert.AreEqual(1, h.Confirmer.Requests.Count);
+        Assert.IsTrue(h.Model.Uninstalled!.ChatGptRunning);
     }
 
     [TestMethod]
-    public async Task Uninstall_ChatGptRunning_DeclineRestart_NotRestarted()
-    {
-        var h = new Harness();
-        h.ChatGpt.Running = true;
-        h.Confirmer.Answer = _ => h.Confirmer.Requests.Count == 1;
-
-        await h.Model.UninstallAsync();
-
-        Assert.AreEqual(2, h.Confirmer.Requests.Count);
-        Assert.AreEqual(0, h.ChatGpt.RestartCount);
-    }
-
-    [TestMethod]
-    public async Task Uninstall_ChatGptNotRunning_OnlyOneAsk()
+    public async Task Uninstall_ChatGptNotRunning_OnlyOneAsk_OutcomeNotRunning()
     {
         var h = new Harness();
         h.ChatGpt.Running = false;
@@ -1056,7 +1057,7 @@ public class AppModelTests
         await h.Model.UninstallAsync();
 
         Assert.AreEqual(1, h.Confirmer.Requests.Count);
-        Assert.AreEqual(0, h.ChatGpt.RestartCount);
+        Assert.IsFalse(h.Model.Uninstalled!.ChatGptRunning);
     }
 
     #endregion
@@ -1084,7 +1085,7 @@ public class AppModelTests
 
         await h.Model.CheckUpdateAsync();
 
-        Assert.AreEqual("已是最新版本", h.Model.Notice?.Title);
+        Assert.AreEqual(AppSeverity.Success, Find(h, UpToDate)?.Severity);
         Assert.IsNull(h.Model.UpdateVersion);
         Assert.IsNull(h.Model.UpdateUrl);
     }
@@ -1097,7 +1098,7 @@ public class AppModelTests
 
         await h.Model.CheckUpdateAsync();
 
-        Assert.AreEqual("暂时无法检查更新，请稍后再试", h.Model.Notice?.Title);
+        Assert.AreEqual(AppSeverity.Warning, Find(h, UpdateUnavailable)?.Severity);
     }
 
     #endregion
@@ -1159,7 +1160,7 @@ public class AppModelTests
     }
 
     [TestMethod]
-    public void Banners_RestoreBlocked_ShowsKeysAndConfigPath()
+    public void Banners_RestoreBlocked_ShortDetailAndOnlyShowDetailAction()
     {
         var h = new Harness();
         h.Push(s =>
@@ -1169,9 +1170,27 @@ public class AppModelTests
         });
 
         var banner = h.Model.Banners.Single(b => b.Title == "没能自动还原 Codex 配置");
-        StringAssert.Contains(banner.Detail, "model_provider");
-        StringAssert.Contains(banner.Detail, "openai_base_url");
-        StringAssert.Contains(banner.Detail, "/home/example/.codex/config.toml");
+        Assert.AreEqual("有设置项被手动改过。", banner.Detail);
+        CollectionAssert.AreEqual(new[] { BannerAction.ShowDetail }, banner.Actions.ToArray());
+        CollectionAssert.AreEqual(new[] { "model_provider", "openai_base_url" }, banner.Keys.ToArray());
+        Assert.AreEqual("/home/example/.codex/config.toml", banner.ConfigPath);
+        Assert.AreEqual("restore_blocked", banner.Code);
+    }
+
+    [TestMethod]
+    public async Task Banners_ConfigInvalidWithKeys_OffersShowDetail()
+    {
+        var h = new Harness();
+        h.Push(s => s["config_path"] = "/home/example/.codex/config.toml");
+        h.Core.Fail("set_forwarding", "config_invalid", "model_provider");
+
+        await h.Model.ToggleForwardingAsync();
+
+        var banner = h.Model.Banners.Single(b => b.Keys.Count > 0);
+        CollectionAssert.AreEqual(new[] { "model_provider" }, banner.Keys.ToArray());
+        CollectionAssert.Contains(banner.Actions.ToList(), BannerAction.ShowDetail);
+        Assert.AreEqual("/home/example/.codex/config.toml", banner.ConfigPath);
+        Assert.AreEqual("config_invalid", banner.Code);
     }
 
     [TestMethod]
@@ -1258,7 +1277,7 @@ public class AppModelTests
 
         Assert.IsFalse(h.Model.CoreRunning);
         Assert.AreEqual("后台服务已停止", h.Model.CoreStatusText);
-        StringAssert.Contains(Text(h.Model.Notice), "后台服务没能启动，请退出后重新打开");
+        StringAssert.Contains(AllText(h), CoreDown);
     }
 
     [TestMethod]
@@ -1286,7 +1305,7 @@ public class AppModelTests
 
         await h.Model.StartAsync();
 
-        StringAssert.Contains(Text(h.Model.Notice), "无法读取已保存的 API Key，请重新输入");
+        StringAssert.Contains(AllText(h), "无法读取已保存的 API Key，请重新输入");
         Assert.AreEqual(1, h.ShowMainCount);
     }
 
@@ -1354,7 +1373,7 @@ public class AppModelTests
         Assert.AreEqual(1, h.Vault.DeleteCount);
         Assert.IsNull(h.Vault.Stored);
         AssertCoreReset(h);
-        Assert.AreEqual(NoSave, h.Model.Notice?.Title);
+        Assert.IsNotNull(Find(h, NoSave));
         Assert.AreEqual(AppPage.Setup, h.Model.Page);
     }
 
@@ -1425,10 +1444,10 @@ public class AppModelTests
         await h.Model.QuitAsync();
 
         var banner = h.Model.Banners.Single(b => b.Title == "没能自动还原 Codex 配置");
-        StringAssert.Contains(banner.Detail, "model_provider");
-        StringAssert.Contains(banner.Detail, "openai_base_url");
-        StringAssert.Contains(banner.Detail, "/home/example/.codex/config.toml");
-        CollectionAssert.Contains(banner.Actions.ToList(), BannerAction.OpenConfigFolder);
+        CollectionAssert.AreEqual(new[] { "model_provider", "openai_base_url" }, banner.Keys.ToArray());
+        Assert.AreEqual("/home/example/.codex/config.toml", banner.ConfigPath);
+        Assert.AreEqual("restore_blocked", banner.Code);
+        CollectionAssert.AreEqual(new[] { BannerAction.ShowDetail }, banner.Actions.ToArray());
     }
 
     [TestMethod]
@@ -1440,8 +1459,8 @@ public class AppModelTests
 
         await h.Model.QuitAsync();
 
-        Assert.AreEqual("没能退出", h.Model.Notice?.Title);
-        Assert.AreEqual(Msg("internal_error"), h.Model.Notice?.Detail);
+        Assert.AreEqual("没能退出", Find(h, "没能退出")?.Title);
+        Assert.AreEqual(Msg("internal_error"), Find(h, "没能退出")?.Detail);
         Assert.AreEqual(0, h.ExitCount);
         Assert.AreEqual(1, h.ShowMainCount);
     }
@@ -1473,23 +1492,6 @@ public class AppModelTests
 
         Assert.AreEqual(1, h.Core.StopCount);
         Assert.IsFalse(h.Model.CoreRunning);
-    }
-
-    [TestMethod]
-    public async Task Toggle_ConfirmPending_SecondCallReturnsWithoutAsking()
-    {
-        var h = new Harness();
-        h.ChatGpt.Running = true;
-        h.Confirmer.Gate = new TaskCompletionSource<bool>();
-
-        var first = h.Model.ToggleForwardingAsync();
-        await h.Model.ToggleForwardingAsync();
-
-        Assert.AreEqual(1, h.Confirmer.Requests.Count);
-        Assert.IsTrue(h.Model.IsBusy);
-        h.Confirmer.Gate.SetResult(false);
-        await first;
-        Assert.IsFalse(h.Model.IsBusy);
     }
 
     [TestMethod]
@@ -1574,6 +1576,448 @@ public class AppModelTests
         await h.Model.StartAsync();
 
         Assert.AreEqual(AppPage.Main, pageAtRequest);
+    }
+
+    #endregion
+
+    #region 并存的提示
+
+    [TestMethod]
+    public void NoticeAutoDismissDelay_DefaultsToFourSeconds()
+    {
+        Assert.AreEqual(TimeSpan.FromSeconds(4), new Harness().Model.NoticeAutoDismissDelay);
+    }
+
+    [TestMethod]
+    public async Task Notices_NewOnesAppendedAtEnd_EachWithOwnId()
+    {
+        var h = new Harness();
+        h.Core.RaiseFailed("核心进程反复崩溃");
+        await h.Model.CheckUpdateAsync();
+
+        CollectionAssert.AreEqual(new[] { CoreDown, UpToDate }, Titles(h));
+        Assert.AreNotEqual(h.Model.Notices[0].Id, h.Model.Notices[1].Id);
+    }
+
+    [TestMethod]
+    public async Task Notices_SameTitleAndSeverityAgain_NotAppendedTwice()
+    {
+        var h = new Harness();
+        h.Core.Fail("check_update", "update_unavailable");
+
+        await h.Model.CheckUpdateAsync();
+        await h.Model.CheckUpdateAsync();
+
+        CollectionAssert.AreEqual(new[] { UpdateUnavailable }, Titles(h));
+    }
+
+    [TestMethod]
+    public async Task Notices_RepeatedSaveFailure_KeepsSingleNotice_ThenSuccessRemovesIt()
+    {
+        var h = new Harness();
+        h.FillInputs();
+        h.Core.Fail("save_connection", "relay_403");
+
+        await h.Model.SaveConnectionAsync();
+        await h.Model.SaveConnectionAsync();
+        CollectionAssert.AreEqual(new[] { NoSave }, Titles(h));
+
+        h.Core.On("save_connection", _ => Json.Parse("""{"models_changed":false,"relay_model_count":6}"""));
+        await h.Model.SaveConnectionAsync();
+
+        CollectionAssert.AreEqual(new[] { SavedNoRestartTitle }, Titles(h));
+    }
+
+    [TestMethod]
+    public async Task Notices_PersistFailure_RemovedByLaterSuccessfulSave()
+    {
+        var h = new Harness();
+        h.FillInputs();
+        h.Vault.SaveException = new IOException();
+        await h.Model.SaveConnectionAsync();
+        Assert.IsNotNull(Find(h, NoSave));
+
+        h.Vault.SaveException = null;
+        await h.Model.SaveConnectionAsync();
+
+        Assert.IsNull(Find(h, NoSave));
+        Assert.IsNotNull(Find(h, SavedNoRestartTitle));
+    }
+
+    [TestMethod]
+    public async Task Notices_CheckUpdateFailureWarning_RemovedByLaterSuccess()
+    {
+        var h = new Harness();
+        h.Core.Fail("check_update", "update_unavailable");
+        await h.Model.CheckUpdateAsync();
+        Assert.IsNotNull(Find(h, UpdateUnavailable));
+
+        h.Core.On("check_update", _ => Json.Parse("""{"latest_version":null,"url":null,"is_newer":false}"""));
+        await h.Model.CheckUpdateAsync();
+
+        CollectionAssert.AreEqual(new[] { UpToDate }, Titles(h));
+    }
+
+    [TestMethod]
+    public async Task Notices_CheckUpdateFailureWarning_RemovedByLaterNewVersionFound()
+    {
+        var h = new Harness();
+        h.Core.Fail("check_update", "update_unavailable");
+        await h.Model.CheckUpdateAsync();
+
+        h.Core.On("check_update", _ => Json.Parse(
+            """{"latest_version":"1.3.0","url":"https://relay.example.com/download","is_newer":true}"""));
+        await h.Model.CheckUpdateAsync();
+
+        Assert.IsNull(Find(h, UpdateUnavailable));
+    }
+
+    [TestMethod]
+    public async Task DismissNotice_RemovesOnlyThatNotice()
+    {
+        var h = new Harness();
+        h.Core.RaiseFailed("核心进程反复崩溃");
+        await h.Model.CheckUpdateAsync();
+        var success = Find(h, UpToDate)!;
+
+        h.Model.DismissNotice(success.Id);
+
+        CollectionAssert.AreEqual(new[] { CoreDown }, Titles(h));
+    }
+
+    [TestMethod]
+    public async Task Notices_AddAndDismiss_RaisePropertyChanged()
+    {
+        var h = new Harness();
+        var changed = new List<string?>();
+        h.Model.PropertyChanged += (_, e) => changed.Add(e.PropertyName);
+
+        await h.Model.CheckUpdateAsync();
+        var afterAdd = changed.Count(n => n == "Notices");
+        Assert.IsTrue(afterAdd >= 1);
+
+        h.Model.DismissNotice(h.Model.Notices[0].Id);
+        Assert.IsTrue(changed.Count(n => n == "Notices") > afterAdd);
+    }
+
+    [TestMethod]
+    public async Task Notice_Success_AutoDismissesAfterDelay()
+    {
+        var h = new Harness();
+        h.Model.NoticeAutoDismissDelay = TimeSpan.FromMilliseconds(100);
+
+        await h.Model.CheckUpdateAsync();
+        Assert.AreEqual(AppSeverity.Success, h.Model.Notices.Last().Severity);
+
+        await WaitUntilAsync(() => h.Model.Notices.Count == 0);
+        Assert.AreEqual(0, h.Model.Notices.Count);
+    }
+
+    [TestMethod]
+    public async Task Notice_Success_StaysUntilDelayElapses()
+    {
+        var h = new Harness();
+        h.Model.NoticeAutoDismissDelay = TimeSpan.FromMilliseconds(800);
+
+        await h.Model.CheckUpdateAsync();
+        await Task.Delay(200);
+
+        CollectionAssert.AreEqual(new[] { UpToDate }, Titles(h));
+    }
+
+    [TestMethod]
+    public async Task Notice_ErrorAndWarning_NeverAutoDismiss()
+    {
+        var h = new Harness();
+        h.Model.NoticeAutoDismissDelay = TimeSpan.FromMilliseconds(50);
+        h.Core.Fail("check_update", "update_unavailable");
+
+        h.Core.RaiseFailed("核心进程反复崩溃");
+        await h.Model.CheckUpdateAsync();
+        Assert.AreEqual(AppSeverity.Danger, Find(h, CoreDown)!.Severity);
+        Assert.AreEqual(AppSeverity.Warning, Find(h, UpdateUnavailable)!.Severity);
+        await Task.Delay(500);
+
+        CollectionAssert.AreEqual(new[] { CoreDown, UpdateUnavailable }, Titles(h));
+    }
+
+    [TestMethod]
+    public async Task Notice_SuccessAfterError_BothShownThenOnlyErrorRemains()
+    {
+        var h = new Harness();
+        h.Model.NoticeAutoDismissDelay = TimeSpan.FromMilliseconds(200);
+        h.Core.RaiseFailed("核心进程反复崩溃");
+
+        await h.Model.CheckUpdateAsync();
+        CollectionAssert.AreEqual(new[] { CoreDown, UpToDate }, Titles(h));
+
+        await WaitUntilAsync(() => h.Model.Notices.Count == 1);
+        await Task.Delay(300);
+        CollectionAssert.AreEqual(new[] { CoreDown }, Titles(h));
+    }
+
+    [TestMethod]
+    public async Task Notice_EachSuccessDismissesOnItsOwnTimer()
+    {
+        var h = new Harness();
+        h.FillInputs();
+        h.Model.NoticeAutoDismissDelay = TimeSpan.FromMilliseconds(600);
+
+        await h.Model.CheckUpdateAsync();
+        await Task.Delay(400);
+        await h.Model.SaveConnectionAsync();
+        CollectionAssert.AreEqual(new[] { UpToDate, SavedNoRestartTitle }, Titles(h));
+
+        await Task.Delay(400);
+        CollectionAssert.AreEqual(new[] { SavedNoRestartTitle }, Titles(h));
+        await WaitUntilAsync(() => h.Model.Notices.Count == 0);
+        Assert.AreEqual(0, h.Model.Notices.Count);
+    }
+
+    [TestMethod]
+    public async Task Notice_DismissedByUserBeforeTimer_TimerDoesNotRemoveLaterNotice()
+    {
+        var h = new Harness();
+        h.Model.NoticeAutoDismissDelay = TimeSpan.FromMilliseconds(400);
+        await h.Model.CheckUpdateAsync();
+        h.Model.DismissNotice(h.Model.Notices[0].Id);
+        h.Core.RaiseFailed("核心进程反复崩溃");
+
+        await Task.Delay(700);
+
+        CollectionAssert.AreEqual(new[] { CoreDown }, Titles(h));
+    }
+
+    #endregion
+
+    #region 提示条可关闭
+
+    static readonly (string Name, Action<JsonObject> Tweak)[] StatusProblems =
+    [
+        ("taken_over", s => s["taken_over"] = new JsonArray("openai_base_url")),
+        ("stale", s => s["relay"]!["stale"] = true),
+        ("never_succeeded", s =>
+        {
+            s["relay"]!["model_count"] = 0;
+            s["relay"]!["error"] = "relay_unreachable";
+        }),
+        ("restore_blocked", s => s["restore_blocked"] = new JsonArray("openai_base_url")),
+        ("proxy_error", s => s["proxy"] = new JsonObject { ["running"] = false, ["error"] = "proxy_port_in_use" }),
+        ("chatgpt_missing", s => s["chatgpt"] = new JsonObject { ["found"] = false, ["error"] = null }),
+    ];
+
+    [TestMethod]
+    public void DismissBanner_EveryStatusBanner_CanBeHidden()
+    {
+        foreach (var (name, tweak) in StatusProblems)
+        {
+            var h = new Harness();
+            h.Push(tweak);
+            var banner = h.Model.Banners.First();
+
+            h.Model.DismissBanner(banner);
+
+            Assert.AreEqual(0, h.Model.Banners.Count, name);
+        }
+    }
+
+    [TestMethod]
+    public async Task DismissBanner_ForwardingFailureBanner_CanBeHidden()
+    {
+        var h = new Harness();
+        h.Core.Fail("set_forwarding", "config_invalid", "model_provider");
+        await h.Model.ToggleForwardingAsync();
+        var banner = h.Model.Banners.Single(b => b.Keys.Count > 0);
+
+        h.Model.DismissBanner(banner);
+
+        Assert.AreEqual(0, h.Model.Banners.Count);
+    }
+
+    [TestMethod]
+    public void DismissBanner_DismissesOnlyThatBanner()
+    {
+        var h = new Harness();
+        h.Push(s =>
+        {
+            s["taken_over"] = new JsonArray("openai_base_url");
+            s["proxy"] = new JsonObject { ["running"] = false, ["error"] = "proxy_port_in_use" };
+        });
+
+        h.Model.DismissBanner(h.Model.Banners.Single(b => b.Title == "已接管 Codex 原有的接入设置"));
+
+        CollectionAssert.AreEqual(new[] { "本机转发服务没能启动" }, h.Model.Banners.Select(b => b.Title).ToArray());
+    }
+
+    [TestMethod]
+    public void DismissBanner_SameStateAgain_StaysHidden_GoneThenBackShowsAgain()
+    {
+        var h = new Harness();
+        Action<JsonObject> taken = s => s["taken_over"] = new JsonArray("openai_base_url");
+        h.Push(taken);
+        h.Model.DismissBanner(h.Model.Banners.Single());
+
+        h.Push(taken);
+        Assert.AreEqual(0, h.Model.Banners.Count);
+
+        h.Push();
+        Assert.AreEqual(0, h.Model.Banners.Count);
+
+        h.Push(taken);
+        CollectionAssert.AreEqual(
+            new[] { "已接管 Codex 原有的接入设置" }, h.Model.Banners.Select(b => b.Title).ToArray());
+    }
+
+    [TestMethod]
+    public void DismissBanner_RelayStale_StaysHiddenUntilStaleAgain()
+    {
+        var h = new Harness();
+        Action<JsonObject> stale = s => s["relay"]!["stale"] = true;
+        h.Push(stale);
+        h.Model.DismissBanner(h.Model.Banners.Single());
+
+        h.Push(stale);
+        Assert.AreEqual(0, h.Model.Banners.Count);
+
+        h.Push();
+        h.Push(stale);
+        CollectionAssert.AreEqual(
+            new[] { "中台模型列表本次没有更新" }, h.Model.Banners.Select(b => b.Title).ToArray());
+    }
+
+    [TestMethod]
+    public void DismissBanner_RaisesBannersPropertyChanged()
+    {
+        var h = new Harness();
+        h.Push(s => s["taken_over"] = new JsonArray("openai_base_url"));
+        var changed = new List<string?>();
+        h.Model.PropertyChanged += (_, e) => changed.Add(e.PropertyName);
+
+        h.Model.DismissBanner(h.Model.Banners[0]);
+
+        CollectionAssert.Contains(changed, "Banners");
+    }
+
+    #endregion
+
+    #region 同类操作成功后移除旧失败提示
+
+    [TestMethod]
+    public async Task Notices_ToggleFailure_RemovedByLaterToggleSuccess()
+    {
+        var h = new Harness();
+        h.Core.Fail("set_forwarding", "internal_error");
+        await h.Model.ToggleForwardingAsync();
+        Assert.IsNotNull(Find(h, "没能切换转发"));
+
+        h.Core.On("set_forwarding", _ => Json.Status(s => s["forwarding"] = true));
+        await h.Model.ToggleForwardingAsync();
+
+        Assert.IsNull(Find(h, "没能切换转发"));
+    }
+
+    [TestMethod]
+    public async Task Notices_RefreshFailure_RemovedByLaterRefreshSuccess()
+    {
+        foreach (var (method, run) in new (string, Func<AppModel, Task>)[]
+                 {
+                     ("refresh_models", m => m.RetryAsync()),
+                     ("status", m => m.RecheckAsync()),
+                 })
+        {
+            var h = new Harness();
+            h.Core.Fail(method, "internal_error");
+            await run(h.Model);
+            Assert.IsNotNull(Find(h, "没能刷新"), method);
+
+            h.Core.On(method, _ => Json.Status());
+            await run(h.Model);
+
+            Assert.IsNull(Find(h, "没能刷新"), method);
+        }
+    }
+
+    [TestMethod]
+    public async Task Notices_LoginStartFailure_RemovedByLaterSuccessInSameDirection()
+    {
+        var h = new Harness();
+        h.Login.EnableException = new UnauthorizedAccessException();
+        await h.Model.SetLoginStartAsync(true);
+        Assert.IsNotNull(Find(h, "没能开启登录时启动"));
+        h.Login.EnableException = null;
+        await h.Model.SetLoginStartAsync(true);
+        Assert.IsNull(Find(h, "没能开启登录时启动"));
+
+        h.Login.DisableException = new UnauthorizedAccessException();
+        await h.Model.SetLoginStartAsync(false);
+        Assert.IsNotNull(Find(h, "没能关闭登录时启动"));
+        h.Login.DisableException = null;
+        await h.Model.SetLoginStartAsync(false);
+        Assert.IsNull(Find(h, "没能关闭登录时启动"));
+    }
+
+    #endregion
+
+    #region 托盘依据的新提示判定
+
+    static HashSet<object> Ids(Harness h) => h.Model.Notices.Select(n => (object)n.Id).ToHashSet();
+
+    static bool HasNewNotice(Harness h, HashSet<object> before) => h.Model.Notices.Any(n => !before.Contains(n.Id));
+
+    [TestMethod]
+    public async Task NewNotice_LoginStartFailsBeforeFirstAwait_ShowsAsNewId()
+    {
+        var h = new Harness();
+        h.Login.EnableException = new UnauthorizedAccessException();
+        var before = Ids(h);
+
+        await h.Model.SetLoginStartAsync(true);
+
+        Assert.IsTrue(HasNewNotice(h, before));
+    }
+
+    [TestMethod]
+    public async Task NewNotice_CheckUpdateCoreGoneSynchronously_ShowsAsNewId()
+    {
+        var h = new Harness();
+        h.Core.On("check_update", _ => throw new CoreProcessExitedException());
+        var before = Ids(h);
+
+        await h.Model.CheckUpdateAsync();
+
+        Assert.IsTrue(HasNewNotice(h, before));
+    }
+
+    [TestMethod]
+    public async Task NewNotice_UninstallCancelled_KeepsOldNoticeAndAddsNone()
+    {
+        var h = new Harness();
+        h.Core.RaiseFailed("核心进程反复崩溃");
+        var oldId = h.Model.Notices.Single().Id;
+        var before = Ids(h);
+        h.Confirmer.Answer = _ => false;
+
+        var code = await h.Model.UninstallAsync();
+
+        Assert.AreEqual(1, code);
+        Assert.IsFalse(HasNewNotice(h, before));
+        Assert.AreEqual(oldId, h.Model.Notices.Single().Id);
+    }
+
+    [TestMethod]
+    public async Task NewNotice_UninstallFails_AddsNoticeWithNewIdAndKeepsOldOne()
+    {
+        var h = new Harness();
+        h.Core.RaiseFailed("核心进程反复崩溃");
+        var before = Ids(h);
+        h.Core.Fail("prepare_uninstall", "internal_error");
+
+        var code = await h.Model.UninstallAsync();
+
+        Assert.AreEqual(1, code);
+        Assert.IsTrue(HasNewNotice(h, before));
+        Assert.IsNotNull(Find(h, "没能卸载"));
+        Assert.IsNotNull(Find(h, CoreDown));
     }
 
     #endregion

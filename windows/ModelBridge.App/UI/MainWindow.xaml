@@ -6,6 +6,7 @@
         MaxHeight="{x:Static SystemParameters.MaximizedPrimaryScreenHeight}"
         WindowStartupLocation="CenterScreen" FontSize="13"
         Background="{StaticResource BackgroundBrush}" Foreground="{StaticResource TextBrush}">
+    <Grid>
     <DockPanel>
         <Border DockPanel.Dock="Bottom" Style="{StaticResource StatusBar}">
             <Grid>
@@ -23,8 +24,6 @@
 
         <ScrollViewer VerticalScrollBarVisibility="Auto">
             <StackPanel Margin="24">
-                <StackPanel x:Name="AlertHost" />
-
                 <Border Style="{StaticResource Card}" Margin="0,0,0,20">
                     <StackPanel>
                     <TextBlock Text="转发" Style="{StaticResource CardTitle}" Margin="0,0,0,20" />
@@ -74,4 +73,8 @@
             </StackPanel>
         </ScrollViewer>
     </DockPanel>
+    <Canvas x:Name="Overlay" SizeChanged="OverlaySizeChanged">
+        <StackPanel x:Name="AlertHost" Canvas.Left="24" Canvas.Top="12" />
+    </Canvas>
+    </Grid>
 </Window>

@@ -1,5 +1,6 @@
 using System;
 using System.Drawing;
+using System.Linq;
 using System.Runtime.InteropServices;
 using System.Threading.Tasks;
 using System.Windows;
@@ -70,21 +71,18 @@ public sealed class TrayMenu : IDisposable
         switch (command)
         {
             case TrayMenuCommand.ToggleForwarding:
-                await model.ToggleForwardingAsync();
-                ShowNotice();
+                await ShowIfNewNoticeAsync(model.ToggleForwardingAsync);
                 break;
             case TrayMenuCommand.OpenConfig:
                 openMain();
                 break;
             case TrayMenuCommand.ToggleLoginStart:
-                await model.SetLoginStartAsync(!model.LoginStartEnabled);
-                ShowNotice();
+                await ShowIfNewNoticeAsync(() => model.SetLoginStartAsync(!model.LoginStartEnabled));
                 break;
             case TrayMenuCommand.CheckUpdate:
                 if (model.UpdateVersion == null)
                 {
-                    await model.CheckUpdateAsync();
-                    ShowNotice();
+                    await ShowIfNewNoticeAsync(model.CheckUpdateAsync);
                 }
                 else ExternalOpen.Url(model.UpdateUrl);
                 break;
@@ -92,15 +90,16 @@ public sealed class TrayMenu : IDisposable
                 await uninstall();
                 break;
             case TrayMenuCommand.Quit:
-                await model.QuitAsync();
-                ShowNotice();
+                await ShowIfNewNoticeAsync(model.QuitAsync);
                 break;
         }
     }
 
-    void ShowNotice()
+    async Task ShowIfNewNoticeAsync(Func<Task> action)
     {
-        if (model.Notice != null) openMain();
+        var before = model.Notices.Select(n => n.Id).ToHashSet();
+        await action();
+        if (model.Notices.Any(n => !before.Contains(n.Id))) openMain();
     }
 
     static Icon CreateIcon()

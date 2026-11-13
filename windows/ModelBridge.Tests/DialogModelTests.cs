@@ -167,4 +167,92 @@ public class DialogModelTests
 
         Assert.AreEqual("取消卸载", dialog.Buttons[dialog.EscapeButtonIndex].Text);
     }
+
+    static string AllText(DialogModel d) => d.Message + d.Alert?.Message;
+
+    const string ConfigPath = "/home/example/.codex/config.toml";
+
+    static bool HasTitle(DialogModel d, string title) => d.Title == title || d.Alert?.Title == title;
+
+    [TestMethod]
+    public void RestoreHelp_RestoreBlocked_TitleAndBodySaySettingsWereNotRestored()
+    {
+        var dialog = DialogModel.ForRestoreHelp("restore_blocked", ["model_provider", "openai_base_url"], ConfigPath);
+
+        Assert.IsTrue(HasTitle(dialog, "没能自动还原 Codex 配置"));
+        StringAssert.Contains(AllText(dialog), "没有还原");
+        StringAssert.Contains(AllText(dialog), "model_provider");
+        StringAssert.Contains(AllText(dialog), "openai_base_url");
+        StringAssert.Contains(AllText(dialog), ConfigPath);
+    }
+
+    [TestMethod]
+    public void RestoreHelp_ConfigInvalid_TitleAndBodySayFormatIsWrong()
+    {
+        var dialog = DialogModel.ForRestoreHelp("config_invalid", ["model_provider"], ConfigPath);
+
+        Assert.IsTrue(HasTitle(dialog, "Codex 配置文件格式有误"));
+        Assert.IsFalse(HasTitle(dialog, "没能自动还原 Codex 配置"));
+        StringAssert.Contains(AllText(dialog), "格式");
+        StringAssert.Contains(AllText(dialog), "model_provider");
+        StringAssert.Contains(AllText(dialog), ConfigPath);
+        Assert.IsFalse(AllText(dialog).Contains("没有还原"));
+    }
+
+    [TestMethod]
+    public void RestoreHelp_ConfigInvalid_NoKeys_OmitsKeyList()
+    {
+        var dialog = DialogModel.ForRestoreHelp("config_invalid", [], ConfigPath);
+
+        Assert.IsTrue(HasTitle(dialog, "Codex 配置文件格式有误"));
+        StringAssert.Contains(AllText(dialog), "格式");
+        StringAssert.Contains(AllText(dialog), ConfigPath);
+        Assert.IsFalse(AllText(dialog).Contains("、"));
+    }
+
+    [TestMethod]
+    public void RestoreHelp_Buttons_CloseOpenFolderRecheck()
+    {
+        foreach (var code in new[] { "restore_blocked", "config_invalid" })
+        {
+            var dialog = DialogModel.ForRestoreHelp(code, ["model_provider"], ConfigPath);
+
+            CollectionAssert.AreEqual(
+                new[] { "关闭", "打开所在文件夹", "重新检查" },
+                dialog.Buttons.Select(b => b.Text).ToArray(), code);
+            CollectionAssert.AreEqual(new[] { true, false, false }, dialog.Buttons.Select(b => b.IsDefault).ToArray(), code);
+            Assert.AreEqual("关闭", dialog.Buttons[dialog.EscapeButtonIndex].Text, code);
+        }
+    }
+
+    [TestMethod]
+    public void UninstallFinished_ChatGptRunning_OnlyOkButtonAndAsksToRestartManually()
+    {
+        var dialog = DialogModel.ForUninstallFinished(new UninstallOutcome([], true));
+
+        Assert.AreEqual("已卸载模型接入助手", dialog.Title);
+        CollectionAssert.AreEqual(new[] { "好" }, dialog.Buttons.Select(b => b.Text).ToArray());
+        Assert.AreEqual(DialogButtonRole.Primary, dialog.Buttons[0].Role);
+        Assert.IsTrue(dialog.Buttons[0].IsDefault);
+        Assert.AreEqual(0, dialog.EscapeButtonIndex);
+        StringAssert.Contains(AllText(dialog), "请重启 ChatGPT，Codex 的模型列表才会恢复成只有官方模型。");
+    }
+
+    [TestMethod]
+    public void UninstallFinished_ChatGptNotRunning_OnlyOkButtonAndNoRestartAdvice()
+    {
+        var dialog = DialogModel.ForUninstallFinished(new UninstallOutcome([], false));
+
+        CollectionAssert.AreEqual(new[] { "好" }, dialog.Buttons.Select(b => b.Text).ToArray());
+        Assert.IsFalse(AllText(dialog).Contains("请重启 ChatGPT"));
+    }
+
+    [TestMethod]
+    public void UninstallFinished_Leftovers_AreListed()
+    {
+        var dialog = DialogModel.ForUninstallFinished(new UninstallOutcome(["凭据", "设置文件"], false));
+
+        StringAssert.Contains(AllText(dialog), "凭据");
+        StringAssert.Contains(AllText(dialog), "设置文件");
+    }
 }

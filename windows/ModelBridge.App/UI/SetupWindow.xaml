@@ -5,27 +5,29 @@
         Title="设置模型接入助手" Width="620" SizeToContent="Height" ResizeMode="CanMinimize"
         WindowStartupLocation="CenterScreen" FontSize="13"
         Background="{StaticResource BackgroundBrush}" Foreground="{StaticResource TextBrush}">
-    <Grid Margin="24">
-        <StackPanel x:Name="FormPanel">
-            <TextBlock Text="连接到中台" FontSize="20" FontWeight="SemiBold" />
-            <TextBlock Text="填写中台提供的 Base URL 和 API Key。设置完成后，Codex 的模型列表里会多出中台模型。"
-                       TextWrapping="Wrap" Margin="0,8,0,20" Foreground="{StaticResource TextMutedBrush}" />
-            <StackPanel x:Name="ErrorHost" />
-            <Border Style="{StaticResource Card}">
-                <ui:ConnectionForm x:Name="Form" />
-            </Border>
-            <Button x:Name="SubmitButton" Content="完成设置" Style="{StaticResource PrimaryButton}"
-                    HorizontalAlignment="Right" Margin="0,20,0,0"
-                    Click="SubmitClick" />
-        </StackPanel>
-
-        <StackPanel x:Name="DonePanel" Visibility="Collapsed">
-            <StackPanel x:Name="DoneHost" />
-            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
-                <Button Content="稍后自己重启" Click="LaterClick" />
-                <Button Content="立即重启 ChatGPT" Style="{StaticResource PrimaryButton}" 
-                        Margin="12,0,0,0" Click="RestartClick" />
+    <Grid>
+        <Grid Margin="24">
+            <StackPanel x:Name="FormPanel">
+                <TextBlock Text="连接到中台" FontSize="20" FontWeight="SemiBold" />
+                <TextBlock Text="填写中台提供的 Base URL 和 API Key。设置完成后，Codex 的模型列表里会多出中台模型。"
+                           TextWrapping="Wrap" Margin="0,8,0,20" Foreground="{StaticResource TextMutedBrush}" />
+                <Border Style="{StaticResource Card}">
+                    <ui:ConnectionForm x:Name="Form" />
+                </Border>
+                <Button x:Name="SubmitButton" Content="完成设置" Style="{StaticResource PrimaryButton}"
+                        HorizontalAlignment="Right" Margin="0,20,0,0"
+                        Click="SubmitClick" />
             </StackPanel>
-        </StackPanel>
+
+            <StackPanel x:Name="DonePanel" Visibility="Collapsed">
+                <TextBlock x:Name="DoneTitle" FontSize="20" FontWeight="SemiBold" TextWrapping="Wrap" />
+                <TextBlock x:Name="DoneText" TextWrapping="Wrap" Margin="0,8,0,20" Foreground="{StaticResource TextMutedBrush}" />
+                <Button Content="完成" Style="{StaticResource PrimaryButton}" HorizontalAlignment="Right"
+                        Click="FinishClick" />
+            </StackPanel>
+        </Grid>
+        <Canvas x:Name="Overlay" SizeChanged="OverlaySizeChanged">
+            <StackPanel x:Name="AlertHost" Canvas.Left="24" Canvas.Top="12" />
+        </Canvas>
     </Grid>
 </Window>

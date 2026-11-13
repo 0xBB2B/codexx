@@ -6,7 +6,6 @@ using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Security;
 using System.Text.Json;
-using System.Threading;
 using System.Threading.Tasks;
 using ModelBridge.Services;
 
@@ -16,11 +15,19 @@ public enum AppPage { Setup, Success, Main }
 
 public enum AppSeverity { Info, Success, Warning, Danger }
 
-public enum BannerAction { Retry, OpenConfigFolder, Recheck, Redetect }
+public enum BannerAction { Retry, ShowDetail, Redetect }
 
-public sealed record AppNotice(string Title, string Detail = "", AppSeverity Severity = AppSeverity.Danger);
+public sealed record AppNotice(string Title, string Detail = "", AppSeverity Severity = AppSeverity.Danger)
+{
+    public Guid Id { get; } = Guid.NewGuid();
+}
 
-public sealed record AppBanner(string Title, string Detail, AppSeverity Severity, IReadOnlyList<BannerAction> Actions);
+public sealed record AppBanner(string Title, string Detail, AppSeverity Severity, IReadOnlyList<BannerAction> Actions)
+{
+    public string Code { get; init; } = "";
+    public IReadOnlyList<string> Keys { get; init; } = [];
+    public string ConfigPath { get; init; } = "";
+}
 
 public sealed record ConfirmRequest(string Title, string Message, string ConfirmText, string CancelText = "取消");
 
@@ -28,7 +35,7 @@ public sealed record CoreErrorInfo(string Code, IReadOnlyList<string> Keys);
 
 public sealed record UninstallPause(IReadOnlyList<string> Keys, string ConfigPath);
 
-public sealed record UninstallOutcome(IReadOnlyList<string> Leftovers);
+public sealed record UninstallOutcome(IReadOnlyList<string> Leftovers, bool ChatGptRunning);
 
 public interface ICoreClient
 {
@@ -64,7 +71,6 @@ public interface IChatGptControl
 {
     string? Locate();
     bool IsRunning();
-    Task<ChatGptRestartResult> RestartAsync(CancellationToken ct);
 }
 
 public interface IConfirmer
@@ -80,9 +86,14 @@ public sealed class AppModel : INotifyPropertyChanged
     const string NoSave = "没有保存";
     const string CredentialWriteFailed = "无法写入系统凭据管理器";
     const string SettingsWriteFailed = "无法保存设置";
+    const string CoreStartFailed = "后台服务没能启动，请退出后重新打开";
     const string CoreStopped = "后台服务已停止，请退出后重新打开";
-    const string RestartRisk = "ChatGPT 正在运行，需要重启才能生效。重启会中断 Codex 里正在进行的任务。";
     const string RestoreBlockedTitle = "没能自动还原 Codex 配置";
+    const string RefreshFailed = "没能刷新";
+    const string SwitchFailed = "没能切换转发";
+    const string KeyUnreadable = "无法读取已保存的 API Key，请重新输入";
+    const string RestartHint = "重启 ChatGPT 后生效。";
+    const string SavedNoRestart = "已保存，不需要重启 ChatGPT";
     const string QuitBase = "退出前会关闭转发，并把 Codex 配置还原成开启前的样子。";
     const string QuitRunningTail = "ChatGPT 正在运行，请在退出后重启 ChatGPT。";
 
@@ -100,7 +111,9 @@ public sealed class AppModel : INotifyPropertyChanged
     bool isConnecting;
     bool busy;
     AppPage page;
-    AppNotice? notice;
+    IReadOnlyList<AppNotice> notices = [];
+    readonly object noticeLock = new();
+    readonly HashSet<string> dismissedBanners = [];
     AppNotice? taskError;
     string? progressText;
     string successTitle = "";
@@ -165,7 +178,8 @@ public sealed class AppModel : INotifyPropertyChanged
     public string? ApiKeyError { get => apiKeyError; private set => Set(ref apiKeyError, value); }
     public bool IsConnecting { get => isConnecting; private set => Set(ref isConnecting, value); }
     public AppPage Page { get => page; private set => Set(ref page, value); }
-    public AppNotice? Notice { get => notice; private set => Set(ref notice, value); }
+    public IReadOnlyList<AppNotice> Notices { get => notices; private set => Set(ref notices, value); }
+    public TimeSpan NoticeAutoDismissDelay { get; set; } = TimeSpan.FromSeconds(4);
     public AppNotice? TaskError { get => taskError; private set => Set(ref taskError, value); }
     public string? ProgressText { get => progressText; private set => Set(ref progressText, value); }
     public string SuccessTitle { get => successTitle; private set => Set(ref successTitle, value); }
@@ -251,7 +265,15 @@ public sealed class AppModel : INotifyPropertyChanged
         }
     }
 
-    public void ClearNotice() => Notice = null;
+    public void DismissNotice(Guid id) => RemoveNotice(id);
+
+    public void DismissTaskError() => TaskError = null;
+
+    public void DismissBanner(AppBanner banner)
+    {
+        dismissedBanners.Add(BannerKey(banner));
+        RebuildBanners();
+    }
 
     public async Task StartAsync()
     {
@@ -273,7 +295,7 @@ public sealed class AppModel : INotifyPropertyChanged
         LoginStartEnabled = login.IsEnabled();
         if (keyUnreadable)
         {
-            Notice = new AppNotice("无法读取已保存的 API Key，请重新输入", "", AppSeverity.Warning);
+            AddNotice(new AppNotice(KeyUnreadable, "", AppSeverity.Warning));
             ShowMainWindowRequested?.Invoke();
         }
 
@@ -285,7 +307,7 @@ public sealed class AppModel : INotifyPropertyChanged
         catch (Exception ex) when (ex is CoreCallException or CoreProcessExitedException or IOException or System.ComponentModel.Win32Exception)
         {
             CoreRunning = false;
-            Notice = new AppNotice("后台服务没能启动，请退出后重新打开", Describe(ex));
+            AddNotice(new AppNotice(CoreStartFailed, Describe(ex)));
             return;
         }
 
@@ -304,7 +326,6 @@ public sealed class AppModel : INotifyPropertyChanged
         if (!Validate()) return;
 
         IsConnecting = true;
-        Notice = null;
         TaskError = null;
         try
         {
@@ -315,10 +336,11 @@ public sealed class AppModel : INotifyPropertyChanged
             var persistError = await PersistAsync(url, key, null, null);
             if (persistError != null)
             {
-                Notice = new AppNotice(NoSave, persistError);
+                AddNotice(new AppNotice(NoSave, persistError));
                 return;
             }
 
+            RemoveNotices(NoSave);
             var problems = new List<string>();
             try
             {
@@ -340,10 +362,9 @@ public sealed class AppModel : INotifyPropertyChanged
             }
 
             SuccessTitle = forwardingEnabled ? "设置完成，转发已开启" : "设置已保存";
-            SuccessText = $"已获取 {modelCount} 个中台模型。重启 ChatGPT 后，就能在 Codex 的模型列表里选用它们。"
-                + (LoginStartEnabled ? "\n助手会在你登录电脑时自动启动，在任务栏通知区域里常驻。" : "");
+            SuccessText = $"已获取 {modelCount} 个中台模型。\n请重启 ChatGPT 后使用。助手会在你登录电脑时自动启动，在任务栏通知区域里常驻。";
             if (problems.Count > 0)
-                Notice = new AppNotice("设置已保存，但有一项没完成", string.Join("\n", problems), AppSeverity.Warning);
+                AddNotice(new AppNotice("设置已保存，但有一项没完成", string.Join("\n", problems), AppSeverity.Warning));
             Page = AppPage.Success;
         }
         finally
@@ -352,31 +373,17 @@ public sealed class AppModel : INotifyPropertyChanged
         }
     }
 
-    public async Task FinishSetupAsync(bool restartChatGpt)
-    {
-        Page = AppPage.Main;
-        if (restartChatGpt) await RestartChatGptAsync();
-    }
+    public void FinishSetup() => Page = AppPage.Main;
 
     public async Task ToggleForwardingAsync()
     {
         if (busy || !chatGptFound) return;
 
         IsBusy = true;
-        Notice = null;
         LastError = null;
         try
         {
             var target = !forwardingEnabled;
-            var running = chatGpt.IsRunning();
-            if (running)
-            {
-                var request = target
-                    ? new ConfirmRequest("打开转发并重启 ChatGPT？", "打开后，Codex 的模型列表里会多出中台模型。\n\n" + RestartRisk, "打开并重启")
-                    : new ConfirmRequest("关闭转发并重启 ChatGPT？", "关闭后会把 Codex 配置还原成开启前的样子，Codex 里只剩官方模型。\n\n" + RestartRisk, "关闭并重启");
-                if (!await confirmer.ConfirmAsync(request)) return;
-            }
-
             try
             {
                 ApplyStatus(await core.CallAsync("set_forwarding", Params("enabled", target)));
@@ -384,21 +391,18 @@ public sealed class AppModel : INotifyPropertyChanged
             catch (Exception ex) when (ex is CoreCallException or CoreProcessExitedException)
             {
                 if (ex is CoreCallException call) LastError = new CoreErrorInfo(call.Code, call.Keys);
-                if (ex is not CoreCallException { Code: "restore_blocked" })
-                    Notice = new AppNotice("没能切换转发", Describe(ex));
+                if (!HasErrorBanner(lastError))
+                    AddNotice(new AppNotice(SwitchFailed, Describe(ex)));
                 ShowMainWindowRequested?.Invoke();
                 return;
             }
 
-            if (running)
-            {
-                ProgressText = target ? "正在打开转发并重启 ChatGPT" : "正在还原 Codex 配置并重启 ChatGPT";
-                await RestartChatGptAsync();
-            }
+            RemoveNotices(SwitchFailed);
+            if (chatGpt.IsRunning())
+                AddNotice(new AppNotice(target ? "已打开转发" : "已关闭转发", RestartHint, AppSeverity.Success));
         }
         finally
         {
-            ProgressText = null;
             IsBusy = false;
         }
     }
@@ -409,7 +413,6 @@ public sealed class AppModel : INotifyPropertyChanged
 
         IsBusy = true;
         ProgressText = "正在保存并重新获取模型…";
-        Notice = null;
         try
         {
             var url = BaseUrlInput.Trim();
@@ -426,14 +429,14 @@ public sealed class AppModel : INotifyPropertyChanged
             }
             catch (Exception ex) when (ex is CoreCallException or CoreProcessExitedException)
             {
-                Notice = new AppNotice(NoSave, Describe(ex));
+                AddNotice(new AppNotice(NoSave, Describe(ex)));
                 return;
             }
 
             var persistError = await PersistAsync(url, key, oldUrl, oldKey);
             if (persistError != null)
             {
-                Notice = new AppNotice(NoSave, persistError);
+                AddNotice(new AppNotice(NoSave, persistError));
                 return;
             }
 
@@ -441,27 +444,14 @@ public sealed class AppModel : INotifyPropertyChanged
             Raise(nameof(ModelCountText));
             Raise(nameof(RelayStatusText));
 
-            if (!Flag(result, "models_changed", false))
-            {
-                Notice = new AppNotice("已保存，不需要重启 ChatGPT", "已重新获取中台模型，列表没有变化。", AppSeverity.Success);
-                return;
-            }
-
-            if (chatGpt.IsRunning())
-            {
-                var request = new ConfirmRequest(
-                    "已保存，重启 ChatGPT 以更新模型列表？",
-                    $"已重新获取中台模型：现在可用 {modelCount} 个。\n\n{RestartRisk}",
-                    "立即重启",
-                    "稍后");
-                if (await confirmer.ConfirmAsync(request))
-                {
-                    ProgressText = "正在重启 ChatGPT";
-                    await RestartChatGptAsync();
-                    return;
-                }
-            }
-            Notice = new AppNotice("已保存", "重启 ChatGPT 后，Codex 里才会显示新的模型列表。", AppSeverity.Success);
+            RemoveNotices(NoSave, KeyUnreadable);
+            if (Flag(result, "models_changed", false) && chatGpt.IsRunning())
+                AddNotice(new AppNotice(
+                    "已保存",
+                    $"现在可用 {modelCount} 个中台模型。重启 ChatGPT 后，Codex 里会显示新的列表。",
+                    AppSeverity.Success));
+            else
+                AddNotice(new AppNotice(SavedNoRestart, "已重新获取中台模型，不需要重启 ChatGPT。", AppSeverity.Success));
         }
         finally
         {
@@ -472,7 +462,6 @@ public sealed class AppModel : INotifyPropertyChanged
 
     public async Task SetLoginStartAsync(bool enable)
     {
-        Notice = null;
         if (!enable && forwardingEnabled)
         {
             var request = new ConfirmRequest(
@@ -490,10 +479,11 @@ public sealed class AppModel : INotifyPropertyChanged
         {
             if (enable) login.Enable(); else login.Disable();
             LoginStartEnabled = enable;
+            RemoveNotices(enable ? "没能开启登录时启动" : "没能关闭登录时启动");
         }
         catch (Exception ex) when (IsSystemFault(ex))
         {
-            Notice = new AppNotice(enable ? "没能开启登录时启动" : "没能关闭登录时启动");
+            AddNotice(new AppNotice(enable ? "没能开启登录时启动" : "没能关闭登录时启动"));
             Raise(nameof(LoginStartEnabled));
         }
     }
@@ -527,7 +517,7 @@ public sealed class AppModel : INotifyPropertyChanged
             }
             catch (CoreCallException ex)
             {
-                Notice = new AppNotice("没能退出", Describe(ex));
+                AddNotice(new AppNotice("没能退出", Describe(ex)));
                 ShowMainWindowRequested?.Invoke();
                 return;
             }
@@ -571,7 +561,6 @@ public sealed class AppModel : INotifyPropertyChanged
         if (busy) return 1;
 
         IsBusy = true;
-        Notice = null;
         try
         {
             if (askFirst)
@@ -598,7 +587,7 @@ public sealed class AppModel : INotifyPropertyChanged
             }
             catch (Exception ex) when (ex is CoreCallException or CoreProcessExitedException)
             {
-                Notice = new AppNotice("没能卸载", Describe(ex));
+                AddNotice(new AppNotice("没能卸载", Describe(ex)));
                 return 1;
             }
 
@@ -611,17 +600,7 @@ public sealed class AppModel : INotifyPropertyChanged
             catch (Exception ex) when (IsSystemFault(ex)) { leftovers.Add("登录时启动项没能取消"); }
 
             await StopCoreAsync();
-            Uninstalled = new UninstallOutcome(leftovers);
-
-            if (chatGpt.IsRunning())
-            {
-                var request = new ConfirmRequest(
-                    "已卸载模型接入助手",
-                    "Codex 配置已还原。请重启 ChatGPT，Codex 里会只显示官方模型。",
-                    "立即重启 ChatGPT",
-                    "稍后自己重启");
-                if (await confirmer.ConfirmAsync(request)) await RestartChatGptAsync();
-            }
+            Uninstalled = new UninstallOutcome(leftovers, chatGpt.IsRunning());
             return 0;
         }
         finally
@@ -633,10 +612,10 @@ public sealed class AppModel : INotifyPropertyChanged
 
     public async Task CheckUpdateAsync()
     {
-        Notice = null;
         try
         {
             var result = await core.CallAsync("check_update", Params("manual", true));
+            RemoveNotices(UpdateUnavailable);
             var latest = Str(result, "latest_version");
             var url = Str(result, "url");
             if (Flag(result, "is_newer", false) && latest != null)
@@ -648,12 +627,12 @@ public sealed class AppModel : INotifyPropertyChanged
             {
                 UpdateVersion = null;
                 UpdateUrl = null;
-                Notice = new AppNotice("已是最新版本", "", AppSeverity.Success);
+                AddNotice(new AppNotice("已是最新版本", "", AppSeverity.Success));
             }
         }
         catch (Exception ex) when (ex is CoreCallException or CoreProcessExitedException)
         {
-            Notice = new AppNotice(CoreErrorMessages.Messages["update_unavailable"], "", AppSeverity.Warning);
+            AddNotice(new AppNotice(UpdateUnavailable, "", AppSeverity.Warning));
         }
     }
 
@@ -672,10 +651,11 @@ public sealed class AppModel : INotifyPropertyChanged
         try
         {
             ApplyStatus(await core.CallAsync(method));
+            RemoveNotices(RefreshFailed);
         }
         catch (Exception ex) when (ex is CoreCallException or CoreProcessExitedException)
         {
-            Notice = new AppNotice("没能刷新", Describe(ex));
+            AddNotice(new AppNotice(RefreshFailed, Describe(ex)));
         }
         finally
         {
@@ -762,18 +742,6 @@ public sealed class AppModel : INotifyPropertyChanged
         }
     }
 
-    async Task RestartChatGptAsync()
-    {
-        var result = await chatGpt.RestartAsync(CancellationToken.None);
-        Notice = result switch
-        {
-            ChatGptRestartResult.CloseTimedOut => new AppNotice("ChatGPT 没有退出", "请手动退出 ChatGPT 后重新打开。", AppSeverity.Warning),
-            ChatGptRestartResult.OpenFailed => new AppNotice("没能打开 ChatGPT，请手动打开", "", AppSeverity.Warning),
-            ChatGptRestartResult.NotFound => new AppNotice("没有找到 ChatGPT"),
-            _ => Notice,
-        };
-    }
-
     bool Validate()
     {
         BaseUrlError = string.IsNullOrWhiteSpace(baseUrlInput)
@@ -788,7 +756,7 @@ public sealed class AppModel : INotifyPropertyChanged
     void OnCoreFailed(string reason)
     {
         CoreRunning = false;
-        Notice = new AppNotice("后台服务没能启动，请退出后重新打开", reason);
+        AddNotice(new AppNotice(CoreStartFailed, reason));
     }
 
     void ApplyStatus(JsonElement s)
@@ -861,16 +829,73 @@ public sealed class AppModel : INotifyPropertyChanged
     void RebuildBanners()
     {
         var list = new List<AppBanner>(statusBanners);
-        if (lastError is { Code: "restore_blocked" } blocked && list.All(b => b.Title != RestoreBlockedTitle))
-            list.Add(RestoreBlockedBanner(blocked.Keys));
-        Banners = list;
+        if (lastError is { Code: "restore_blocked" } blocked)
+        {
+            if (list.All(b => b.Title != RestoreBlockedTitle)) list.Add(RestoreBlockedBanner(blocked.Keys));
+        }
+        else if (lastError is { Code: "config_invalid", Keys.Count: > 0 } invalid)
+            list.Add(new AppBanner(Reason(invalid.Code), "", AppSeverity.Danger, [BannerAction.ShowDetail])
+            {
+                Code = invalid.Code,
+                Keys = invalid.Keys,
+                ConfigPath = configPath,
+            });
+
+        dismissedBanners.IntersectWith(list.Select(BannerKey));
+        Banners = list.Where(b => !dismissedBanners.Contains(BannerKey(b))).ToList();
     }
 
+    static string UpdateUnavailable => CoreErrorMessages.Messages["update_unavailable"];
+
+    static bool HasErrorBanner(CoreErrorInfo? error) =>
+        error is { Code: "restore_blocked" } or { Code: "config_invalid", Keys.Count: > 0 };
+
+    static string BannerKey(AppBanner b) =>
+        string.Join("\n", b.Title, b.Detail, string.Join(",", b.Keys), b.ConfigPath);
+
     AppBanner RestoreBlockedBanner(IReadOnlyList<string> keys) => new(
-        RestoreBlockedTitle,
-        $"有人手动改过本助手写入的设置项：{string.Join("、", keys)}。为了不覆盖这些修改，助手没有改动它。请手动检查 {ConfigPath}，处理后点「重新检查」。",
-        AppSeverity.Danger,
-        [BannerAction.OpenConfigFolder, BannerAction.Recheck]);
+        RestoreBlockedTitle, "有设置项被手动改过。", AppSeverity.Danger, [BannerAction.ShowDetail])
+    {
+        Code = "restore_blocked",
+        Keys = keys,
+        ConfigPath = configPath,
+    };
+
+    void AddNotice(AppNotice notice)
+    {
+        lock (noticeLock)
+        {
+            if (notices.Any(n => n.Title == notice.Title && n.Severity == notice.Severity)) return;
+            Notices = [.. notices, notice];
+        }
+
+        if (notice.Severity is AppSeverity.Success or AppSeverity.Info)
+            _ = DismissAfterDelayAsync(notice.Id, NoticeAutoDismissDelay);
+    }
+
+    async Task DismissAfterDelayAsync(Guid id, TimeSpan delay)
+    {
+        await Task.Delay(delay);
+        RemoveNotice(id);
+    }
+
+    void RemoveNotice(Guid id)
+    {
+        lock (noticeLock)
+        {
+            if (notices.All(n => n.Id != id)) return;
+            Notices = notices.Where(n => n.Id != id).ToList();
+        }
+    }
+
+    void RemoveNotices(params string[] titles)
+    {
+        lock (noticeLock)
+        {
+            if (!notices.Any(n => titles.Contains(n.Title))) return;
+            Notices = notices.Where(n => !titles.Contains(n.Title)).ToList();
+        }
+    }
 
     static string Reason(string code) =>
         CoreErrorMessages.Messages.TryGetValue(code, out var message) ? message : CoreErrorMessages.Messages["internal_error"];

@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
@@ -46,7 +47,7 @@ public partial class App : Application
             new VaultAdapter(new CredentialStore()),
             new SettingsAdapter(new ShellSettings(Path.Combine(localAppData, "ModelBridge"))),
             new LoginAdapter(new LoginItem(installDir)),
-            new ChatGptAdapter(chatGptApp, new ChatGptRestarter(chatGptApp)),
+            new ChatGptAdapter(chatGptApp),
             new WindowConfirmer());
         model.ExitRequested += ExitApp;
 
@@ -97,12 +98,15 @@ public partial class App : Application
     async Task<int> RunHeadlessUninstallAsync()
     {
         await model!.StartAsync();
+        var before = NoticeIds();
         var code = await RunUninstallAsync();
-        if (code == 1 && model.Notice is { } notice)
+        if (code == 1 && model.Notices.LastOrDefault(n => !before.Contains(n.Id)) is { } notice)
             Dialogs.Show(DialogModel.ForInfo(notice.Title, notice.Detail));
         await model.StopCoreAsync();
         return code;
     }
+
+    HashSet<Guid> NoticeIds() => model!.Notices.Select(n => n.Id).ToHashSet();
 
     async Task<int> RunUninstallAsync()
     {
@@ -116,17 +120,18 @@ public partial class App : Application
             else return 2;
         }
 
-        if (code == 0 && model.Uninstalled is { Leftovers.Count: > 0 } outcome)
-            Dialogs.Show(DialogModel.ForInfo("以下内容没能自动清理", "请手动处理：\n· " + string.Join("\n· ", outcome.Leftovers)));
+        if (code == 0 && model.Uninstalled is { } outcome && (outcome.Leftovers.Count > 0 || outcome.ChatGptRunning))
+            Dialogs.Show(DialogModel.ForUninstallFinished(outcome));
         return code;
     }
 
     async Task UninstallFromMenuAsync()
     {
+        var before = NoticeIds();
         var code = await RunUninstallAsync();
         if (code != 0)
         {
-            if (model!.Notice != null) ShowMainWindow();
+            if (model!.Notices.Any(n => !before.Contains(n.Id))) ShowMainWindow();
             return;
         }
 

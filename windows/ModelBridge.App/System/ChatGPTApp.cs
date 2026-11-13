@@ -2,8 +2,6 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
-using System.Threading;
-using System.Threading.Tasks;
 using System.ComponentModel;
 using System.Diagnostics;
 
@@ -45,20 +43,10 @@ public sealed class ChatGptLocator(string localAppData, Func<IEnumerable<string>
     }
 }
 
-public interface IChatGptApp
-{
-    string? Locate();
-    bool IsRunning();
-    Task<bool> RequestCloseAndWaitAsync(TimeSpan timeout, CancellationToken ct);
-    void Launch(string exePath);
-}
-
 public interface IChatGptProcess : IDisposable
 {
     int SessionId { get; }
     string? ExecutablePath { get; }
-    void CloseMainWindow();
-    Task WaitForExitAsync(CancellationToken ct);
 }
 
 sealed class SystemChatGptProcess(Process process) : IChatGptProcess
@@ -74,14 +62,10 @@ sealed class SystemChatGptProcess(Process process) : IChatGptProcess
         }
     }
 
-    public void CloseMainWindow() => process.CloseMainWindow();
-
-    public Task WaitForExitAsync(CancellationToken ct) => process.WaitForExitAsync(ct);
-
     public void Dispose() => process.Dispose();
 }
 
-public sealed class ChatGptApp : IChatGptApp
+public sealed class ChatGptApp
 {
     static readonly string[] ProcessNames = ["ChatGPT", "Codex"];
 
@@ -107,33 +91,6 @@ public sealed class ChatGptApp : IChatGptApp
         DisposeAll(processes);
         return processes.Count > 0;
     }
-
-    public async Task<bool> RequestCloseAndWaitAsync(TimeSpan timeout, CancellationToken ct)
-    {
-        var processes = FindProcesses();
-        try
-        {
-            foreach (var p in processes) p.CloseMainWindow();
-            using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            timeoutCts.CancelAfter(timeout);
-            try
-            {
-                await Task.WhenAll(processes.Select(p => p.WaitForExitAsync(timeoutCts.Token)));
-                return true;
-            }
-            catch (OperationCanceledException) when (!ct.IsCancellationRequested)
-            {
-                return false;
-            }
-        }
-        finally
-        {
-            DisposeAll(processes);
-        }
-    }
-
-    public void Launch(string exePath) =>
-        Process.Start(new ProcessStartInfo(exePath) { UseShellExecute = true })?.Dispose();
 
     static int CurrentSessionId()
     {
@@ -166,49 +123,5 @@ public sealed class ChatGptApp : IChatGptApp
     static void DisposeAll(List<IChatGptProcess> processes)
     {
         foreach (var p in processes) p.Dispose();
-    }
-}
-
-public enum ChatGptRestartResult
-{
-    Restarted,
-    NotFound,
-    CloseTimedOut,
-    OpenFailed,
-    Cancelled,
-}
-
-public sealed class ChatGptRestarter(IChatGptApp app, TimeSpan closeTimeout)
-{
-    public static readonly TimeSpan DefaultCloseTimeout = TimeSpan.FromSeconds(30);
-
-    public ChatGptRestarter(IChatGptApp app) : this(app, DefaultCloseTimeout)
-    {
-    }
-
-    public async Task<ChatGptRestartResult> RestartAsync(CancellationToken ct)
-    {
-        if (ct.IsCancellationRequested) return ChatGptRestartResult.Cancelled;
-        var path = app.Locate();
-        if (path == null) return ChatGptRestartResult.NotFound;
-
-        if (app.IsRunning())
-        {
-            bool closed;
-            try { closed = await app.RequestCloseAndWaitAsync(closeTimeout, ct); }
-            catch (OperationCanceledException) { return ChatGptRestartResult.Cancelled; }
-            catch (Exception ex) when (ex is Win32Exception or InvalidOperationException) { closed = false; }
-            if (!closed) return ChatGptRestartResult.CloseTimedOut;
-        }
-
-        try
-        {
-            app.Launch(path);
-            return ChatGptRestartResult.Restarted;
-        }
-        catch (Exception ex) when (ex is Win32Exception or InvalidOperationException)
-        {
-            return ChatGptRestartResult.OpenFailed;
-        }
     }
 }

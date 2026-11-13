@@ -9,6 +9,8 @@ public partial class SetupWindow : Window
 {
     readonly AppModel model;
     bool closing;
+    object? shownNotices;
+    object? shownTaskError;
 
     public SetupWindow(AppModel appModel)
     {
@@ -21,6 +23,8 @@ public partial class SetupWindow : Window
     }
 
     void OnModelChanged(object? sender, PropertyChangedEventArgs e) => Refresh();
+
+    void OverlaySizeChanged(object sender, SizeChangedEventArgs e) => AlertHost.Width = System.Math.Max(0, Overlay.ActualWidth - 48);
 
     void Refresh()
     {
@@ -36,30 +40,29 @@ public partial class SetupWindow : Window
         SubmitButton.IsEnabled = !model.IsConnecting;
         SubmitButton.Content = model.IsConnecting ? "正在连接中台…" : "完成设置";
 
-        var errors = new List<UIElement>();
-        if (model.TaskError is { } error)
-            errors.Add(AlertView.Create(AppSeverity.Danger, error.Title, error.Detail));
-        if (model.Notice is { } notice && !done)
-            errors.Add(AlertView.Create(notice.Severity, notice.Title, notice.Detail));
-        AlertView.Fill(ErrorHost, errors);
+        DoneTitle.Text = model.SuccessTitle;
+        DoneText.Text = model.SuccessText;
 
-        var summary = new List<UIElement> { AlertView.Create(AppSeverity.Success, model.SuccessTitle, model.SuccessText) };
-        if (model.Notice is { } warning && done)
-            summary.Add(AlertView.Create(warning.Severity, warning.Title, warning.Detail));
-        AlertView.Fill(DoneHost, summary);
+        if (ReferenceEquals(shownNotices, model.Notices) && ReferenceEquals(shownTaskError, model.TaskError)) return;
+        shownNotices = model.Notices;
+        shownTaskError = model.TaskError;
+        var alerts = new List<UIElement>();
+        if (model.TaskError is { } error)
+            alerts.Add(AlertView.Create(AppSeverity.Danger, error.Title, error.Detail, model.DismissTaskError));
+        foreach (var notice in model.Notices)
+            alerts.Add(AlertView.Create(notice.Severity, notice.Title, notice.Detail, () => model.DismissNotice(notice.Id)));
+        AlertView.Fill(AlertHost, alerts);
     }
 
     async void SubmitClick(object sender, RoutedEventArgs e) => await model.CompleteSetupAsync();
 
-    async void LaterClick(object sender, RoutedEventArgs e) => await model.FinishSetupAsync(false);
-
-    async void RestartClick(object sender, RoutedEventArgs e) => await model.FinishSetupAsync(true);
+    void FinishClick(object sender, RoutedEventArgs e) => model.FinishSetup();
 
     protected override void OnClosing(CancelEventArgs e)
     {
         base.OnClosing(e);
         closing = true;
-        if (model.Page == AppPage.Success) _ = model.FinishSetupAsync(false);
+        if (model.Page == AppPage.Success) model.FinishSetup();
         else if (model.Page == AppPage.Setup) _ = model.QuitAsync();
     }
 }
