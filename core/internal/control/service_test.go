@@ -22,7 +22,9 @@ import (
 	"testing"
 
 	"github.com/klauspost/compress/zstd"
+	"github.com/pelletier/go-toml/v2"
 
+	"modelbridge/internal/codexauth"
 	"modelbridge/internal/control"
 )
 
@@ -167,6 +169,7 @@ type env struct {
 	codexPath  string
 	listenAddr string
 	relay      *fakeRelay
+	detect     *fakeDetect
 	opts       control.Options
 	svc        *control.Service
 	shutDown   bool
@@ -214,6 +217,9 @@ func newEnv(t *testing.T, forwarding bool, mods ...func(*env)) *env {
 			e.updates = append(e.updates, s)
 			e.mu.Unlock()
 		},
+	}
+	if e.detect != nil {
+		e.opts.DetectLogin = e.detect.fn
 	}
 	e.svc = control.NewService(e.opts)
 	t.Cleanup(func() {
@@ -1242,5 +1248,681 @@ func TestForwarding_ParamsTableModel_NoReasoningFieldsAdded(t *testing.T) {
 				t.Errorf("中台收到的请求体 = %s，期望字段集合 %v（只有 model 改回原名）", bodies[0], tt.want)
 			}
 		})
+	}
+}
+
+type fakeDetect struct {
+	mu     sync.Mutex
+	result codexauth.Result
+	calls  int
+	paths  []string
+}
+
+func (d *fakeDetect) fn(_ context.Context, codexPath string) codexauth.Result {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.calls++
+	d.paths = append(d.paths, codexPath)
+	return d.result
+}
+
+func (d *fakeDetect) set(r codexauth.Result) {
+	d.mu.Lock()
+	d.result = r
+	d.mu.Unlock()
+}
+
+func (d *fakeDetect) count() int {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.calls
+}
+
+func withDetect(r codexauth.Result) func(*env) {
+	return func(e *env) { e.detect = &fakeDetect{result: r} }
+}
+
+func withSettings(content string) func(*env) {
+	return func(e *env) {
+		if err := os.WriteFile(filepath.Join(e.dataDir, "settings.json"), []byte(content), 0o644); err != nil {
+			panic(err)
+		}
+	}
+}
+
+func accessOf(t *testing.T, st control.Status) map[string]any {
+	t.Helper()
+	raw, err := json.Marshal(st)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var m map[string]any
+	if err := json.Unmarshal(raw, &m); err != nil {
+		t.Fatal(err)
+	}
+	acc, ok := m["access"].(map[string]any)
+	if !ok {
+		t.Fatalf("状态里没有 access 对象: %s", raw)
+	}
+	return acc
+}
+
+func requireAccess(t *testing.T, st control.Status, mode, target, detect any) {
+	t.Helper()
+	want := map[string]any{"mode": mode, "target": target, "detect": detect}
+	if got := accessOf(t, st); !reflect.DeepEqual(got, want) {
+		t.Errorf("access = %v, want %v", got, want)
+	}
+}
+
+func settingsJSON(t *testing.T, e *env) map[string]any {
+	t.Helper()
+	var m map[string]any
+	if err := json.Unmarshal([]byte(readFile(t, filepath.Join(e.dataDir, "settings.json"))), &m); err != nil {
+		t.Fatal(err)
+	}
+	return m
+}
+
+func parseConfig(cfg string) map[string]any {
+	var m map[string]any
+	if err := toml.Unmarshal([]byte(cfg), &m); err != nil {
+		return nil
+	}
+	return m
+}
+
+func isRelayConfig(cfg string) bool {
+	m := parseConfig(cfg)
+	providers, _ := m["model_providers"].(map[string]any)
+	_, hasProvider := providers["modelbridge"].(map[string]any)
+	return m != nil && m["model_provider"] == "modelbridge" && hasProvider &&
+		m["openai_base_url"] == "https://old.example.com/v1"
+}
+
+func isBothConfig(cfg string) bool {
+	m := parseConfig(cfg)
+	return m != nil && m["openai_base_url"] == proxyURLInConfig && m["model_provider"] != "modelbridge"
+}
+
+func requireRelayOnlyCatalog(t *testing.T, e *env) {
+	t.Helper()
+	slugs := catalogSlugs(catalogModels(t, e))
+	if len(slugs) == 0 {
+		t.Fatal("中台方式的目录不该为空")
+	}
+	for _, s := range slugs {
+		if !strings.HasPrefix(s.(string), "relay-") {
+			t.Errorf("目录里出现非中台条目 %v, 全部: %v", s, slugs)
+		}
+	}
+}
+
+func postStatusBody(t *testing.T, addr, model string) (int, string) {
+	t.Helper()
+	resp, err := http.Post("http://"+addr+"/v1/chat/completions", "application/json", strings.NewReader(`{"model":"`+model+`"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	b, _ := io.ReadAll(resp.Body)
+	return resp.StatusCode, string(b)
+}
+
+func writeLoginFakeCodex(t *testing.T, loginStderr string, loginExit int) string {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("shell 脚本")
+	}
+	dir := t.TempDir()
+	out := filepath.Join(dir, "out.json")
+	if err := os.WriteFile(out, []byte(officialJSON), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	script := filepath.Join(dir, "codex")
+	body := "#!/bin/sh\nif [ \"$1\" = login ]; then\n  printf '%s\\n' '" + loginStderr + "' >&2\n  exit " + strconv.Itoa(loginExit) + "\nfi\ncat '" + out + "'\n"
+	if err := os.WriteFile(script, []byte(body), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return script
+}
+
+func TestAccess_OpenForwardingRelay(t *testing.T) {
+	e := newEnv(t, false, withDetect(codexauth.NotLoggedIn))
+	e.initRelay(t)
+	st, err := e.svc.SetForwarding(context.Background(), true)
+	if err != nil {
+		t.Fatalf("SetForwarding: %v", err)
+	}
+	requireAccess(t, st, "relay", "relay", "not_logged_in")
+	if cfg := e.config(t); !isRelayConfig(cfg) {
+		t.Errorf("配置不是中台写法: %q", cfg)
+	}
+	requireRelayOnlyCatalog(t, e)
+	code, body := postStatusBody(t, e.listenAddr, "gpt-a")
+	if code != http.StatusBadRequest {
+		t.Errorf("官方模型请求状态码 = %d, want 400", code)
+	}
+	var parsed struct {
+		Error struct {
+			Code string `json:"code"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal([]byte(body), &parsed); err != nil || parsed.Error.Code != "official_unavailable" {
+		t.Errorf("正文 = %q (%v), want error.code official_unavailable", body, err)
+	}
+	if got := e.detect.paths; len(got) != 1 || got[0] != e.codexPath {
+		t.Errorf("检测收到的 codex 路径 = %v, want [%s]", got, e.codexPath)
+	}
+}
+
+func TestAccess_OpenForwardingBoth(t *testing.T) {
+	e := newEnv(t, false, withDetect(codexauth.LoggedIn))
+	e.initRelay(t)
+	st, err := e.svc.SetForwarding(context.Background(), true)
+	if err != nil {
+		t.Fatalf("SetForwarding: %v", err)
+	}
+	requireAccess(t, st, "both", "both", "logged_in")
+	cfg := e.config(t)
+	if !isBothConfig(cfg) || !strings.Contains(cfg, e.catalogPath()) {
+		t.Errorf("配置不是官方加中台写法: %q", cfg)
+	}
+	slugs := catalogSlugs(catalogModels(t, e))
+	if !slices.Contains(slugs, any("gpt-a")) || !slices.Contains(slugs, any("relay-deepseek-flash")) {
+		t.Errorf("目录应含官方和中台条目: %v", slugs)
+	}
+	if code := postViaProxy(t, e.listenAddr, "relay-deepseek-flash"); code != http.StatusOK {
+		t.Errorf("中台模型转发状态码 = %d", code)
+	}
+}
+
+func TestAccess_FailedFallsBackToLastDetected(t *testing.T) {
+	tests := []struct {
+		name       string
+		settings   string
+		wantTarget string
+		recorded   any
+	}{
+		{"上次成功是 both", `{"forwarding":false,"last_detected_mode":"both"}`, "both", "both"},
+		{"上次成功是 relay", `{"forwarding":false,"last_detected_mode":"relay"}`, "relay", "relay"},
+		{"从没成功过", `{"forwarding":false}`, "relay", nil},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			e := newEnv(t, false, withDetect(codexauth.Failed), withSettings(tt.settings))
+			e.initRelay(t)
+			st, err := e.svc.SetForwarding(context.Background(), true)
+			if err != nil {
+				t.Fatal(err)
+			}
+			requireAccess(t, st, tt.wantTarget, tt.wantTarget, "failed")
+			if got := settingsJSON(t, e)["last_detected_mode"]; got != tt.recorded {
+				t.Errorf("失败不该改写 last_detected_mode: %v, want %v", got, tt.recorded)
+			}
+		})
+	}
+}
+
+func TestAccess_SuccessfulDetectIsRemembered(t *testing.T) {
+	tests := []struct {
+		name   string
+		result codexauth.Result
+		want   string
+	}{
+		{"已登录记 both", codexauth.LoggedIn, "both"},
+		{"未登录记 relay", codexauth.NotLoggedIn, "relay"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			e := newEnv(t, false, withDetect(tt.result))
+			e.initRelay(t)
+			if _, err := e.svc.SetForwarding(context.Background(), true); err != nil {
+				t.Fatal(err)
+			}
+			if got := settingsJSON(t, e)["last_detected_mode"]; got != tt.want {
+				t.Errorf("last_detected_mode = %v, want %s", got, tt.want)
+			}
+		})
+	}
+
+	t.Run("重启后检测失败仍按记住的方式", func(t *testing.T) {
+		e := newEnv(t, false, withDetect(codexauth.LoggedIn))
+		e.initRelay(t)
+		if _, err := e.svc.SetForwarding(context.Background(), true); err != nil {
+			t.Fatal(err)
+		}
+		if err := e.svc.Shutdown(context.Background(), false); err != nil {
+			t.Fatal(err)
+		}
+		e.detect.set(codexauth.Failed)
+		restarted := control.NewService(e.opts)
+		t.Cleanup(func() { _ = restarted.Shutdown(context.Background(), false) })
+		st, err := restarted.Init(context.Background(), control.InitParams{BaseURL: ptr(e.relay.baseURL()), APIKey: ptr(keyA)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		requireAccess(t, st, "both", "both", "failed")
+	})
+
+	t.Run("同一服务里检测失败沿用上次成功", func(t *testing.T) {
+		e := newEnv(t, false, withDetect(codexauth.LoggedIn))
+		e.initRelay(t)
+		if _, err := e.svc.SetForwarding(context.Background(), true); err != nil {
+			t.Fatal(err)
+		}
+		e.detect.set(codexauth.Failed)
+		st, err := e.svc.DetectAccess(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		requireAccess(t, st, "both", "both", "failed")
+	})
+}
+
+func TestAccess_InitRestoresRecordedModeThenDetects(t *testing.T) {
+	tests := []struct {
+		name     string
+		settings string
+	}{
+		{"记录为 both", `{"forwarding":true,"access_mode":"both"}`},
+		{"没有记录按 both", `{"forwarding":true}`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := context.Background()
+			e := newEnv(t, true, withDetect(codexauth.NotLoggedIn), withSettings(tt.settings))
+			st := e.initRelay(t)
+			if cfg := e.config(t); !isBothConfig(cfg) {
+				t.Errorf("Init 应先按 both 写法恢复: %q", cfg)
+			}
+			requireAccess(t, st, "both", "relay", "not_logged_in")
+
+			st, err := e.svc.ApplyAccess(ctx)
+			if err != nil {
+				t.Fatalf("ApplyAccess: %v", err)
+			}
+			requireAccess(t, st, "relay", "relay", "not_logged_in")
+			applied := e.config(t)
+			if !isRelayConfig(applied) {
+				t.Fatalf("切换后不是中台写法: %q", applied)
+			}
+			requireRelayOnlyCatalog(t, e)
+			if got := settingsJSON(t, e)["access_mode"]; got != "relay" {
+				t.Errorf("access_mode = %v, want relay", got)
+			}
+
+			if _, err := e.svc.SetForwarding(ctx, false); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := e.svc.SetForwarding(ctx, true); err != nil {
+				t.Fatal(err)
+			}
+			if fresh := e.config(t); fresh != applied {
+				t.Errorf("切换结果与关闭后重新打开不一致:\n%q\n%q", applied, fresh)
+			}
+		})
+	}
+}
+
+func TestAccess_InitRestoresRecordedRelay(t *testing.T) {
+	e := newEnv(t, true, withDetect(codexauth.LoggedIn), withSettings(`{"forwarding":true,"access_mode":"relay"}`))
+	st := e.initRelay(t)
+	if cfg := e.config(t); !isRelayConfig(cfg) {
+		t.Errorf("Init 应按记录的 relay 写法恢复: %q", cfg)
+	}
+	requireAccess(t, st, "relay", "both", "logged_in")
+}
+
+func TestAccess_ApplyAccessNoChange(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("方式相同", func(t *testing.T) {
+		for _, tt := range []struct {
+			name   string
+			result codexauth.Result
+		}{{"both", codexauth.LoggedIn}, {"relay", codexauth.NotLoggedIn}} {
+			t.Run(tt.name, func(t *testing.T) {
+				e := newEnv(t, false, withDetect(tt.result))
+				e.initRelay(t)
+				if _, err := e.svc.SetForwarding(ctx, true); err != nil {
+					t.Fatal(err)
+				}
+				before := e.config(t)
+				st, err := e.svc.ApplyAccess(ctx)
+				if err != nil {
+					t.Fatalf("ApplyAccess: %v", err)
+				}
+				if e.config(t) != before {
+					t.Errorf("配置被改动: %q", e.config(t))
+				}
+				requireAccess(t, st, tt.name, tt.name, map[codexauth.Result]string{codexauth.LoggedIn: "logged_in", codexauth.NotLoggedIn: "not_logged_in"}[tt.result])
+			})
+		}
+	})
+
+	t.Run("转发关着", func(t *testing.T) {
+		e := newEnv(t, false, withDetect(codexauth.NotLoggedIn))
+		e.initRelay(t)
+		if _, err := e.svc.DetectAccess(ctx); err != nil {
+			t.Fatal(err)
+		}
+		st, err := e.svc.ApplyAccess(ctx)
+		if err != nil {
+			t.Fatalf("ApplyAccess: %v", err)
+		}
+		if e.config(t) != originalConfig {
+			t.Errorf("配置被改动: %q", e.config(t))
+		}
+		if exists(e.catalogPath()) {
+			t.Error("转发关着不该生成目录")
+		}
+		requireAccess(t, st, nil, "relay", "not_logged_in")
+	})
+}
+
+func TestAccess_ApplyAccessKeepsHandEdit(t *testing.T) {
+	ctx := context.Background()
+	e := newEnv(t, false, withDetect(codexauth.LoggedIn))
+	e.initRelay(t)
+	if _, err := e.svc.SetForwarding(ctx, true); err != nil {
+		t.Fatal(err)
+	}
+	e.handEditBaseURL(t)
+	e.detect.set(codexauth.NotLoggedIn)
+	if _, err := e.svc.DetectAccess(ctx); err != nil {
+		t.Fatal(err)
+	}
+	st, err := e.svc.ApplyAccess(ctx)
+	if err != nil {
+		t.Fatalf("ApplyAccess: %v", err)
+	}
+	requireAccess(t, st, "relay", "relay", "not_logged_in")
+	cfg := e.config(t)
+	if !strings.Contains(cfg, "openai_base_url") || !strings.Contains(cfg, "http://proxy.example.org/v1") {
+		t.Errorf("手改的 openai_base_url 应保留: %q", cfg)
+	}
+	if !strings.Contains(cfg, `model_provider = "modelbridge"`) || !strings.Contains(cfg, "model_providers.modelbridge") {
+		t.Errorf("其余项应是中台写法: %q", cfg)
+	}
+}
+
+func TestAccess_DetectAccessOnlyUpdatesTargetAndDetect(t *testing.T) {
+	ctx := context.Background()
+	e := newEnv(t, false, withDetect(codexauth.LoggedIn))
+	e.initRelay(t)
+	if _, err := e.svc.SetForwarding(ctx, true); err != nil {
+		t.Fatal(err)
+	}
+	before := e.config(t)
+	e.detect.set(codexauth.NotLoggedIn)
+	st, err := e.svc.DetectAccess(ctx)
+	if err != nil {
+		t.Fatalf("DetectAccess: %v", err)
+	}
+	requireAccess(t, st, "both", "relay", "not_logged_in")
+	if e.config(t) != before {
+		t.Errorf("配置被改动: %q", e.config(t))
+	}
+	if got := settingsJSON(t, e)["last_detected_mode"]; got != "relay" {
+		t.Errorf("last_detected_mode = %v, want relay", got)
+	}
+	if e.detect.count() != 2 {
+		t.Errorf("检测次数 = %d, want 2 (打开转发一次, DetectAccess 一次)", e.detect.count())
+	}
+}
+
+func TestAccess_InitWithForwardingOffDoesNotDetect(t *testing.T) {
+	e := newEnv(t, false, withDetect(codexauth.NotLoggedIn))
+	st := e.initRelay(t)
+	if e.detect.count() != 0 {
+		t.Errorf("检测次数 = %d, want 0", e.detect.count())
+	}
+	requireAccess(t, st, nil, nil, nil)
+}
+
+func TestAccess_InitWithForwardingOnDetectsOnce(t *testing.T) {
+	e := newEnv(t, true, withDetect(codexauth.LoggedIn))
+	e.initRelay(t)
+	if e.detect.count() != 1 {
+		t.Errorf("检测次数 = %d, want 1", e.detect.count())
+	}
+}
+
+func TestAccess_CloseForwardingRestoresAndClearsMode(t *testing.T) {
+	for _, tt := range []struct {
+		name   string
+		result codexauth.Result
+	}{{"both", codexauth.LoggedIn}, {"relay", codexauth.NotLoggedIn}} {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := context.Background()
+			e := newEnv(t, false, withDetect(tt.result))
+			e.initRelay(t)
+			if _, err := e.svc.SetForwarding(ctx, true); err != nil {
+				t.Fatal(err)
+			}
+			calls := e.detect.count()
+			st, err := e.svc.SetForwarding(ctx, false)
+			if err != nil {
+				t.Fatalf("SetForwarding(false): %v", err)
+			}
+			if e.config(t) != originalConfig {
+				t.Errorf("配置没还原: %q", e.config(t))
+			}
+			if got := accessOf(t, st)["mode"]; got != nil {
+				t.Errorf("access.mode = %v, want null", got)
+			}
+			if e.detect.count() != calls {
+				t.Errorf("关闭转发不该检测: %d -> %d", calls, e.detect.count())
+			}
+		})
+	}
+}
+
+func TestAccess_RelaySurvivesSaveConnectionAndRefreshModels(t *testing.T) {
+	ctx := context.Background()
+	e := newEnv(t, false, withDetect(codexauth.NotLoggedIn))
+	e.initRelay(t)
+	if _, err := e.svc.SetForwarding(ctx, true); err != nil {
+		t.Fatal(err)
+	}
+	other := newFakeRelay(t, []string{"deepseek-flash", "gpt-a"}, keyB)
+
+	if _, err := e.svc.SaveConnection(ctx, other.baseURL(), keyB); err != nil {
+		t.Fatalf("SaveConnection: %v", err)
+	}
+	if cfg := e.config(t); !isRelayConfig(cfg) {
+		t.Errorf("保存连接后配置不是中台写法: %q", cfg)
+	}
+	requireRelayOnlyCatalog(t, e)
+
+	other.setIDs("deepseek-flash")
+	st, err := e.svc.RefreshModels(ctx)
+	if err != nil {
+		t.Fatalf("RefreshModels: %v", err)
+	}
+	if cfg := e.config(t); !isRelayConfig(cfg) {
+		t.Errorf("重新获取模型后配置不是中台写法: %q", cfg)
+	}
+	requireRelayOnlyCatalog(t, e)
+	requireAccess(t, st, "relay", "relay", "not_logged_in")
+}
+
+func TestAccess_DefaultDetectionUsesCodexLoginStatus(t *testing.T) {
+	const marker = "SECRET-LOGIN-OUTPUT-XYZ"
+	ctx := context.Background()
+
+	t.Run("Not logged in 得到 relay", func(t *testing.T) {
+		e := newEnv(t, false, func(e *env) { e.codexPath = writeLoginFakeCodex(t, "Not logged in", 1) })
+		e.initRelay(t)
+		st, err := e.svc.SetForwarding(ctx, true)
+		if err != nil {
+			t.Fatal(err)
+		}
+		requireAccess(t, st, "relay", "relay", "not_logged_in")
+	})
+
+	t.Run("检测命令的输出不进入状态日志和数据目录", func(t *testing.T) {
+		e := newEnv(t, true, func(e *env) { e.codexPath = writeLoginFakeCodex(t, marker, 1) })
+		e.initRelay(t)
+		st, err := e.svc.DetectAccess(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		requireAccess(t, st, "both", "relay", "failed")
+		raw, _ := json.Marshal(st)
+		if bytes.Contains(raw, []byte(marker)) {
+			t.Errorf("状态里出现检测输出: %s", raw)
+		}
+		e.mu.Lock()
+		for _, u := range e.updates {
+			if b, _ := json.Marshal(u); bytes.Contains(b, []byte(marker)) {
+				t.Errorf("推送的状态里出现检测输出: %s", b)
+			}
+		}
+		e.mu.Unlock()
+		entries, _ := os.ReadDir(e.dataDir)
+		for _, ent := range entries {
+			if ent.IsDir() {
+				continue
+			}
+			if strings.Contains(readFile(t, filepath.Join(e.dataDir, ent.Name())), marker) {
+				t.Errorf("%s 里出现检测输出", ent.Name())
+			}
+		}
+	})
+}
+
+func breakRelayWrite(t *testing.T, e *env) {
+	t.Helper()
+	if err := os.WriteFile(e.configPath, []byte("model_providers = \"oops\"\n"+e.config(t)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestAccess_ApplyAccessFailureRestoresState(t *testing.T) {
+	ctx := context.Background()
+	var officialHits int
+	var hitsMu sync.Mutex
+	official := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hitsMu.Lock()
+		officialHits++
+		hitsMu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{}`)
+	}))
+	t.Cleanup(official.Close)
+
+	e := newEnv(t, false, withDetect(codexauth.LoggedIn))
+	e.opts.OfficialAPIURL = official.URL + "/v1"
+	e.svc = control.NewService(e.opts)
+	e.initRelay(t)
+	if _, err := e.svc.SetForwarding(ctx, true); err != nil {
+		t.Fatal(err)
+	}
+	e.detect.set(codexauth.NotLoggedIn)
+	if _, err := e.svc.DetectAccess(ctx); err != nil {
+		t.Fatal(err)
+	}
+	breakRelayWrite(t, e)
+	slugsBefore := catalogSlugs(catalogModels(t, e))
+
+	if _, err := e.svc.ApplyAccess(ctx); err == nil {
+		t.Fatal("relay 写法写入失败时 ApplyAccess 应返回错误")
+	}
+	st := e.svc.Status()
+	if got := accessOf(t, st)["mode"]; got != "both" {
+		t.Errorf("access.mode = %v, want both", got)
+	}
+	if !st.Proxy.Running {
+		t.Error("转发服务应仍在运行")
+	}
+	if got := catalogSlugs(catalogModels(t, e)); !reflect.DeepEqual(got, slugsBefore) || !slices.Contains(got, any("gpt-a")) {
+		t.Errorf("目录应与切换前一致且含官方条目: %v, 切换前 %v", got, slugsBefore)
+	}
+	if code := postViaProxy(t, e.listenAddr, "gpt-a"); code != http.StatusOK {
+		t.Errorf("官方模型请求状态码 = %d, want 200 (转发到官方)", code)
+	}
+	hitsMu.Lock()
+	defer hitsMu.Unlock()
+	if officialHits != 1 {
+		t.Errorf("官方服务收到 %d 次请求, want 1", officialHits)
+	}
+}
+
+func TestAccess_SetForwardingTrueFailureKeepsMode(t *testing.T) {
+	ctx := context.Background()
+	e := newEnv(t, false, withDetect(codexauth.LoggedIn))
+	e.initRelay(t)
+	if _, err := e.svc.SetForwarding(ctx, true); err != nil {
+		t.Fatal(err)
+	}
+	e.detect.set(codexauth.NotLoggedIn)
+	breakRelayWrite(t, e)
+
+	if _, err := e.svc.SetForwarding(ctx, true); err == nil {
+		t.Fatal("写入失败时 SetForwarding(true) 应返回错误")
+	}
+	if got := accessOf(t, e.svc.Status())["mode"]; got != "both" {
+		t.Errorf("access.mode = %v, want both", got)
+	}
+}
+
+func TestAccess_InvalidLastDetectedModeTreatedAsNone(t *testing.T) {
+	ctx := context.Background()
+	e := newEnv(t, true, withDetect(codexauth.Failed), withSettings(`{"forwarding":true,"last_detected_mode":"x"}`))
+	st := e.initRelay(t)
+	if got := accessOf(t, st)["target"]; got != "relay" {
+		t.Errorf("target = %v, want relay", got)
+	}
+	st, err := e.svc.ApplyAccess(ctx)
+	if err != nil {
+		t.Fatalf("ApplyAccess: %v", err)
+	}
+	if got := accessOf(t, st)["mode"]; got != "relay" {
+		t.Errorf("mode = %v, want relay", got)
+	}
+	if got := settingsJSON(t, e)["access_mode"]; got != "relay" {
+		t.Errorf("access_mode = %v, want relay", got)
+	}
+}
+
+func TestAccess_CloseForwardingClearsAccessModeKeepsLastDetected(t *testing.T) {
+	ctx := context.Background()
+	e := newEnv(t, false, withDetect(codexauth.NotLoggedIn))
+	e.initRelay(t)
+	if _, err := e.svc.SetForwarding(ctx, true); err != nil {
+		t.Fatal(err)
+	}
+	if settingsJSON(t, e)["access_mode"] == nil {
+		t.Fatal("打开转发后 access_mode 应已记录")
+	}
+	if _, err := e.svc.SetForwarding(ctx, false); err != nil {
+		t.Fatal(err)
+	}
+	s := settingsJSON(t, e)
+	if s["access_mode"] != nil {
+		t.Errorf("access_mode = %v, want null", s["access_mode"])
+	}
+	if s["last_detected_mode"] != "relay" {
+		t.Errorf("last_detected_mode = %v, want relay", s["last_detected_mode"])
+	}
+}
+
+func TestAccess_CloseForwardingRestoreBlockedClearsMode(t *testing.T) {
+	ctx := context.Background()
+	e := newEnv(t, false, withDetect(codexauth.LoggedIn))
+	e.initRelay(t)
+	if _, err := e.svc.SetForwarding(ctx, true); err != nil {
+		t.Fatal(err)
+	}
+	e.handEditBaseURL(t)
+	_, err := e.svc.SetForwarding(ctx, false)
+	requireCode(t, err, "restore_blocked")
+	if got := accessOf(t, e.svc.Status())["mode"]; got != nil {
+		t.Errorf("access.mode = %v, want null", got)
+	}
+	if got := settingsJSON(t, e)["access_mode"]; got != nil {
+		t.Errorf("access_mode = %v, want null", got)
 	}
 }

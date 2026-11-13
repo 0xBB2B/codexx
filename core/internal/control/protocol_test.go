@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"modelbridge/internal/codexauth"
 	"modelbridge/internal/control"
 )
 
@@ -434,5 +435,45 @@ func TestProtocolDoc_MatchesImplementation(t *testing.T) {
 		if !strings.Contains(doc, want) {
 			t.Errorf("PROTOCOL.md 缺少 %q", want)
 		}
+	}
+}
+
+func TestServe_AccessMethods(t *testing.T) {
+	e := newEnv(t, true, withDetect(codexauth.LoggedIn))
+	c := startServe(t, e.opts)
+	res := c.result("init", initParams(e))
+	if want := map[string]any{"mode": "both", "target": "both", "detect": "logged_in"}; !reflect.DeepEqual(res["access"], want) {
+		t.Errorf("init access = %v, want %v", res["access"], want)
+	}
+
+	e.detect.set(codexauth.NotLoggedIn)
+	res = c.result("detect_access", nil)
+	if want := map[string]any{"mode": "both", "target": "relay", "detect": "not_logged_in"}; !reflect.DeepEqual(res["access"], want) {
+		t.Errorf("detect_access access = %v, want %v", res["access"], want)
+	}
+	for _, k := range []string{"version", "forwarding", "proxy", "relay", "config_path"} {
+		if _, ok := res[k]; !ok {
+			t.Errorf("detect_access 应返回完整状态, 缺少 %q", k)
+		}
+	}
+
+	res = c.result("apply_access", map[string]any{})
+	if want := map[string]any{"mode": "relay", "target": "relay", "detect": "not_logged_in"}; !reflect.DeepEqual(res["access"], want) {
+		t.Errorf("apply_access access = %v, want %v", res["access"], want)
+	}
+	if cfg := e.config(t); !isRelayConfig(cfg) {
+		t.Errorf("apply_access 后配置不是中台写法: %q", cfg)
+	}
+	if again := c.result("status", nil); !reflect.DeepEqual(again["access"], res["access"]) {
+		t.Errorf("status.access = %v, want %v", again["access"], res["access"])
+	}
+}
+
+func TestServe_AccessNullWhenForwardingOff(t *testing.T) {
+	e := newEnv(t, false, withDetect(codexauth.LoggedIn))
+	c := startServe(t, e.opts)
+	res := c.result("init", initParams(e))
+	if want := map[string]any{"mode": nil, "target": nil, "detect": nil}; !reflect.DeepEqual(res["access"], want) {
+		t.Errorf("access = %v, want %v", res["access"], want)
 	}
 }

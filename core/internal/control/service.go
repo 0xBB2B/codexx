@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"modelbridge/internal/catalog"
+	"modelbridge/internal/codexauth"
 	"modelbridge/internal/codexconfig"
 	"modelbridge/internal/proxy"
 	"modelbridge/internal/update"
@@ -42,6 +43,18 @@ type Options struct {
 	UpdateAPIBase      string
 	UpdateRepository   string
 	UpdateClock        update.Clock
+	DetectLogin        func(ctx context.Context, codexPath string) codexauth.Result
+}
+
+const (
+	modeBoth  = "both"
+	modeRelay = "relay"
+)
+
+type AccessStatus struct {
+	Mode   *string `json:"mode"`
+	Target *string `json:"target"`
+	Detect *string `json:"detect"`
 }
 
 type Error struct {
@@ -83,6 +96,7 @@ type Status struct {
 	RestoreBlocked []string      `json:"restore_blocked"`
 	ConfigPath     string        `json:"config_path"`
 	Update         UpdateInfo    `json:"update"`
+	Access         AccessStatus  `json:"access"`
 }
 
 type InitParams struct {
@@ -125,6 +139,10 @@ type Service struct {
 	takenOver      []string
 	restoreBlocked []string
 	update         UpdateInfo
+	settings       Settings
+	accessMode     string
+	accessTarget   string
+	accessDetect   string
 }
 
 func NewService(opts Options) *Service {
@@ -143,7 +161,9 @@ func (s *Service) Init(ctx context.Context, p InitParams) (Status, error) {
 	if err != nil {
 		return s.statusLocked(), toError(err)
 	}
+	s.settings = set
 	s.forwarding = set.Forwarding
+	s.accessMode = ""
 	s.baseURL, s.apiKey, s.chatgptDir = deref(p.BaseURL), deref(p.APIKey), deref(p.ChatGPTDir)
 	s.takenOver, _ = codexconfig.TakenOverKeys(s.configCfg())
 	s.restoreBlocked = nil
@@ -152,7 +172,12 @@ func (s *Service) Init(ctx context.Context, p InitParams) (Status, error) {
 	}
 
 	if s.forwarding {
+		s.accessMode = modeBoth
+		if set.AccessMode != nil && *set.AccessMode == modeRelay {
+			s.accessMode = modeRelay
+		}
 		_ = s.activate(ctx)
+		_ = s.detect(ctx)
 	} else {
 		_, err := s.locateCodex()
 		s.chatgptFound, s.chatgptErr = err == nil, errCode(err)
@@ -198,11 +223,20 @@ func (s *Service) SetForwarding(ctx context.Context, enabled bool) (Status, erro
 	defer s.notifyLocked()
 
 	if enabled {
+		if err := s.detect(ctx); err != nil {
+			return s.statusLocked(), toError(err)
+		}
+		prev := s.accessMode
+		s.accessMode = s.accessTarget
 		if err := s.activate(ctx); err != nil {
+			s.accessMode = prev
+			if s.forwarding {
+				_ = s.activate(ctx)
+			}
 			return s.statusLocked(), toError(err)
 		}
 		s.forwarding = true
-		if err := SaveSettings(s.opts.DataDir, Settings{Forwarding: true}); err != nil {
+		if err := s.saveSettings(); err != nil {
 			return s.statusLocked(), toError(err)
 		}
 		return s.statusLocked(), nil
@@ -216,18 +250,88 @@ func (s *Service) SetForwarding(ctx context.Context, enabled bool) (Status, erro
 	}
 	s.stopProxy()
 	s.forwarding = false
+	s.accessMode = ""
 	s.takenOver = nil
 	s.restoreBlocked = nil
 	if blocked {
 		s.restoreBlocked = ce.Keys
 	}
-	if err := SaveSettings(s.opts.DataDir, Settings{Forwarding: false}); err != nil {
+	if err := s.saveSettings(); err != nil {
 		return s.statusLocked(), toError(err)
 	}
 	if restoreErr != nil {
 		return s.statusLocked(), toError(restoreErr)
 	}
 	return s.statusLocked(), nil
+}
+
+func (s *Service) DetectAccess(ctx context.Context) (Status, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	defer s.notifyLocked()
+
+	if err := s.detect(ctx); err != nil {
+		return s.statusLocked(), toError(err)
+	}
+	return s.statusLocked(), nil
+}
+
+func (s *Service) ApplyAccess(ctx context.Context) (Status, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	defer s.notifyLocked()
+
+	if !s.forwarding || s.accessTarget == "" || s.accessTarget == s.accessMode {
+		return s.statusLocked(), nil
+	}
+	prev := s.accessMode
+	s.accessMode = s.accessTarget
+	if err := s.activate(ctx); err != nil {
+		s.accessMode = prev
+		_ = s.activate(ctx)
+		return s.statusLocked(), toError(err)
+	}
+	if err := s.saveSettings(); err != nil {
+		return s.statusLocked(), toError(err)
+	}
+	return s.statusLocked(), nil
+}
+
+func (s *Service) detect(ctx context.Context) error {
+	result := codexauth.Failed
+	if codex, err := s.locateCodex(); err == nil {
+		detect := s.opts.DetectLogin
+		if detect == nil {
+			detect = codexauth.Detect
+		}
+		result = detect(ctx, codex)
+	}
+	s.accessDetect = string(result)
+	switch result {
+	case codexauth.LoggedIn:
+		s.accessTarget = modeBoth
+	case codexauth.NotLoggedIn:
+		s.accessTarget = modeRelay
+	default:
+		s.accessTarget = modeRelay
+		if last := s.settings.LastDetectedMode; last != nil && (*last == modeBoth || *last == modeRelay) {
+			s.accessTarget = *last
+		}
+		return nil
+	}
+	last := s.accessTarget
+	s.settings.LastDetectedMode = &last
+	return s.saveSettings()
+}
+
+func (s *Service) saveSettings() error {
+	s.settings.Forwarding = s.forwarding
+	s.settings.AccessMode = nil
+	if s.forwarding {
+		mode := s.accessMode
+		s.settings.AccessMode = &mode
+	}
+	return SaveSettings(s.opts.DataDir, s.settings)
 }
 
 func (s *Service) RefreshModels(ctx context.Context) (Status, error) {
@@ -348,6 +452,7 @@ func (s *Service) enable() error {
 		CatalogPath:  filepath.Join(s.opts.DataDir, "model-bridge-catalog.json"),
 		HasAutoModel: slices.Contains(s.relayIDs, "auto"),
 		Efforts:      s.levels,
+		RelayOnly:    s.accessMode == modeRelay,
 	})
 	if err != nil {
 		return err
@@ -426,6 +531,7 @@ func (s *Service) rebuild(ctx context.Context, fetched []string) error {
 			ModelsCachePath: s.modelsCachePath(),
 			Params:          params,
 			RelayIDs:        fetched,
+			RelayOnly:       s.accessMode == modeRelay,
 		})
 		if err != nil {
 			return err
@@ -443,7 +549,7 @@ func (s *Service) rebuild(ctx context.Context, fetched []string) error {
 
 func (s *Service) pushRelay() {
 	if s.proxy != nil {
-		s.proxy.SetRelay(proxy.RelayConfig{Models: s.relayIDs, ParamModels: s.relayParam, BaseURL: s.baseURL, Key: s.apiKey})
+		s.proxy.SetRelay(proxy.RelayConfig{Models: s.relayIDs, ParamModels: s.relayParam, BaseURL: s.baseURL, Key: s.apiKey, RelayOnly: s.accessMode == modeRelay})
 	}
 }
 
@@ -537,6 +643,7 @@ func (s *Service) statusLocked() Status {
 		RestoreBlocked: append([]string{}, s.restoreBlocked...),
 		ConfigPath:     s.configPath,
 		Update:         s.update,
+		Access:         AccessStatus{Mode: optional(s.accessMode), Target: optional(s.accessTarget), Detect: optional(s.accessDetect)},
 	}
 	if !s.fetchedAt.IsZero() {
 		at := s.fetchedAt

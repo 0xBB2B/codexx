@@ -137,6 +137,10 @@ func dispatch(ctx context.Context, svc *Service, req request) (any, error) {
 		return svc.SetForwarding(ctx, p.Enabled)
 	case "refresh_models":
 		return svc.RefreshModels(ctx)
+	case "detect_access":
+		return svc.DetectAccess(ctx)
+	case "apply_access":
+		return svc.ApplyAccess(ctx)
 	case "check_update":
 		var p struct {
 			Manual bool `json:"manual"`

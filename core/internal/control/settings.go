@@ -10,7 +10,9 @@ import (
 const settingsFile = "settings.json"
 
 type Settings struct {
-	Forwarding bool `json:"forwarding"`
+	Forwarding       bool    `json:"forwarding"`
+	AccessMode       *string `json:"access_mode"`
+	LastDetectedMode *string `json:"last_detected_mode"`
 }
 
 func LoadSettings(dataDir string) (Settings, error) {
