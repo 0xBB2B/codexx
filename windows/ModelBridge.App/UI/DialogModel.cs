@@ -48,7 +48,7 @@ public sealed record DialogModel(
         var list = string.Join("、", keys);
         var (title, body) = code == "config_invalid"
             ? ("Codex 配置文件格式有误",
-               "助手没有改动配置文件。" + (keys.Count > 0 ? $"\n\n这些设置项的格式不对：\n{list}" : ""))
+               "配置文件的格式不对，助手没有改动它。" + (keys.Count > 0 ? $"\n\n这些设置项的格式不对：\n{list}" : ""))
             : ("没能自动还原 Codex 配置",
                "为了不覆盖你的修改，助手没有还原本助手写入的设置。" + (keys.Count > 0 ? $"\n\n这些设置项被手动改过：\n{list}" : ""));
         var tail = code == "config_invalid" ? "请手动修正后点「重新检查」。" : "请手动处理后点「重新检查」。";
