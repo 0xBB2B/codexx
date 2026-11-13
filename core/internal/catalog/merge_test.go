@@ -89,11 +89,9 @@ func TestMerge_RelayEntryOverridesAndKeepsBase(t *testing.T) {
 		"default_reasoning_level":           "high",
 		"supports_reasoning_effort_updates": true,
 		"supports_search_tool":              false,
-		"web_search_tool_type":              nil,
 		"experimental_supported_tools":      []any{},
 		"service_tiers":                     []any{},
 		"additional_speed_tiers":            []any{},
-		"upgrade":                           nil, "availability_nux": nil, "model_messages": nil,
 		"supported_reasoning_levels": []any{
 			map[string]any{"effort": "low", "description": "low"},
 			map[string]any{"effort": "high", "description": "high"},
@@ -109,6 +107,11 @@ func TestMerge_RelayEntryOverridesAndKeepsBase(t *testing.T) {
 		}
 		if !reflect.DeepEqual(got, want) {
 			t.Errorf("%s = %#v, want %#v", k, got, want)
+		}
+	}
+	for _, k := range []string{"web_search_tool_type", "upgrade", "availability_nux", "model_messages"} {
+		if v, ok := e[k]; ok {
+			t.Errorf("%s = %#v，应不写这个字段，交给 Codex 用默认值", k, v)
 		}
 	}
 }
@@ -127,8 +130,8 @@ func TestMerge_EmptyReasoningLevels(t *testing.T) {
 	if e["supports_reasoning_effort_updates"] != false {
 		t.Errorf("supports_reasoning_effort_updates = %v", e["supports_reasoning_effort_updates"])
 	}
-	if v, ok := e["default_reasoning_level"]; !ok || v != nil {
-		t.Errorf("default_reasoning_level = %#v，应为 null", v)
+	if v, ok := e["default_reasoning_level"]; ok {
+		t.Errorf("default_reasoning_level = %#v，应不写这个字段", v)
 	}
 }
 

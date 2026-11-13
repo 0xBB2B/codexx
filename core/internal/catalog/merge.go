@@ -52,10 +52,6 @@ func Merge(official []Entry, relay []Param) (*Result, error) {
 				levels = append(levels, l)
 			}
 		}
-		var def any
-		if p.DefaultReasoningLevel != nil {
-			def = *p.DefaultReasoningLevel
-		}
 		e["slug"] = p.ID
 		e["display_name"] = p.ID
 		e["description"] = "中台模型"
@@ -66,16 +62,20 @@ func Merge(official []Entry, relay []Param) (*Result, error) {
 		e["max_context_window"] = p.ContextWindow
 		e["input_modalities"] = p.InputModalities
 		e["supported_reasoning_levels"] = supported
-		e["default_reasoning_level"] = def
+		if p.DefaultReasoningLevel != nil {
+			e["default_reasoning_level"] = *p.DefaultReasoningLevel
+		} else {
+			delete(e, "default_reasoning_level")
+		}
 		e["supports_reasoning_effort_updates"] = len(p.ReasoningLevels) > 0
 		e["supports_search_tool"] = false
-		e["web_search_tool_type"] = nil
 		e["experimental_supported_tools"] = []any{}
 		e["service_tiers"] = []any{}
 		e["additional_speed_tiers"] = []any{}
-		e["upgrade"] = nil
-		e["availability_nux"] = nil
-		e["model_messages"] = nil
+		// 新版 Codex 不接受 web_search_tool_type 为 null；不写字段时 Codex 会用自己的默认值。
+		for _, k := range []string{"web_search_tool_type", "upgrade", "availability_nux", "model_messages"} {
+			delete(e, k)
+		}
 		models = append(models, e)
 	}
 	return &Result{Models: models, ReasoningLevels: levels}, nil
