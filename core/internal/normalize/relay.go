@@ -8,6 +8,9 @@ type itemHead struct {
 	Type             string          `json:"type"`
 	ID               string          `json:"id"`
 	EncryptedContent json.RawMessage `json:"encrypted_content"`
+	CallID           string          `json:"call_id"`
+	Name             string          `json:"name"`
+	Output           json.RawMessage `json:"output"`
 }
 
 func (h itemHead) hasEncrypted() bool {
@@ -24,6 +27,23 @@ func summaryMessage(summary string) json.RawMessage {
 		}},
 	})
 	return b
+}
+
+func userText(text string) json.RawMessage {
+	b, _ := json.Marshal(map[string]any{
+		"type":    "message",
+		"role":    "user",
+		"content": []any{map[string]any{"type": "input_text", "text": text}},
+	})
+	return b
+}
+
+func outputText(raw json.RawMessage) string {
+	var s string
+	if json.Unmarshal(raw, &s) == nil {
+		return s
+	}
+	return string(raw)
 }
 
 func isArray(raw json.RawMessage) bool {
@@ -48,6 +68,13 @@ func ForRelay(body []byte) ([]byte, error) {
 			switch h.Type {
 			case "reasoning":
 				if h.hasEncrypted() {
+					changed = true
+					continue
+				}
+			case "function_call_output":
+				// ChatGPT 桌面端插入的伴随页面状态没有 call_id，中台按 Responses 规范校验会拒收
+				if h.CallID == "" {
+					kept = append(kept, userText("以下是 "+h.Name+" 的结果："+outputText(h.Output)))
 					changed = true
 					continue
 				}

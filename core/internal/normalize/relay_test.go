@@ -63,6 +63,15 @@ func TestForRelay(t *testing.T) {
 		{"encrypted_content 不是合法 JSON 的 compaction 当作非本工具生成", []string{`{"type":"compaction","encrypted_content":"not-json"}`, visibleMsg}, []string{visibleMsg}},
 		{"JSON 的 type 不是本工具标记的 compaction 被去掉", []string{`{"type":"compaction","encrypted_content":"{\"type\":\"other\"}"}`, visibleMsg}, []string{visibleMsg}},
 		{"去掉 context_compaction", []string{`{"type":"context_compaction","encrypted_content":"CTX"}`, visibleMsg}, []string{visibleMsg}},
+		{"缺 call_id 的工具结果变成用户消息",
+			[]string{`{"type":"function_call_output","id":"fco_1","namespace":"agent","name":"codex_apps_open_page","output":"{\"page_id\":null}"}`, visibleMsg},
+			[]string{`{"type":"message","role":"user","content":[{"type":"input_text","text":"以下是 codex_apps_open_page 的结果：{\"page_id\":null}"}]}`, visibleMsg}},
+		{"call_id 为空串的工具结果变成用户消息",
+			[]string{`{"type":"function_call_output","call_id":"","name":"page","output":"状态"}`},
+			[]string{`{"type":"message","role":"user","content":[{"type":"input_text","text":"以下是 page 的结果：状态"}]}`}},
+		{"工具结果不是字符串时原样写成 JSON 文本",
+			[]string{`{"type":"function_call_output","name":"page","output":[{"type":"input_text","text":"a"}]}`},
+			[]string{`{"type":"message","role":"user","content":[{"type":"input_text","text":"以下是 page 的结果：[{\"type\":\"input_text\",\"text\":\"a\"}]"}]}`}},
 		{"空 input", nil, nil},
 	}
 	for _, tc := range tests {
