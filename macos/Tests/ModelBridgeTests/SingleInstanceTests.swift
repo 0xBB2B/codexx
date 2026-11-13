@@ -50,7 +50,10 @@ final class SingleInstanceTests: XCTestCase {
 
     func testDistributedCenter_ObserverReceivesActivation() {
         let center = DistributedNotificationCenter.default()
-        let guardian = makeGuard(pids: [100, 200], center: center)
+        let guardian = SingleInstance(
+            bundleID: "com.example.modelbridge", currentPID: 100, lister: FakeLister(pids: [100, 200]),
+            notificationCenter: center, activationName: Notification.Name("test.modelbridge.\(UUID().uuidString)")
+        )
         let received = expectation(description: "activation received")
         received.assertForOverFulfill = false
         let token = guardian.observeActivation { received.fulfill() }
