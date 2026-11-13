@@ -123,7 +123,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self?.model.mainWindowRequested = false
             self?.showMainWindow()
         }.store(in: &subscriptions)
-        model.$notice.compactMap { $0 }.sink { [weak self] _ in
+        model.$notices.map(\.count).scan((0, 0)) { ($0.1, $1) }.filter { $0.1 > $0.0 }.sink { [weak self] _ in
             guard let self, !model.showSetup else { return }
             showMainWindow()
         }.store(in: &subscriptions)

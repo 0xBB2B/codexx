@@ -79,18 +79,32 @@ final class DialogPresenter {
         model.$pendingConfirmation.compactMap { $0 }.sink { [weak self] value in
             Task { @MainActor in await self?.present(value) }
         }.store(in: &subscriptions)
-        model.onTrashFailure = { [weak self] path in
-            _ = self?.run(InfoDialogModel.trashFailure(path: path))
+        model.onTrashFailure = { path in
+            _ = Self.run(InfoDialogModel.trashFailure(path: path))
         }
         model.$uninstallPhase.sink { [weak self] phase in
             Task { @MainActor in await self?.present(phase) }
         }.store(in: &subscriptions)
     }
 
+    static func showRestoreHelp(
+        keys: [String], configPath: String?, purpose: RestoreHelpDialogModel.Purpose, onRecheck: () async -> Void
+    ) async {
+        while true {
+            let choice = run(RestoreHelpDialogModel(keys: keys, configPath: configPath, purpose: purpose))
+            if choice == .revealFolder {
+                MainWindow.reveal(configPath)
+                continue
+            }
+            if choice == .recheck { await onRecheck() }
+            return
+        }
+    }
+
     private func present(_ confirmation: Confirmation) async {
         guard !presenting else { return }
         presenting = true
-        let confirmed = run(ConfirmDialogModel(confirmation: confirmation)) == .confirm
+        let confirmed = Self.run(ConfirmDialogModel(confirmation: confirmation)) == .confirm
         presenting = false
         if confirmed { await model.confirmPending() } else { model.cancelPending() }
     }
@@ -101,7 +115,7 @@ final class DialogPresenter {
             guard !presenting else { return }
             presenting = true
             while true {
-                let choice = run(UninstallPausedDialogModel(keys: keys, configPath: configPath))
+                let choice = Self.run(UninstallPausedDialogModel(keys: keys, configPath: configPath))
                 if choice == .revealFolder {
                     MainWindow.reveal(configPath)
                     continue
@@ -114,16 +128,15 @@ final class DialogPresenter {
             guard !presenting else { return }
             presenting = true
             let running = model.isChatGPTRunning
-            let response = run(InfoDialogModel.uninstallFinished(leftovers: model.uninstallLeftovers, chatGPTRunning: running))
+            _ = Self.run(InfoDialogModel.uninstallFinished(leftovers: model.uninstallLeftovers, chatGPTRunning: running))
             presenting = false
-            if running, response == .restartChatGPT { await model.restartChatGPT() }
             await model.finishUninstall()
         case .idle, .running:
             break
         }
     }
 
-    private func run(_ content: DialogContent) -> DialogAction {
+    fileprivate static func run(_ content: DialogContent) -> DialogAction {
         let result = DialogResult(content.escapeAction)
         let panel = DialogPanel(contentRect: .zero, styleMask: [.borderless], backing: .buffered, defer: false)
         let host = NSHostingView(rootView: DialogView(model: content) { action in

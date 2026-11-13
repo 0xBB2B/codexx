@@ -132,14 +132,35 @@ struct Card<Content: View>: View {
     }
 }
 
+private struct AlertCloseStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        AlertCloseBody(configuration: configuration)
+    }
+}
+
+private struct AlertCloseBody: View {
+    let configuration: ButtonStyleConfiguration
+    @Environment(\.isFocused) private var isFocused
+    @State private var hovering = false
+
+    var body: some View {
+        configuration.label
+            .foregroundColor(Palette.textMuted)
+            .frame(width: 44, height: 44)
+            .background(RoundedRectangle(cornerRadius: 8).fill(configuration.isPressed ? Palette.disabledBg : (hovering ? Palette.background : Color.clear)))
+            .overlay { if isFocused { FocusRing() } }
+            .contentShape(RoundedRectangle(cornerRadius: 8))
+            .onHover { hovering = $0 }
+    }
+}
+
 enum AlertTone { case info, warning, danger, success }
 
 struct AlertBar<Actions: View>: View {
     let tone: AlertTone
     let title: String
     var detail: String?
-    var keys: [String] = []
-    var path: String?
+    var onClose: (() -> Void)?
     @ViewBuilder let actions: Actions
 
     var body: some View {
@@ -148,13 +169,18 @@ struct AlertBar<Actions: View>: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text(title).font(Fonts.label).foregroundColor(color)
                 if let detail { Text(detail).font(Fonts.control).foregroundColor(Palette.text) }
-                if !keys.isEmpty {
-                    Text(keys.joined(separator: "、")).font(Fonts.mono).foregroundColor(Palette.text)
-                }
-                if let path { Text(path).font(Fonts.mono).foregroundColor(Palette.text).textSelection(.enabled) }
                 HStack(spacing: 8) { actions }
             }
             Spacer(minLength: 0)
+            if let onClose {
+                Button(action: onClose) {
+                    Image(systemName: "xmark").font(.system(size: 12, weight: .semibold))
+                }
+                .buttonStyle(AlertCloseStyle())
+                .padding(.vertical, -12)
+                .padding(.trailing, -8)
+                .accessibilityLabel("关闭提示")
+            }
         }
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -192,7 +218,37 @@ struct AlertBar<Actions: View>: View {
 }
 
 extension AlertBar where Actions == EmptyView {
-    init(tone: AlertTone, title: String, detail: String? = nil) {
-        self.init(tone: tone, title: title, detail: detail) { EmptyView() }
+    init(tone: AlertTone, title: String, detail: String? = nil, onClose: (() -> Void)? = nil) {
+        self.init(tone: tone, title: title, detail: detail, onClose: onClose) { EmptyView() }
+    }
+}
+
+struct AlertOverlay<Content: View>: View {
+    @ViewBuilder let content: Content
+
+    var body: some View {
+        VStack(spacing: 8) { content }
+            .shadow(color: Color(hex: 0x172b3a).opacity(0.16), radius: 24, x: 0, y: 16)
+            .padding(.top, 12)
+            .padding(.horizontal, 24)
+    }
+}
+
+struct NoticeStack: View {
+    @ObservedObject var model: AppModel
+
+    var body: some View {
+        ForEach(model.notices) { notice in
+            AlertBar(tone: tone(notice.kind), title: notice.title, detail: notice.detail, onClose: { model.dismissNotice(notice.id) })
+        }
+    }
+
+    private func tone(_ kind: Notice.Kind) -> AlertTone {
+        switch kind {
+        case .success: .success
+        case .error: .danger
+        case .warning: .warning
+        case .info: .info
+        }
     }
 }

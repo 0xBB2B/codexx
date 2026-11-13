@@ -41,9 +41,10 @@ struct CoreFailure: Equatable, Sendable {
     }
 }
 
-struct Notice: Equatable, Sendable {
+struct Notice: Equatable, Identifiable, Sendable {
     enum Kind: Sendable { case success, error, warning, info }
 
+    let id = UUID()
     let title: String
     var detail: String?
     var kind: Kind = .info
@@ -51,9 +52,6 @@ struct Notice: Equatable, Sendable {
 
 struct Confirmation: Equatable, Sendable {
     enum Kind: Equatable, Sendable {
-        case toggleForwarding(enabled: Bool)
-        case switchAccess
-        case restartAfterSave
         case loginStartOff
         case quit
         case uninstall
@@ -66,9 +64,9 @@ struct Confirmation: Equatable, Sendable {
     let confirmLabel: String
 }
 
-struct Banner: Equatable, Sendable {
+struct Banner: Hashable, Sendable {
     enum Kind: Sendable { case info, warning, error }
-    enum Action: Sendable { case refreshModels, recheckStatus, restoreHelp }
+    enum Action: Sendable { case refreshModels, recheckStatus, restoreHelp, configInvalidHelp }
 
     let title: String
     var detail: String?
@@ -140,8 +138,11 @@ final class AppModel: ObservableObject {
     @Published var setupPhase: SetupPhase = .idle
     @Published var showSetup = false
     @Published var pendingConfirmation: Confirmation?
-    @Published var forwardingFailure: CoreFailure?
-    @Published var notice: Notice?
+    @Published var forwardingFailure: CoreFailure? {
+        didSet { pruneDismissedBanners() }
+    }
+    @Published private(set) var notices: [Notice] = []
+    @Published private var dismissedBanners: Set<Banner> = []
     @Published var uninstallPhase: UninstallPhase = .idle
     @Published var availableUpdate: UpdateInfo?
     @Published var loginStartEnabled = false
@@ -155,6 +156,7 @@ final class AppModel: ObservableObject {
     @Published var uninstallLeftovers: [String] = []
     @Published var trashFailurePath: String?
 
+    var noticeAutoDismissDelay: TimeInterval = 4
     var onTerminate: @MainActor () -> Void = {}
     var onTrashFailure: @MainActor (String) -> Void = { _ in }
 
@@ -165,10 +167,12 @@ final class AppModel: ObservableObject {
     private let chatGPT: any ChatGPTControlling
     private let trash: any AppTrashing
     private let appURL: URL
-    private let restartNote = "\n\nChatGPT 正在运行，需要重启才能生效。重启会中断 Codex 里正在进行的任务。"
+    private static let detectFailedTitle = "没能检测 ChatGPT 登录状态"
+    private static let keychainDeniedTitle = "无法读取已保存的 API Key，请重新输入"
+    private static let updateFailedTitle = "暂时无法检查更新，请稍后再试"
     private var savedBaseURL: String?
     private var savedKey: String?
-    private var switchTarget = false
+    private var noticeTimers: [UUID: Task<Void, Never>] = [:]
     private var startupAligned = false
 
     init(
@@ -205,11 +209,6 @@ final class AppModel: ObservableObject {
         !coreRunning || status?.chatgpt?.found == false || isSwitchingForwarding || isDetectingAccess
     }
 
-    var switchingMessage: String? {
-        guard isSwitchingForwarding else { return nil }
-        return switchTarget ? "正在打开转发并重启 ChatGPT" : "正在还原 Codex 配置并重启 ChatGPT"
-    }
-
     var modelCountText: String {
         guard forwardingEnabled else { return "转发关闭时不获取" }
         let count = status?.relay?.modelCount ?? 0
@@ -244,8 +243,6 @@ final class AppModel: ObservableObject {
         }
     }
 
-    var accessDetectFailed: Bool { status?.access?.detect == "failed" }
-
     var forwardingHelpText: String {
         if status?.chatgpt?.found == false { return "找到 ChatGPT 后才能打开。" }
         return forwardingEnabled
@@ -255,18 +252,21 @@ final class AppModel: ObservableObject {
 
     var setupSucceededText: String? {
         guard case .succeeded(_, let count) = setupPhase else { return nil }
-        let tail = "助手会在你登录电脑时自动启动，在菜单栏里常驻。"
+        let head = "已获取 \(count) 个中台模型。"
+        let tail = "\n请重启 ChatGPT 后使用。助手会在你登录电脑时自动启动，在菜单栏里常驻。"
         switch status?.access?.mode {
         case "relay":
-            return "已获取 \(count) 个中台模型。没有检测到 ChatGPT 登录，接入方式为「只用中台」：Codex 不需要登录，模型列表里只有中台模型。重启 ChatGPT 后就能使用。" + tail
+            return head + "没有检测到 ChatGPT 登录，接入方式为「只用中台」：Codex 不需要登录，模型列表里只有中台模型。" + tail
         case "both":
-            return "已获取 \(count) 个中台模型。已检测到 ChatGPT 登录，接入方式为「官方 + 中台」。重启 ChatGPT 后，就能在 Codex 的模型列表里选用它们。" + tail
+            return head + "已检测到 ChatGPT 登录，接入方式为「官方 + 中台」。" + tail
         default:
-            return "已获取 \(count) 个中台模型。重启 ChatGPT 后，Codex 的模型列表里就会出现它们。" + tail
+            return head + tail
         }
     }
 
-    var banners: [Banner] {
+    var banners: [Banner] { allBanners.filter { !dismissedBanners.contains($0) } }
+
+    private var allBanners: [Banner] {
         var result: [Banner] = []
         if let status {
             if !(status.takenOver ?? []).isEmpty {
@@ -295,7 +295,7 @@ final class AppModel: ObservableObject {
             if let blocked = status.restoreBlocked, !blocked.isEmpty {
                 result.append(Banner(
                     title: "没能自动还原 Codex 配置",
-                    detail: "有人手动改过本助手写入的设置项。为了不覆盖这些修改，助手没有改动它。请手动检查配置文件，处理后点「重新检查」。",
+                    detail: "有设置项被手动改过。",
                     kind: .error,
                     keys: blocked,
                     configPath: status.configPath,
@@ -325,7 +325,7 @@ final class AppModel: ObservableObject {
                 kind: .error,
                 keys: failure.keys,
                 configPath: status?.configPath,
-                action: failure.code == "restore_blocked" ? .restoreHelp : nil
+                action: failure.code == "restore_blocked" ? .restoreHelp : (failure.code == "config_invalid" && !failure.keys.isEmpty ? .configInvalidHelp : nil)
             ))
         }
         return result
@@ -344,7 +344,7 @@ final class AppModel: ObservableObject {
         case .success(nil):
             break
         case .failure(KeychainError.accessDenied):
-            notice = Notice(title: "无法读取已保存的 API Key，请重新输入", kind: .warning)
+            addNotice(Notice(title: Self.keychainDeniedTitle, kind: .warning))
             mainWindowRequested = true
         case .failure:
             break
@@ -370,7 +370,7 @@ final class AppModel: ObservableObject {
 
     func coreDidFail() {
         coreRunning = false
-        notice = Notice(title: "后台服务没能启动，请退出后重新打开", kind: .error)
+        addNotice(Notice(title: "后台服务没能启动，请退出后重新打开", kind: .error))
     }
 
     func completeSetup() async {
@@ -414,56 +414,42 @@ final class AppModel: ObservableObject {
         )
     }
 
+    func dismissSetupFailure() {
+        if case .failed = setupPhase { setupPhase = .idle }
+    }
+
     func finishSetup() {
         showSetup = false
         setupPhase = .idle
     }
 
     func toggleForwarding(enabled: Bool) async {
-        if chatGPT.isRunning() {
-            if enabled {
-                isDetectingAccess = true
-                await refresh("detect_access")
-                isDetectingAccess = false
-            }
-            let access = status?.access
-            let note: String
-            if enabled {
-                note = access?.target == "relay"
-                    ? "没有检测到 ChatGPT 登录，打开后 Codex 不需要登录，模型列表里只有中台模型。"
-                    : "打开后，Codex 的模型列表里会多出中台模型。"
-            } else {
-                note = access?.mode == "relay"
-                    ? "关闭后会把 Codex 配置还原成开启前的样子。没有登录 ChatGPT 时，关闭后 Codex 里的模型都无法使用。"
-                    : "关闭后会把 Codex 配置还原成开启前的样子，Codex 里只剩官方模型。"
-            }
-            pendingConfirmation = Confirmation(
-                kind: .toggleForwarding(enabled: enabled),
-                title: enabled ? "打开转发并重启 ChatGPT？" : "关闭转发并重启 ChatGPT？",
-                message: note + restartNote,
-                confirmLabel: enabled ? "打开并重启" : "关闭并重启"
-            )
-        } else {
-            await setForwarding(enabled, thenRestart: false)
-        }
+        guard await setForwarding(enabled), chatGPT.isRunning() else { return }
+        addNotice(Notice(title: enabled ? "已打开转发" : "已关闭转发", detail: "重启 ChatGPT 后生效。", kind: .success))
     }
 
     func recheckAccess() async {
+        removeNotices(titled: Self.detectFailedTitle)
         isDetectingAccess = true
         defer { isDetectingAccess = false }
         guard let data = try? await core.call("detect_access", params: Empty()),
               let value = try? JSONDecoder.snakeCase.decode(CoreStatus.self, from: data) else {
-            notice = Notice(title: "没能重新检测", kind: .error)
+            addNotice(Notice(title: "没能重新检测", kind: .error))
             return
         }
+        removeNotices(titled: "没能重新检测")
         apply(value)
-        guard let access = value.access, access.detect != "failed" else { return }
+        guard let access = value.access else { return }
+        if access.detect == "failed" {
+            addDetectFailedWarning()
+            return
+        }
         if access.target == access.mode {
             switch access.mode {
             case "relay":
-                notice = Notice(title: "接入方式没有变化", detail: "仍然没有检测到 ChatGPT 登录，继续只用中台模型。", kind: .info)
+                addNotice(Notice(title: "接入方式没有变化", detail: "仍然没有检测到 ChatGPT 登录，继续只用中台模型。", kind: .info))
             case "both":
-                notice = Notice(title: "接入方式没有变化", detail: "仍然检测到 ChatGPT 登录，继续同时使用官方模型和中台模型。", kind: .info)
+                addNotice(Notice(title: "接入方式没有变化", detail: "仍然检测到 ChatGPT 登录，继续同时使用官方模型和中台模型。", kind: .info))
             default: break
             }
             return
@@ -480,30 +466,29 @@ final class AppModel: ObservableObject {
         do {
             saved = try await saveToCore()
         } catch {
-            notice = Notice(title: "没有保存", detail: CoreFailure(error).message, kind: .error)
+            addNotice(Notice(title: "没有保存", detail: CoreFailure(error).message, kind: .error))
             return
         }
         do {
             try persistConnection()
         } catch {
             await rollbackCore()
-            notice = Notice(title: "没有保存", detail: (error as? StorageFailure)?.message, kind: .error)
+            addNotice(Notice(title: "没有保存", detail: (error as? StorageFailure)?.message, kind: .error))
             return
         }
+        removeNotices(titled: "没有保存", Self.keychainDeniedTitle)
         if saved.modelsChanged, chatGPT.isRunning() {
-            pendingConfirmation = Confirmation(
-                kind: .restartAfterSave,
-                title: "已保存，重启 ChatGPT 以更新模型列表？",
-                message: "已重新获取中台模型，现在可用 \(saved.relayModelCount) 个。\n\nChatGPT 正在运行，需要重启后 Codex 里才会显示新的列表。重启会中断 Codex 里正在进行的任务。",
-                cancelLabel: "稍后",
-                confirmLabel: "立即重启"
-            )
+            addNotice(Notice(
+                title: "已保存",
+                detail: "现在可用 \(saved.relayModelCount) 个中台模型。重启 ChatGPT 后，Codex 里会显示新的列表。",
+                kind: .success
+            ))
         } else {
-            notice = Notice(
+            addNotice(Notice(
                 title: "已保存，不需要重启 ChatGPT",
                 detail: "已重新获取中台模型，不需要重启 ChatGPT。",
                 kind: .success
-            )
+            ))
         }
     }
 
@@ -559,14 +544,15 @@ final class AppModel: ObservableObject {
         do {
             let data = try await core.call("check_update", params: UpdateParams(manual: true))
             let result = try JSONDecoder.snakeCase.decode(UpdateResult.self, from: data)
+            removeNotices(titled: Self.updateFailedTitle)
             if result.isNewer, let version = result.latestVersion, let url = result.url {
                 availableUpdate = UpdateInfo(version: version, url: url)
             } else {
                 availableUpdate = nil
-                notice = Notice(title: "已是最新版本", kind: .success)
+                addNotice(Notice(title: "已是最新版本", kind: .success))
             }
         } catch {
-            notice = Notice(title: "暂时无法检查更新，请稍后再试", kind: .warning)
+            addNotice(Notice(title: Self.updateFailedTitle, kind: .warning))
         }
     }
 
@@ -577,72 +563,82 @@ final class AppModel: ObservableObject {
         await refresh("status")
     }
 
-    func restartChatGPT() async {
-        let result = await chatGPT.restart()
-        switch result {
-        case .timedOut: notice = Notice(title: "ChatGPT 没有退出", detail: "请手动退出 ChatGPT 后重新打开。", kind: .warning)
-        case .openFailed: notice = Notice(title: "没能打开 ChatGPT，请手动打开", kind: .warning)
-        case .notFound: notice = Notice(title: "没有找到 ChatGPT", kind: .error)
-        case .restarted, .cancelled: break
-        }
-    }
-
     func cancelPending() { pendingConfirmation = nil }
 
     func confirmPending() async {
         guard let pending = pendingConfirmation else { return }
         pendingConfirmation = nil
         switch pending.kind {
-        case .toggleForwarding(let enabled): await setForwarding(enabled, thenRestart: true)
-        case .switchAccess:
-            if await applyAccess() { await restartChatGPT() }
-        case .restartAfterSave: await restartChatGPT()
         case .loginStartOff: applyLoginStart(false)
         case .quit: await shutdown(restore: true)
         case .uninstall: await runUninstall()
         }
     }
 
-    func dismissNotice() { notice = nil }
+    func dismissNotice(_ id: UUID) { removeNotice(id) }
 
-    private func setForwarding(_ enabled: Bool, thenRestart: Bool) async {
-        isSwitchingForwarding = thenRestart
-        switchTarget = enabled
+    func dismissBanner(_ banner: Banner) { dismissedBanners.insert(banner) }
+
+    private func addNotice(_ notice: Notice) {
+        guard !notices.contains(where: { $0.title == notice.title && $0.kind == notice.kind }) else { return }
+        notices.append(notice)
+        guard notice.kind == .success || notice.kind == .info else { return }
+        let delay = noticeAutoDismissDelay
+        noticeTimers[notice.id] = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+            if !Task.isCancelled { self?.removeNotice(notice.id) }
+        }
+    }
+
+    private func removeNotice(_ id: UUID) {
+        noticeTimers.removeValue(forKey: id)?.cancel()
+        notices.removeAll { $0.id == id }
+    }
+
+    private func removeNotices(titled titles: String...) {
+        notices.filter { titles.contains($0.title) }.forEach { removeNotice($0.id) }
+    }
+
+    private func addDetectFailedWarning() {
+        guard !notices.contains(where: { $0.title == Self.detectFailedTitle }) else { return }
+        addNotice(Notice(title: Self.detectFailedTitle, detail: "沿用上次的方式。可以稍后点「重新检测」再试。", kind: .warning))
+    }
+
+    private func pruneDismissedBanners() {
+        dismissedBanners.formIntersection(allBanners)
+    }
+
+    private func setForwarding(_ enabled: Bool) async -> Bool {
+        isSwitchingForwarding = true
         defer { isSwitchingForwarding = false }
         forwardingFailure = nil
         do {
             let data = try await core.call("set_forwarding", params: ForwardingParams(enabled: enabled))
             if let value = try? JSONDecoder.snakeCase.decode(CoreStatus.self, from: data) { apply(value) }
+            return true
         } catch {
             recordFailure(CoreFailure(error))
-            return
+            return false
         }
-        if thenRestart { await restartChatGPT() }
     }
 
     private func alignOnStartup(_ value: CoreStatus) async {
-        guard !startupAligned, value.forwarding, value.access?.target != nil, value.access?.detect != "failed" else { return }
+        guard !startupAligned, value.forwarding else { return }
         startupAligned = true
+        guard value.access?.target != nil else { return }
+        if value.access?.detect == "failed" {
+            addDetectFailedWarning()
+            return
+        }
         await reconcileAccess(value)
     }
 
     private func reconcileAccess(_ value: CoreStatus) async {
         guard let target = value.access?.target, target != value.access?.mode else { return }
-        if chatGPT.isRunning() {
-            let toBoth = target == "both"
-            pendingConfirmation = Confirmation(
-                kind: .switchAccess,
-                title: toBoth
-                    ? "已检测到 ChatGPT 登录，切换到「官方 + 中台」并重启 ChatGPT？"
-                    : "没有检测到 ChatGPT 登录，切换到「只用中台」并重启 ChatGPT？",
-                message: (toBoth
-                    ? "切换后，Codex 里会同时显示官方模型和中台模型。"
-                    : "切换后，Codex 不需要登录，模型列表里只有中台模型。") + restartNote,
-                confirmLabel: "切换并重启"
-            )
-        } else {
-            _ = await applyAccess()
-        }
+        guard await applyAccess(), chatGPT.isRunning() else { return }
+        addNotice(target == "both"
+            ? Notice(title: "已切换到「官方 + 中台」", detail: "已检测到 ChatGPT 登录。重启 ChatGPT 后生效。", kind: .success)
+            : Notice(title: "已切换到「只用中台」", detail: "没有检测到 ChatGPT 登录。重启 ChatGPT 后生效。", kind: .success))
     }
 
     private func applyAccess() async -> Bool {
@@ -666,7 +662,7 @@ final class AppModel: ObservableObject {
             return
         } catch {
             uninstallPhase = .idle
-            notice = Notice(title: "卸载没有完成", detail: CoreFailure(error).message, kind: .error)
+            addNotice(Notice(title: "卸载没有完成", detail: CoreFailure(error).message, kind: .error))
             return
         }
         var leftovers: [String] = []
@@ -710,12 +706,13 @@ final class AppModel: ObservableObject {
             if enabled { try loginItem.enable() } else { try loginItem.disable() }
             loginStartEnabled = enabled
         } catch {
-            notice = Notice(title: "没能修改「登录时启动」", kind: .error)
+            addNotice(Notice(title: "没能修改「登录时启动」", kind: .error))
         }
     }
 
     private func apply(_ value: CoreStatus) {
         status = value
+        pruneDismissedBanners()
         if let version = value.update?.latestVersion, let url = value.update?.url {
             availableUpdate = UpdateInfo(version: version, url: url)
         }

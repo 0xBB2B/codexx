@@ -1,7 +1,7 @@
 enum DialogAction: Equatable, Sendable {
     case cancel, confirm
     case cancelUninstall, revealFolder, recheck
-    case restartChatGPT, dismiss
+    case dismiss
 }
 
 enum DialogButtonStyle: Equatable, Sendable { case primary, secondary }
@@ -69,6 +69,35 @@ struct UninstallPausedDialogModel: DialogContent {
     }
 }
 
+struct RestoreHelpDialogModel: DialogContent {
+    enum Purpose: Sendable { case restoreBlocked, configInvalid }
+
+    let title: String
+    let message: String
+    let alert: DialogAlert? = nil
+    let buttons = [
+        DialogButton(label: "关闭", action: .dismiss, style: .secondary, isDefaultFocus: true),
+        DialogButton(label: "打开所在文件夹", action: .revealFolder, style: .secondary),
+        DialogButton(label: "重新检查", action: .recheck, style: .primary),
+    ]
+    let escapeAction = DialogAction.dismiss
+
+    init(keys: [String], configPath: String?, purpose: Purpose = .restoreBlocked) {
+        let list = keys.joined(separator: "、")
+        let path = configPath ?? "未知"
+        switch purpose {
+        case .restoreBlocked:
+            title = "没能自动还原 Codex 配置"
+            let changed = keys.isEmpty ? "" : "这些设置项被手动改过：\n\(list)\n\n"
+            message = "为了不覆盖你的修改，助手没有还原本助手写入的设置。\n\n\(changed)配置文件：\(path)\n\n请手动处理后点「重新检查」。"
+        case .configInvalid:
+            title = "Codex 配置文件格式有误"
+            let wrong = keys.isEmpty ? "" : "这些设置项的格式不对：\n\(list)\n\n"
+            message = "助手没有改动配置文件。\n\n\(wrong)配置文件：\(path)\n\n请手动修正后点「重新检查」。"
+        }
+    }
+}
+
 struct InfoDialogModel: DialogContent {
     let title: String
     let message: String
@@ -89,13 +118,8 @@ struct InfoDialogModel: DialogContent {
         if !leftovers.isEmpty {
             message += "\n\n以下内容没有删除干净，请手动处理：\(leftovers.joined(separator: "、"))"
         }
-        if chatGPTRunning { message += "\n\nChatGPT 需要重启一次，Codex 的模型列表才会恢复成只有官方模型。" }
-        let buttons = chatGPTRunning
-            ? [
-                DialogButton(label: "稍后自己重启", action: .dismiss, style: .secondary, isDefaultFocus: true),
-                DialogButton(label: "立即重启 ChatGPT", action: .restartChatGPT, style: .primary),
-            ]
-            : [DialogButton(label: "好", action: .dismiss, style: .primary, isDefaultFocus: true)]
+        if chatGPTRunning { message += "\n\n请重启 ChatGPT，Codex 的模型列表才会恢复成只有官方模型。" }
+        let buttons = [DialogButton(label: "好", action: .dismiss, style: .primary, isDefaultFocus: true)]
         return InfoDialogModel(title: "已卸载模型接入助手", message: message, buttons: buttons)
     }
 }

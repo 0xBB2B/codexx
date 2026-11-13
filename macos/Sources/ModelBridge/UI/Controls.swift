@@ -3,7 +3,7 @@ import SwiftUI
 
 private let hoverAnimation = Animation.easeOut(duration: 0.2)
 
-private struct FocusRing: View {
+struct FocusRing: View {
     var radius: CGFloat = 8
 
     var body: some View {

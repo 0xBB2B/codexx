@@ -7,13 +7,6 @@ struct MainWindow: View {
     var body: some View {
         VStack(spacing: 0) {
             VStack(alignment: .leading, spacing: 20) {
-                notice
-                ForEach(Array(model.banners.enumerated()), id: \.offset) { _, banner in
-                    bannerView(banner)
-                }
-                if let message = model.switchingMessage {
-                    AlertBar(tone: .info, title: message, detail: "完成前请不要关闭本窗口。")
-                }
                 forwardingCard
                 connectionCard
                 statusCard
@@ -23,27 +16,17 @@ struct MainWindow: View {
         }
         .frame(width: 620)
         .background(Palette.background)
-    }
-
-    private var chatGPTFound: Bool { model.status?.chatgpt?.found != false }
-
-    @ViewBuilder
-    private var notice: some View {
-        if let notice = model.notice {
-            AlertBar(tone: tone(notice.kind), title: notice.title, detail: notice.detail) {
-                Button("知道了") { model.dismissNotice() }.linkAction()
+        .overlay(alignment: .top) {
+            AlertOverlay {
+                NoticeStack(model: model)
+                ForEach(Array(model.banners.enumerated()), id: \.offset) { _, banner in
+                    bannerView(banner)
+                }
             }
         }
     }
 
-    private func tone(_ kind: Notice.Kind) -> AlertTone {
-        switch kind {
-        case .success: .success
-        case .error: .danger
-        case .warning: .warning
-        case .info: .info
-        }
-    }
+    private var chatGPTFound: Bool { model.status?.chatgpt?.found != false }
 
     @ViewBuilder
     private func bannerView(_ banner: Banner) -> some View {
@@ -52,15 +35,25 @@ struct MainWindow: View {
         case .warning: .warning
         case .error: .danger
         }
-        AlertBar(tone: tone, title: banner.title, detail: banner.detail, keys: banner.keys, path: banner.configPath) {
+        AlertBar(tone: tone, title: banner.title, detail: banner.detail, onClose: { model.dismissBanner(banner) }) {
             switch banner.action {
             case .refreshModels:
                 Button("重试") { Task { await model.refreshModels() } }.secondaryAction(compact: true)
             case .recheckStatus:
                 Button("重新检测") { Task { await model.recheckStatus() } }.secondaryAction(compact: true)
-            case .restoreHelp:
-                Button("打开所在文件夹") { Self.reveal(banner.configPath) }.secondaryAction(compact: true)
-                Button("重新检查") { Task { await model.recheckStatus() } }.linkAction()
+            case .restoreHelp, .configInvalidHelp:
+                Button("查看详情") {
+                    Task {
+                        await DialogPresenter.showRestoreHelp(
+                            keys: banner.keys,
+                            configPath: banner.configPath,
+                            purpose: banner.action == .configInvalidHelp ? .configInvalid : .restoreBlocked
+                        ) {
+                            await model.recheckStatus()
+                        }
+                    }
+                }
+                .secondaryAction(compact: true)
             case nil:
                 EmptyView()
             }
@@ -108,11 +101,6 @@ struct MainWindow: View {
                         .disabled(model.isDetectingAccess)
                     }
                     .frame(minHeight: 44, alignment: .center)
-                    if model.accessDetectFailed {
-                        Label("没能检测 ChatGPT 登录状态，沿用上次的方式。", systemImage: "exclamationmark.triangle.fill")
-                            .font(Fonts.caption)
-                            .foregroundColor(Palette.warning)
-                    }
                 }
             }
         }
@@ -120,7 +108,7 @@ struct MainWindow: View {
 
     private var connectionCard: some View {
         Card(title: "中台连接") {
-            FieldRow(label: "Base URL", error: model.setupFieldErrors[.baseURL]) {
+            FieldRow(label: "Base URL", help: "以 https:// 开头的完整地址。", error: model.setupFieldErrors[.baseURL]) {
                 AppTextField(
                     label: "Base URL", placeholder: "https://relay.example.com/v1", text: $model.baseURL,
                     mono: true, invalid: model.setupFieldErrors[.baseURL] != nil, errorText: model.setupFieldErrors[.baseURL]

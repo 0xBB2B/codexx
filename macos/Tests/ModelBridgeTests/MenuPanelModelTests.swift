@@ -9,7 +9,7 @@ private func makeAppModel(chatGPTFound: Bool = true) -> AppModel {
         keychain: FakeKeychain(log: log),
         settings: FakeSettings(log: log),
         loginItem: FakeLoginItem(log: log),
-        chatGPT: FakeChatGPT(log: log, running: false)
+        chatGPT: FakeChatGPT(running: false)
     )
     model.status = CoreStatus(
         version: "1.2.0",

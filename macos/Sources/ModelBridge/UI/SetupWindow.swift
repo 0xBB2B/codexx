@@ -20,15 +20,20 @@ struct SetupWindow: View {
         .padding(24)
         .frame(width: 620)
         .background(Palette.background)
+        .overlay(alignment: .top) {
+            AlertOverlay {
+                NoticeStack(model: model)
+                if case .failed(let title, let detail) = model.setupPhase {
+                    AlertBar(tone: .danger, title: title, detail: detail, onClose: { model.dismissSetupFailure() })
+                }
+            }
+        }
     }
 
     private var connecting: Bool { model.setupPhase == .connecting }
 
     @ViewBuilder
     private var form: some View {
-        if case .failed(let title, let detail) = model.setupPhase {
-            AlertBar(tone: .danger, title: title, detail: detail)
-        }
         Card {
             FieldRow(
                 label: "Base URL",
@@ -74,16 +79,9 @@ struct SetupWindow: View {
         ForEach(model.setupFollowUpIssues, id: \.self) { issue in
             AlertBar(tone: .warning, title: issue)
         }
-        HStack(spacing: 12) {
+        HStack {
             Spacer()
-            Button("稍后自己重启") { model.finishSetup() }.secondaryAction()
-            Button("立即重启 ChatGPT") {
-                Task {
-                    await model.restartChatGPT()
-                    model.finishSetup()
-                }
-            }
-            .primaryAction()
+            Button("完成") { model.finishSetup() }.primaryAction()
         }
     }
 }
