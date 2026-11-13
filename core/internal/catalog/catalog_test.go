@@ -2,6 +2,7 @@ package catalog_test
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -63,7 +64,7 @@ func TestBuild_RelaySuccess_MergesSavesRecordAndWritesCatalog(t *testing.T) {
 	if res.RelayErr != nil {
 		t.Errorf("RelayErr = %v", res.RelayErr)
 	}
-	want := []any{"gpt-a", "gpt-b", "auto", "deepseek-v3.2"}
+	want := []any{"gpt-a", "gpt-b", "relay-auto", "relay-deepseek-v3.2"}
 	if got := slugs(t, res); !reflect.DeepEqual(got, want) {
 		t.Errorf("slugs = %v, want %v", got, want)
 	}
@@ -107,7 +108,7 @@ func TestBuild_RelayFails_UsesLastSuccessfulRecord(t *testing.T) {
 	if got := catalog.ErrorCode(res.RelayErr); got != "relay_5xx" {
 		t.Errorf("RelayErr code = %q", got)
 	}
-	want := []any{"gpt-a", "gpt-b", "deepseek-v3.2"}
+	want := []any{"gpt-a", "gpt-b", "relay-deepseek-v3.2"}
 	if got := slugs(t, res); !reflect.DeepEqual(got, want) {
 		t.Errorf("slugs = %v, want %v", got, want)
 	}
@@ -239,7 +240,7 @@ func TestBuild_RelaySuccess_SaveFails_StillWritesCatalog(t *testing.T) {
 	if res.StoreErr == nil {
 		t.Error("StoreErr 应不为空")
 	}
-	if got, want := slugs(t, res), []any{"gpt-a", "gpt-b", "auto"}; !reflect.DeepEqual(got, want) {
+	if got, want := slugs(t, res), []any{"gpt-a", "gpt-b", "relay-auto"}; !reflect.DeepEqual(got, want) {
 		t.Errorf("slugs = %v, want %v", got, want)
 	}
 	if _, err := os.Stat(filepath.Join(dataDir, "model-bridge-catalog.json")); err != nil {
@@ -270,10 +271,10 @@ func TestBuild_PrefetchedRelayIDs_SkipsRequest(t *testing.T) {
 	if res.RelayFetchedAt.Before(before) {
 		t.Errorf("RelayFetchedAt = %v", res.RelayFetchedAt)
 	}
-	if !reflect.DeepEqual(slugs(t, res)[len(slugs(t, res))-1], "auto") {
+	if !reflect.DeepEqual(slugs(t, res)[len(slugs(t, res))-1], "relay-auto") {
 		t.Errorf("slugs = %v", slugs(t, res))
 	}
-	if !strings.Contains(readFileT(t, filepath.Join(dataDir, "model-bridge-catalog.json")), `"auto"`) {
+	if !strings.Contains(readFileT(t, filepath.Join(dataDir, "model-bridge-catalog.json")), `"relay-auto"`) {
 		t.Error("合并目录里没有传入的模型")
 	}
 	if !strings.Contains(readFileT(t, filepath.Join(dataDir, "relay-models.json")), `"auto"`) {
@@ -288,4 +289,176 @@ func readFileT(t *testing.T, path string) string {
 		t.Fatal(err)
 	}
 	return string(b)
+}
+
+const sameNameOfficialJSON = `{"models":[
+{"slug":"gpt-x","priority":3,"display_name":"X","description":"官方","base_instructions":"keep-x",
+ "context_window":400000,"max_context_window":500000,
+ "supported_reasoning_levels":[{"effort":"low","description":"快"},{"effort":"medium","description":"中"},{"effort":"xhigh","description":"深"}],
+ "default_reasoning_level":"medium","input_modalities":["text","image"],"visibility":"list",
+ "supports_search_tool":true,"web_search_tool_type":"text","upgrade":{"model":"gpt-z"},
+ "availability_nux":{"message":"hi"},"model_messages":{"a":"b"},
+ "service_tiers":["fast"],"additional_speed_tiers":["fast"],"experimental_supported_tools":["t"],
+ "supported_in_api":false},
+{"slug":"gpt-h","priority":5,"display_name":"H","visibility":"hide","context_window":200000,"max_context_window":200000,
+ "supported_reasoning_levels":[{"effort":"high","description":"高"}],"default_reasoning_level":"high","input_modalities":["text"]},
+{"slug":"gpt-y","priority":9,"display_name":"Y"}
+]}`
+
+func sameNameParams() []catalog.Param {
+	return []catalog.Param{
+		{ID: "auto", ContextWindow: 1000000, InputModalities: []string{"text", "image"}, ReasoningLevels: []string{}, Source: "s"},
+		{ID: "glm-5.3", ContextWindow: 128000, InputModalities: []string{"text"}, ReasoningLevels: []string{"high"}, DefaultReasoningLevel: strp("high"), Source: "s"},
+		{ID: "gpt-x", ContextWindow: 1, InputModalities: []string{"audio"}, ReasoningLevels: []string{"minimal"}, DefaultReasoningLevel: strp("minimal"), Source: "s"},
+	}
+}
+
+func buildSameName(t *testing.T, ids []string) (*catalog.Result, []map[string]any) {
+	t.Helper()
+	codex, _ := writeFakeCodex(t, sameNameOfficialJSON, 0)
+	opts := buildOpts(t, codex, "", t.TempDir())
+	opts.Params = sameNameParams()
+	opts.RelayIDs = ids
+	res, err := catalog.Build(context.Background(), opts)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	return res, roundtrip(t, res.Models)
+}
+
+func bySlug(t *testing.T, models []map[string]any, slug string) map[string]any {
+	t.Helper()
+	for _, m := range models {
+		if m["slug"] == slug {
+			return m
+		}
+	}
+	t.Fatalf("目录里没有 %s", slug)
+	return nil
+}
+
+func TestBuild_RelayEntriesUsePrefixedSlugAndSuffixedDisplayName(t *testing.T) {
+	_, models := buildSameName(t, []string{"glm-5.3", "auto", "gpt-x"})
+	tests := []struct{ slug, display string }{
+		{"relay-glm-5.3", "glm-5.3（中台）"},
+		{"relay-auto", "auto（中台）"},
+		{"relay-gpt-x", "gpt-x（中台）"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.slug, func(t *testing.T) {
+			if got := bySlug(t, models, tt.slug)["display_name"]; got != tt.display {
+				t.Errorf("display_name = %v, want %s", got, tt.display)
+			}
+		})
+	}
+}
+
+func TestBuild_SameNameRelayModels_OnlyOfficialOrParamsListed(t *testing.T) {
+	_, models := buildSameName(t, []string{"gpt-h", "unknown-model-x", "gpt-x"})
+	var got []any
+	for _, m := range models {
+		got = append(got, m["slug"])
+	}
+	want := []any{"gpt-x", "gpt-h", "gpt-y", "relay-gpt-x", "relay-gpt-h"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("slugs = %v, want %v（两边都没有的不出现；中台没有的官方名 gpt-y 不加中台条目）", got, want)
+	}
+}
+
+func TestBuild_RelayOrder_ParamsTableThenOfficialSameName(t *testing.T) {
+	_, models := buildSameName(t, []string{"gpt-h", "glm-5.3", "gpt-x", "auto"})
+	var got []any
+	for _, m := range models[3:] {
+		got = append(got, m["slug"])
+	}
+	want := []any{"relay-auto", "relay-glm-5.3", "relay-gpt-x", "relay-gpt-h"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("中台条目顺序 = %v, want %v", got, want)
+	}
+	for i, m := range models[3:] {
+		if m["priority"] != float64(10+i) {
+			t.Errorf("%v priority = %v, want %d（官方最大值 9 之后连续递增）", m["slug"], m["priority"], 10+i)
+		}
+	}
+}
+
+func TestBuild_OfficialEntriesUnchangedWithSameNameRelay(t *testing.T) {
+	_, models := buildSameName(t, []string{"gpt-x", "gpt-h", "auto"})
+	var file struct {
+		Models []map[string]any `json:"models"`
+	}
+	if err := json.Unmarshal([]byte(sameNameOfficialJSON), &file); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(models[:3], file.Models) {
+		t.Errorf("官方条目被改动或顺序变化")
+	}
+}
+
+func TestBuild_SameNameRelayEntry_CopiesOfficialParamsAndOverridesRelayFields(t *testing.T) {
+	_, models := buildSameName(t, []string{"gpt-x"})
+	official := bySlug(t, models, "gpt-x")
+	e := bySlug(t, models, "relay-gpt-x")
+
+	for _, k := range []string{"context_window", "max_context_window", "supported_reasoning_levels", "default_reasoning_level", "input_modalities", "visibility"} {
+		if !reflect.DeepEqual(e[k], official[k]) {
+			t.Errorf("%s = %#v, want 照搬官方 %#v", k, e[k], official[k])
+		}
+	}
+	exact := map[string]any{
+		"supports_search_tool":         false,
+		"service_tiers":                []any{},
+		"additional_speed_tiers":       []any{},
+		"experimental_supported_tools": []any{},
+		"supported_in_api":             true,
+		"description":                  "中台模型",
+	}
+	for k, want := range exact {
+		if !reflect.DeepEqual(e[k], want) {
+			t.Errorf("%s = %#v, want %#v", k, e[k], want)
+		}
+	}
+	for _, k := range []string{"web_search_tool_type", "upgrade", "availability_nux", "model_messages"} {
+		if v, ok := e[k]; ok {
+			t.Errorf("%s = %#v，应不写这个字段", k, v)
+		}
+	}
+}
+
+func TestBuild_SameNameRelayEntry_HiddenOfficialStaysHidden(t *testing.T) {
+	_, models := buildSameName(t, []string{"gpt-h"})
+	if got := bySlug(t, models, "relay-gpt-h")["visibility"]; got != "hide" {
+		t.Errorf("visibility = %v，官方是 hide 时中台同名条目也应 hide", got)
+	}
+}
+
+func TestBuild_NameInBothParamsAndOfficial_OfficialParamsWin(t *testing.T) {
+	_, models := buildSameName(t, []string{"gpt-x"})
+	e := bySlug(t, models, "relay-gpt-x")
+	if e["context_window"] != float64(400000) || !reflect.DeepEqual(e["input_modalities"], []any{"text", "image"}) || e["default_reasoning_level"] != "medium" {
+		t.Errorf("参数表里也有 gpt-x，但应用官方参数: context_window=%v input_modalities=%v default=%v", e["context_window"], e["input_modalities"], e["default_reasoning_level"])
+	}
+}
+
+func TestBuild_ParamsOnlyRelayEntry_KeepsParamsTableValues(t *testing.T) {
+	_, models := buildSameName(t, []string{"glm-5.3"})
+	e := bySlug(t, models, "relay-glm-5.3")
+	if e["context_window"] != float64(128000) || e["default_reasoning_level"] != "high" || e["description"] != "中台模型" {
+		t.Errorf("参数表模型的参数不对: %v", e)
+	}
+}
+
+func TestBuild_ReasoningLevelsIncludeSameNameOfficialLevels(t *testing.T) {
+	res, _ := buildSameName(t, []string{"gpt-h", "gpt-x", "glm-5.3"})
+	want := []string{"high", "low", "medium", "xhigh"}
+	if !reflect.DeepEqual(res.ReasoningLevels, want) {
+		t.Errorf("ReasoningLevels = %v, want %v（参数表 glm-5.3 的 high，再是同名 gpt-x 官方的 low/medium/xhigh，gpt-h 的 high 去重）", res.ReasoningLevels, want)
+	}
+}
+
+func TestBuild_RelayHasOnlyUnknownModels_OnlyOfficial(t *testing.T) {
+	res, models := buildSameName(t, []string{"unknown-model-x"})
+	if len(models) != 3 || len(res.ReasoningLevels) != 0 {
+		t.Errorf("models = %d, levels = %v", len(models), res.ReasoningLevels)
+	}
 }

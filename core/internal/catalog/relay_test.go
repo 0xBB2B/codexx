@@ -118,38 +118,6 @@ func TestRelayTimeout_Is15Seconds(t *testing.T) {
 	}
 }
 
-func TestSelectRelay(t *testing.T) {
-	t.Parallel()
-	params := []catalog.Param{
-		{ID: "auto", Source: "s"},
-		{ID: "deepseek-v3.2", Source: "s"},
-		{ID: "only-in-params", Source: "s"},
-	}
-	tests := []struct {
-		name string
-		ids  []string
-		want []string
-	}{
-		{"取交集并保持中台顺序", []string{"deepseek-v3.2", "unknown-model-x", "auto"}, []string{"deepseek-v3.2", "auto"}},
-		{"必须完全相等", []string{"Auto", "deepseek-v3.2-extra", "auto "}, nil},
-		{"中台为空", nil, nil},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			got := catalog.SelectRelay(tt.ids, params)
-			if len(got) != len(tt.want) {
-				t.Fatalf("got %d 条: %v", len(got), got)
-			}
-			for i, p := range got {
-				if p.ID != tt.want[i] {
-					t.Errorf("[%d] = %s, want %s", i, p.ID, tt.want[i])
-				}
-			}
-		})
-	}
-}
-
 func TestFetchRelayIDs_InvalidBody(t *testing.T) {
 	t.Parallel()
 	for _, body := range []string{"not json", `{"data":null}`, `{}`} {

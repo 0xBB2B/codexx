@@ -22,7 +22,7 @@ const (
 	keyEfforts  = "desktop.enabled-reasoning-efforts"
 
 	proxyBaseURL = "http://127.0.0.1:47311/v1"
-	autoModel    = "auto"
+	autoModel    = "relay-auto"
 )
 
 type Config struct {

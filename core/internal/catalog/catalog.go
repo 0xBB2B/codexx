@@ -38,10 +38,16 @@ func Build(ctx context.Context, opts BuildOptions) (*Result, error) {
 		ids = nil
 	}
 
-	res, err := Merge(official, SelectRelay(ids, opts.Params))
+	paramOnly, sameName := RelayNames(ids, opts.Params, official)
+	res, err := MergeRelay(official, paramOnly, sameName)
 	if err != nil {
 		return nil, err
 	}
+	for _, p := range paramOnly {
+		res.RelayModels = append(res.RelayModels, p.ID)
+	}
+	res.RelayModels = append(res.RelayModels, sameName...)
+	res.RelayShown = ShownRelayNames(paramOnly, sameName, official)
 	res.RelayErr = relayErr
 	res.StoreErr = storeErr
 	res.RelayFetchedAt = fetchedAt

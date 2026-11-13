@@ -160,7 +160,7 @@ func TestEnable_OnlyManagedLinesChange(t *testing.T) {
 			if l, ok := findLine(got, "model_catalog_json"); !ok || !strings.Contains(l, `"`+in.CatalogPath+`"`) {
 				t.Fatalf("model_catalog_json 行 = %q", l)
 			}
-			if l, ok := findLine(got, "model"); !ok || !strings.Contains(l, `"auto"`) {
+			if l, ok := findLine(got, "model"); !ok || !strings.Contains(l, `"relay-auto"`) {
 				t.Fatalf("model 行 = %q", l)
 			}
 			if _, ok := findLine(got, "model_provider"); ok {
@@ -191,7 +191,7 @@ func TestEnable_ModelKey(t *testing.T) {
 		hasAuto   bool
 		wantModel string
 	}{
-		{"有 auto 时写入 auto", true, `"auto"`},
+		{"有 auto 时写入 relay-auto", true, `"relay-auto"`},
 		{"无 auto 时保持用户原值", false, `"gpt-x"`},
 	}
 	for _, tt := range tests {

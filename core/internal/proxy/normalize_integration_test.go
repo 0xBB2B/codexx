@@ -38,7 +38,7 @@ func newNormalizeEnv(t *testing.T, dataDir string, relayHandler http.HandlerFunc
 		LogOutput:          e.log,
 		DataDir:            dataDir,
 	})
-	e.srv.SetRelay(proxy.RelayConfig{Models: []string{relayModel}, BaseURL: e.relay.URL + "/v1", Key: relayKey})
+	e.srv.SetRelay(proxy.RelayConfig{Models: []string{relayOrigName}, BaseURL: e.relay.URL + "/v1", Key: relayKey})
 	e.front = httptest.NewServer(e.srv.Handler())
 	t.Cleanup(e.front.Close)
 	return e
@@ -193,7 +193,7 @@ func TestCompactionTakeover_Stream(t *testing.T) {
 	if err := json.Unmarshal(hit.Body, &sent); err != nil {
 		t.Fatal(err)
 	}
-	if sent["stream"] != false || sent["instructions"] != normalize.SummaryInstructions || sent["model"] != relayModel {
+	if sent["stream"] != false || sent["instructions"] != normalize.SummaryInstructions || sent["model"] != relayOrigName {
 		t.Fatalf("总结请求字段不对：%s", hit.Body)
 	}
 	if strings.Contains(string(hit.Body), "compaction_trigger") || strings.Contains(string(hit.Body), "ENC") {

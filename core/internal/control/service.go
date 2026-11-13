@@ -117,6 +117,7 @@ type Service struct {
 	chatgptFound   bool
 	chatgptErr     string
 	relayIDs       []string
+	relayShown     []string
 	relayErr       string
 	fetchedAt      time.Time
 	levels         []string
@@ -177,7 +178,7 @@ func (s *Service) SaveConnection(ctx context.Context, baseURL, apiKey string) (S
 		return SaveResult{}, toError(err)
 	}
 	prev := s.snapshot()
-	before := slices.Clone(s.relayIDs)
+	before := slices.Clone(s.relayShown)
 	s.baseURL, s.apiKey = baseURL, apiKey
 	if err := s.refreshRelay(ctx, ids); err != nil {
 		s.rollback(prev)
@@ -185,8 +186,8 @@ func (s *Service) SaveConnection(ctx context.Context, baseURL, apiKey string) (S
 	}
 	s.notifyLocked()
 	return SaveResult{
-		ModelsChanged:   !sameSet(before, s.relayIDs),
-		RelayModelCount: len(s.relayIDs),
+		ModelsChanged:   !sameSet(before, s.relayShown),
+		RelayModelCount: len(s.relayShown),
 	}, nil
 }
 
@@ -378,11 +379,17 @@ func (s *Service) refreshRelay(ctx context.Context, fetched []string) error {
 		}
 		fetched = ids
 	}
-	selected, err := selectRelay(fetched)
+	params, err := catalog.BuiltinParams()
 	if err != nil {
 		return err
 	}
-	s.relayIDs, s.relayErr, s.fetchedAt = selected, "", time.Now().UTC().Truncate(time.Second)
+	var official []catalog.Entry
+	if codex, err := s.locateCodex(); err == nil {
+		official, _ = catalog.LoadOfficial(ctx, codex)
+	}
+	paramOnly, sameName := catalog.RelayNames(fetched, params, official)
+	s.relayShown = catalog.ShownRelayNames(paramOnly, sameName, official)
+	s.relayErr, s.fetchedAt = "", time.Now().UTC().Truncate(time.Second)
 	return nil
 }
 
@@ -398,7 +405,7 @@ func (s *Service) rebuild(ctx context.Context, fetched []string) error {
 		if err != nil {
 			return err
 		}
-		if res, err = catalog.Merge(official, nil); err != nil {
+		if res, err = catalog.MergeRelay(official, nil, nil); err != nil {
 			return err
 		}
 		if err := store.WriteCatalog(res.Models); err != nil {
@@ -423,15 +430,7 @@ func (s *Service) rebuild(ctx context.Context, fetched []string) error {
 		}
 	}
 
-	var ids []string
-	if s.baseURL != "" {
-		ids, _, _, _ = store.LoadRelayModels()
-	}
-	selected, err := selectRelay(ids)
-	if err != nil {
-		return err
-	}
-	s.relayIDs, s.relayErr, s.levels = selected, errCode(res.RelayErr), res.ReasoningLevels
+	s.relayIDs, s.relayShown, s.relayErr, s.levels = res.RelayModels, res.RelayShown, errCode(res.RelayErr), res.ReasoningLevels
 	s.fetchedAt = time.Time{}
 	if !res.RelayFetchedAt.IsZero() {
 		s.fetchedAt = res.RelayFetchedAt.UTC().Truncate(time.Second)
@@ -449,17 +448,18 @@ func (s *Service) pushRelay() {
 type connection struct {
 	baseURL, apiKey string
 	relayIDs        []string
+	relayShown      []string
 	relayErr        string
 	fetchedAt       time.Time
 	levels          []string
 }
 
 func (s *Service) snapshot() connection {
-	return connection{s.baseURL, s.apiKey, s.relayIDs, s.relayErr, s.fetchedAt, s.levels}
+	return connection{s.baseURL, s.apiKey, s.relayIDs, s.relayShown, s.relayErr, s.fetchedAt, s.levels}
 }
 
 func (s *Service) rollback(c connection) {
-	s.baseURL, s.apiKey, s.relayIDs, s.relayErr, s.fetchedAt, s.levels = c.baseURL, c.apiKey, c.relayIDs, c.relayErr, c.fetchedAt, c.levels
+	s.baseURL, s.apiKey, s.relayIDs, s.relayShown, s.relayErr, s.fetchedAt, s.levels = c.baseURL, c.apiKey, c.relayIDs, c.relayShown, c.relayErr, c.fetchedAt, c.levels
 	s.pushRelay()
 }
 
@@ -525,7 +525,7 @@ func (s *Service) statusLocked() Status {
 		Forwarding:     s.forwarding,
 		Proxy:          ProxyStatus{Running: s.proxy != nil, Error: optional(s.proxyErr)},
 		ChatGPT:        ChatGPTStatus{Found: s.chatgptFound, Error: optional(s.chatgptErr)},
-		Relay:          RelayStatus{ModelCount: len(s.relayIDs), Stale: s.relayErr != "", Error: optional(s.relayErr)},
+		Relay:          RelayStatus{ModelCount: len(s.relayShown), Stale: s.relayErr != "", Error: optional(s.relayErr)},
 		TakenOver:      append([]string{}, s.takenOver...),
 		RestoreBlocked: append([]string{}, s.restoreBlocked...),
 		ConfigPath:     s.configPath,
@@ -536,18 +536,6 @@ func (s *Service) statusLocked() Status {
 		st.Relay.FetchedAt = &at
 	}
 	return st
-}
-
-func selectRelay(ids []string) ([]string, error) {
-	params, err := catalog.BuiltinParams()
-	if err != nil {
-		return nil, err
-	}
-	var out []string
-	for _, p := range catalog.SelectRelay(ids, params) {
-		out = append(out, p.ID)
-	}
-	return out, nil
 }
 
 func sameSet(a, b []string) bool {

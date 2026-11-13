@@ -56,3 +56,16 @@ func extractModel(body []byte) string {
 	}
 	return v.Model
 }
+
+func withModel(body []byte, model string) []byte {
+	var top map[string]json.RawMessage
+	if json.Unmarshal(body, &top) != nil {
+		return body
+	}
+	top["model"], _ = json.Marshal(model)
+	out, err := json.Marshal(top)
+	if err != nil {
+		return body
+	}
+	return out
+}

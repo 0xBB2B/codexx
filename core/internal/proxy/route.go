@@ -5,6 +5,8 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+
+	"modelbridge/internal/catalog"
 )
 
 const (
@@ -39,13 +41,16 @@ type route struct {
 	relay  bool
 	target *url.URL
 	key    string
+	model  string
 }
 
 func (s *Server) decideRoute(r *http.Request, urlPath, model string) (route, error) {
 	rest := strings.TrimPrefix(urlPath, "/v1")
 
 	s.relayState.mu.RLock()
-	_, isRelay := s.relayState.models[model]
+	origName := strings.TrimPrefix(model, catalog.RelaySlugPrefix)
+	_, isRelay := s.relayState.models[origName]
+	isRelay = isRelay && origName != model
 	base, key := s.relayState.base, s.relayState.key
 	s.relayState.mu.RUnlock()
 
@@ -62,7 +67,7 @@ func (s *Server) decideRoute(r *http.Request, urlPath, model string) (route, err
 	u.Path = strings.TrimRight(u.Path, "/") + rest
 	u.RawPath = ""
 	u.RawQuery = r.URL.RawQuery
-	return route{relay: isRelay, target: u, key: key}, nil
+	return route{relay: isRelay, target: u, key: key, model: origName}, nil
 }
 
 func rewriteRelayHeaders(h http.Header, key string) {

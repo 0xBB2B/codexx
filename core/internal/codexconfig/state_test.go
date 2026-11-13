@@ -64,7 +64,7 @@ func TestEnable_StateRecordsOriginalAndWritten(t *testing.T) {
 		t.Fatalf("model_catalog_json 记录 = %+v", e)
 	}
 	e = sf.Entries["model"]
-	if !e.HadOriginal || e.Written != "auto" || e.TakenOver {
+	if !e.HadOriginal || e.Written != "relay-auto" || e.TakenOver {
 		t.Fatalf("model 记录 = %+v", e)
 	}
 	e = sf.Entries["model_provider"]

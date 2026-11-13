@@ -2,6 +2,7 @@ package proxy_test
 
 import (
 	"bytes"
+	"encoding/json"
 	"net/http"
 	"testing"
 
@@ -18,6 +19,17 @@ func zstdEncode(t *testing.T, raw []byte) []byte {
 	return enc.EncodeAll(raw, nil)
 }
 
+func requireBodyWithModel(t *testing.T, body []byte, model, input string) {
+	t.Helper()
+	var got map[string]any
+	if err := json.Unmarshal(body, &got); err != nil {
+		t.Fatalf("中台收到的请求体不是 JSON: %q", body)
+	}
+	if got["model"] != model || got["input"] != input || len(got) != 2 {
+		t.Fatalf("中台收到的请求体 = %q，期望 model=%s 且其余字段不变", body, model)
+	}
+}
+
 func TestBody_ZstdRelay_DecompressedAndEncodingDropped(t *testing.T) {
 	t.Parallel()
 	raw := []byte(`{"model":"` + relayModel + `","input":"hello"}`)
@@ -28,9 +40,7 @@ func TestBody_ZstdRelay_DecompressedAndEncodingDropped(t *testing.T) {
 		t.Fatalf("状态码 = %d", resp.StatusCode)
 	}
 	hit := e.relay.onlyHit(t)
-	if !bytes.Equal(hit.Body, raw) {
-		t.Fatalf("中台收到的请求体 = %q，期望解压后 %q", hit.Body, raw)
-	}
+	requireBodyWithModel(t, hit.Body, relayOrigName, "hello")
 	if v := hit.Header.Get("Content-Encoding"); v != "" {
 		t.Fatalf("中台不应收到 Content-Encoding，实际 %q", v)
 	}
@@ -44,9 +54,7 @@ func TestBody_PlainRelay_BodyUnchanged(t *testing.T) {
 	raw := []byte(`{"model":"` + relayModel + `","input":"hello"}`)
 	e := newEnv(t, nil)
 	e.do(t, http.MethodPost, "/v1/responses", map[string]string{"Content-Type": "application/json"}, raw)
-	if hit := e.relay.onlyHit(t); !bytes.Equal(hit.Body, raw) {
-		t.Fatalf("中台收到的请求体 = %q", hit.Body)
-	}
+	requireBodyWithModel(t, e.relay.onlyHit(t).Body, relayOrigName, "hello")
 }
 
 func TestBody_ZstdOfficial_ForwardedByteForByte(t *testing.T) {

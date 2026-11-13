@@ -643,7 +643,7 @@ func TestEnable_AutoModelDroppedOnSecondEnable(t *testing.T) {
 		if _, err := Enable(c, fullInput(c)); err != nil {
 			t.Fatal(err)
 		}
-		handEdit(t, cfg, `model = "auto"`, `model = "mine"`)
+		handEdit(t, cfg, `model = "relay-auto"`, `model = "mine"`)
 		in := fullInput(c)
 		in.HasAutoModel = false
 		taken, err := Enable(c, in)

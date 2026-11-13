@@ -19,6 +19,7 @@ import (
 
 const (
 	relayModel    = "relay-model-a"
+	relayOrigName = "model-a"
 	relayKey      = "sk-example-0000"
 	officialKey   = "Bearer sk-official-0000"
 	accountID     = "acct-0000"
@@ -119,7 +120,7 @@ func newEnv(t *testing.T, relayHandler http.HandlerFunc) *testEnv {
 		LogOutput:          e.log,
 	})
 	e.srv.SetRelay(proxy.RelayConfig{
-		Models:  []string{relayModel, "relay-model-b"},
+		Models:  []string{relayOrigName, "model-b"},
 		BaseURL: e.relay.URL + "/v1",
 		Key:     relayKey,
 	})
@@ -329,7 +330,7 @@ func TestLog_NoHeaderValuesNoModel(t *testing.T) {
 	logged := e.log.String()
 	for _, forbidden := range []string{
 		officialKey, "sk-official-0000", relayKey, cookieValue, accountID,
-		"agent-marker-0000", "custom-marker-0000", relayModel, secretModel,
+		"agent-marker-0000", "custom-marker-0000", relayModel, relayOrigName, secretModel,
 	} {
 		if strings.Contains(logged, forbidden) {
 			t.Errorf("日志里出现了不该记录的内容 %q：%s", forbidden, logged)
@@ -393,7 +394,7 @@ func TestRelay_ResponseHeaderTimeout_Unreachable(t *testing.T) {
 func TestRelay_InvalidBaseURL_Unreachable(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t, nil)
-	e.srv.SetRelay(proxy.RelayConfig{Models: []string{relayModel}, BaseURL: "http://[::1", Key: relayKey})
+	e.srv.SetRelay(proxy.RelayConfig{Models: []string{relayOrigName}, BaseURL: "http://[::1", Key: relayKey})
 	resp, body := e.do(t, http.MethodPost, "/v1/responses", nil, []byte(`{"model":"`+relayModel+`"}`))
 	assertNeutralError(t, e, resp, body, http.StatusBadGateway, "连不上中台，请检查网络和 Base URL", "relay_unreachable")
 }

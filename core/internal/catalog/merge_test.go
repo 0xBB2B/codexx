@@ -53,7 +53,7 @@ var mergeParams = []catalog.Param{
 
 func TestMerge_OfficialFirstUnchangedThenRelayWithConsecutivePriority(t *testing.T) {
 	t.Parallel()
-	res, err := catalog.Merge(officialFixture(), mergeParams)
+	res, err := catalog.MergeRelay(officialFixture(), mergeParams, nil)
 	if err != nil {
 		t.Fatalf("Merge: %v", err)
 	}
@@ -65,7 +65,7 @@ func TestMerge_OfficialFirstUnchangedThenRelayWithConsecutivePriority(t *testing
 	if !reflect.DeepEqual(got[:3], want) {
 		t.Errorf("官方条目被改动或顺序变化")
 	}
-	if got[3]["slug"] != "auto" || got[4]["slug"] != "deepseek-v3.2" {
+	if got[3]["slug"] != "relay-auto" || got[4]["slug"] != "relay-deepseek-v3.2" {
 		t.Errorf("中台条目顺序不对: %v %v", got[3]["slug"], got[4]["slug"])
 	}
 	if got[3]["priority"] != float64(8) || got[4]["priority"] != float64(9) {
@@ -75,14 +75,14 @@ func TestMerge_OfficialFirstUnchangedThenRelayWithConsecutivePriority(t *testing
 
 func TestMerge_RelayEntryOverridesAndKeepsBase(t *testing.T) {
 	t.Parallel()
-	res, err := catalog.Merge(officialFixture(), mergeParams)
+	res, err := catalog.MergeRelay(officialFixture(), mergeParams, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	e := roundtrip(t, res.Models)[4]
 
 	exact := map[string]any{
-		"slug": "deepseek-v3.2", "display_name": "deepseek-v3.2", "description": "中台模型",
+		"slug": "relay-deepseek-v3.2", "display_name": "deepseek-v3.2（中台）", "description": "中台模型",
 		"visibility": "list", "supported_in_api": true,
 		"context_window": float64(128000), "max_context_window": float64(128000),
 		"input_modalities":                  []any{"text"},
@@ -118,7 +118,7 @@ func TestMerge_RelayEntryOverridesAndKeepsBase(t *testing.T) {
 
 func TestMerge_EmptyReasoningLevels(t *testing.T) {
 	t.Parallel()
-	res, err := catalog.Merge(officialFixture(), mergeParams[:1])
+	res, err := catalog.MergeRelay(officialFixture(), mergeParams[:1], nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -138,7 +138,7 @@ func TestMerge_EmptyReasoningLevels(t *testing.T) {
 func TestMerge_DoesNotMutateOfficial(t *testing.T) {
 	t.Parallel()
 	off := officialFixture()
-	if _, err := catalog.Merge(off, mergeParams); err != nil {
+	if _, err := catalog.MergeRelay(off, mergeParams, nil); err != nil {
 		t.Fatal(err)
 	}
 	if !reflect.DeepEqual(roundtrip(t, off), roundtrip(t, officialFixture())) {
@@ -148,7 +148,7 @@ func TestMerge_DoesNotMutateOfficial(t *testing.T) {
 
 func TestMerge_NoRelayYieldsOnlyOfficial(t *testing.T) {
 	t.Parallel()
-	res, err := catalog.Merge(officialFixture(), nil)
+	res, err := catalog.MergeRelay(officialFixture(), nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -159,7 +159,7 @@ func TestMerge_NoRelayYieldsOnlyOfficial(t *testing.T) {
 
 func TestMerge_EmptyOfficialIsError(t *testing.T) {
 	t.Parallel()
-	if _, err := catalog.Merge(nil, mergeParams); err == nil {
+	if _, err := catalog.MergeRelay(nil, mergeParams, nil); err == nil {
 		t.Fatal("没有官方条目就没有底板，应报错")
 	}
 }
@@ -171,7 +171,7 @@ func TestMerge_ReasoningLevelsSummary(t *testing.T) {
 		{ID: "m2", ContextWindow: 1, InputModalities: []string{"text"}, ReasoningLevels: []string{"high", "xhigh"}, Source: "s"},
 		{ID: "m3", ContextWindow: 1, InputModalities: []string{"text"}, ReasoningLevels: nil, Source: "s"},
 	}
-	res, err := catalog.Merge(officialFixture(), params)
+	res, err := catalog.MergeRelay(officialFixture(), params, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -184,7 +184,7 @@ func TestMerge_ReasoningLevelsSummary(t *testing.T) {
 func TestMerge_NegativeOfficialPriority(t *testing.T) {
 	t.Parallel()
 	off := []catalog.Entry{{"slug": "a", "priority": -5}, {"slug": "b", "priority": -3}}
-	res, err := catalog.Merge(off, mergeParams)
+	res, err := catalog.MergeRelay(off, mergeParams, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
