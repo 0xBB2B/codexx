@@ -91,6 +91,10 @@ public sealed class AppModel : INotifyPropertyChanged
     const string RestoreBlockedTitle = "没能自动还原 Codex 配置";
     const string RefreshFailed = "没能刷新";
     const string SwitchFailed = "没能切换转发";
+    const string DetectFailedTitle = "没能检测 ChatGPT 登录状态";
+    const string NoChangeTitle = "接入方式没有变化";
+    const string RecheckFailedTitle = "没能重新检测";
+    const string AccessSwitchFailed = "没能切换接入方式";
     const string KeyUnreadable = "无法读取已保存的 API Key，请重新输入";
     const string RestartHint = "重启 ChatGPT 后生效。";
     const string SavedNoRestart = "已保存，不需要重启 ChatGPT";
@@ -122,6 +126,10 @@ public sealed class AppModel : INotifyPropertyChanged
     bool chatGptFound = true;
     bool loginStartEnabled;
     bool coreRunning;
+    string? accessMode;
+    string? accessDetect;
+    bool isDetectingAccess;
+    bool startupAligned;
     int modelCount;
     string? fetchedAt;
     string version = "";
@@ -149,6 +157,7 @@ public sealed class AppModel : INotifyPropertyChanged
         this.chatGpt = chatGpt;
         this.confirmer = confirmer;
         core.StatusReceived += ApplyStatus;
+        core.StatusReceived += OnStatusReceived;
         core.Failed += OnCoreFailed;
     }
 
@@ -209,6 +218,9 @@ public sealed class AppModel : INotifyPropertyChanged
             if (!Set(ref forwardingEnabled, value)) return;
             Raise(nameof(RelayStatusText));
             Raise(nameof(CoreStatusText));
+            Raise(nameof(AccessModeName));
+            Raise(nameof(AccessHelpText));
+            Raise(nameof(ForwardingHelpText));
         }
     }
 
@@ -220,6 +232,7 @@ public sealed class AppModel : INotifyPropertyChanged
             if (!Set(ref chatGptFound, value)) return;
             Raise(nameof(ToggleEnabled));
             Raise(nameof(ChatGptText));
+            Raise(nameof(ForwardingHelpText));
         }
     }
 
@@ -244,7 +257,40 @@ public sealed class AppModel : INotifyPropertyChanged
         }
     }
 
-    public bool ToggleEnabled => !busy && chatGptFound && coreRunning;
+    public bool IsDetectingAccess
+    {
+        get => isDetectingAccess;
+        private set
+        {
+            if (!Set(ref isDetectingAccess, value)) return;
+            Raise(nameof(ToggleEnabled));
+        }
+    }
+
+    public bool ToggleEnabled => !busy && !isDetectingAccess && chatGptFound && coreRunning;
+
+    public string? AccessModeName => forwardingEnabled ? ModeName(accessMode) : null;
+
+    public string? AccessReasonText => accessDetect switch
+    {
+        "logged_in" => "· 已检测到 ChatGPT 登录",
+        "not_logged_in" => "· 没有检测到 ChatGPT 登录",
+        "failed" => "· 沿用上次的方式",
+        _ => null,
+    };
+
+    public string? AccessHelpText => !forwardingEnabled ? null : accessMode switch
+    {
+        "relay" => "不需要登录 ChatGPT。模型列表里只有中台模型，默认选中「中台 · auto」。登录 ChatGPT 后点「重新检测」，就能同时用官方模型。",
+        "both" => "模型列表里官方模型在上，中台模型在下；选官方模型时仍然访问官方服务。",
+        _ => null,
+    };
+
+    public string ForwardingHelpText => !chatGptFound
+        ? "找到 ChatGPT 后才能打开。"
+        : forwardingEnabled
+            ? "开启时，本助手按下方的接入方式修改 Codex 配置。"
+            : "已关闭：Codex 配置已还原为开启前的样子。";
 
     public string CoreStatusText => coreRunning ? "后台运行中" : "后台服务已停止";
 
@@ -362,7 +408,7 @@ public sealed class AppModel : INotifyPropertyChanged
             }
 
             SuccessTitle = forwardingEnabled ? "设置完成，转发已开启" : "设置已保存";
-            SuccessText = $"已获取 {modelCount} 个中台模型。\n请重启 ChatGPT 后使用。助手会在你登录电脑时自动启动，在任务栏通知区域里常驻。";
+            SuccessText = $"已获取 {modelCount} 个中台模型。{SetupAccessText()}\n请重启 ChatGPT 后使用。助手会在你登录电脑时自动启动，在任务栏通知区域里常驻。";
             if (problems.Count > 0)
                 AddNotice(new AppNotice("设置已保存，但有一项没完成", string.Join("\n", problems), AppSeverity.Warning));
             Page = AppPage.Success;
@@ -406,6 +452,112 @@ public sealed class AppModel : INotifyPropertyChanged
             IsBusy = false;
         }
     }
+
+    public async Task RecheckAccessAsync()
+    {
+        RemoveNotices(DetectFailedTitle);
+        IsDetectingAccess = true;
+        try
+        {
+            JsonElement status;
+            try
+            {
+                status = await core.CallAsync("detect_access");
+            }
+            catch (Exception ex) when (ex is CoreCallException or CoreProcessExitedException)
+            {
+                AddNotice(new AppNotice(RecheckFailedTitle, Describe(ex)));
+                return;
+            }
+
+            RemoveNotices(RecheckFailedTitle);
+            ApplyStatus(status);
+            var access = Prop(status, "access");
+            var mode = Str(access, "mode");
+            var target = Str(access, "target");
+            if (Str(access, "detect") == "failed")
+            {
+                AddNotice(DetectFailedNotice());
+                return;
+            }
+
+            if (target == null) return;
+            if (target == mode)
+            {
+                var detail = mode switch
+                {
+                    "relay" => "仍然没有检测到 ChatGPT 登录，继续只用中台模型。",
+                    "both" => "仍然检测到 ChatGPT 登录，继续同时使用官方模型和中台模型。",
+                    _ => null,
+                };
+                if (detail != null) AddNotice(new AppNotice(NoChangeTitle, detail, AppSeverity.Info));
+                return;
+            }
+
+            await ReconcileAccessAsync(target);
+        }
+        finally
+        {
+            IsDetectingAccess = false;
+        }
+    }
+
+    void OnStatusReceived(JsonElement s)
+    {
+        if (startupAligned || !Flag(s, "forwarding", false)) return;
+        startupAligned = true;
+
+        var access = Prop(s, "access");
+        var target = Str(access, "target");
+        if (target == null) return;
+        if (Str(access, "detect") == "failed")
+        {
+            AddNotice(DetectFailedNotice());
+            return;
+        }
+
+        if (target != Str(access, "mode")) _ = ReconcileAccessAsync(target);
+    }
+
+    async Task ReconcileAccessAsync(string target)
+    {
+        LastError = null;
+        try
+        {
+            ApplyStatus(await core.CallAsync("apply_access"));
+            RemoveNotices(AccessSwitchFailed);
+        }
+        catch (Exception ex) when (ex is CoreCallException or CoreProcessExitedException)
+        {
+            if (ex is CoreCallException call) LastError = new CoreErrorInfo(call.Code, call.Keys);
+            if (!HasErrorBanner(lastError))
+                AddNotice(new AppNotice(AccessSwitchFailed, Describe(ex)));
+            ShowMainWindowRequested?.Invoke();
+            return;
+        }
+
+        if (!chatGpt.IsRunning()) return;
+        AddNotice(target == "both"
+            ? new AppNotice("已切换到「官方 + 中台」", "已检测到 ChatGPT 登录。重启 ChatGPT 后生效。", AppSeverity.Success)
+            : new AppNotice("已切换到「只用中台」", "没有检测到 ChatGPT 登录。重启 ChatGPT 后生效。", AppSeverity.Success));
+    }
+
+    static AppNotice DetectFailedNotice() =>
+        new(DetectFailedTitle, "沿用上次的方式。可以稍后点「重新检测」再试。", AppSeverity.Warning);
+
+    static string? ModeName(string? mode) => mode switch
+    {
+        "relay" => "只用中台",
+        "both" => "官方 + 中台",
+        _ => null,
+    };
+
+    string SetupAccessText() => accessMode switch
+    {
+        "relay" => "没有检测到 ChatGPT 登录，接入方式为「只用中台」：Codex 不需要登录，模型列表里只有中台模型。",
+        "both" => "已检测到 ChatGPT 登录，接入方式为「官方 + 中台」。",
+        _ => "",
+    };
 
     public async Task SaveConnectionAsync()
     {
@@ -774,6 +926,12 @@ public sealed class AppModel : INotifyPropertyChanged
         ConfigPath = Str(s, "config_path") ?? "";
         modelCount = Int(relay, "model_count");
         fetchedAt = Str(relay, "fetched_at");
+        var access = Prop(s, "access");
+        accessMode = Str(access, "mode");
+        accessDetect = Str(access, "detect");
+        Raise(nameof(AccessModeName));
+        Raise(nameof(AccessReasonText));
+        Raise(nameof(AccessHelpText));
         Raise(nameof(ModelCountText));
         Raise(nameof(RelayStatusText));
 

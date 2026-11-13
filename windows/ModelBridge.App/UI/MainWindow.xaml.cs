@@ -32,11 +32,16 @@ public partial class MainWindow : Window
     {
         ForwardToggle.SetCurrentValue(ToggleButton.IsCheckedProperty, model.ForwardingEnabled);
         ForwardToggle.IsEnabled = model.ToggleEnabled;
-        ForwardHelp.Text = !model.ChatGptFound
-            ? "找到 ChatGPT 后才能打开。"
-            : model.ForwardingEnabled
-                ? "开启时，Codex 的模型列表里会多出中台模型；选官方模型时仍然访问官方服务。"
-                : "已关闭：Codex 配置已还原为开启前的样子，只显示官方模型。";
+        ForwardHelp.Text = model.ForwardingHelpText;
+        var accessVisible = model.AccessModeName != null ? Visibility.Visible : Visibility.Collapsed;
+        AccessLabel.Visibility = accessVisible;
+        AccessPanel.Visibility = accessVisible;
+        AccessName.Text = model.AccessModeName ?? "";
+        AccessReason.Text = model.AccessReasonText ?? "";
+        AccessHelp.Text = model.AccessHelpText ?? "";
+        RecheckAccessButton.IsEnabled = !model.IsDetectingAccess;
+        AccessSpinner.Visibility = model.IsDetectingAccess ? Visibility.Visible : Visibility.Collapsed;
+        RecheckAccessText.Text = model.IsDetectingAccess ? "正在检测…" : "重新检测";
         SaveButton.IsEnabled = !model.IsBusy;
         ChatGptValue.Text = model.ChatGptText;
         RelayValue.Text = model.RelayStatusText;
@@ -106,6 +111,8 @@ public partial class MainWindow : Window
         await model.ToggleForwardingAsync();
         ForwardToggle.SetCurrentValue(ToggleButton.IsCheckedProperty, model.ForwardingEnabled);
     }
+
+    async void RecheckAccessClick(object sender, RoutedEventArgs e) => await model.RecheckAccessAsync();
 
     async void SaveClick(object sender, RoutedEventArgs e) => await model.SaveConnectionAsync();
 

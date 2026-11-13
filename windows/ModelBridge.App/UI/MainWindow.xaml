@@ -32,11 +32,36 @@
                             <ColumnDefinition Width="112" />
                             <ColumnDefinition Width="*" />
                         </Grid.ColumnDefinitions>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                        </Grid.RowDefinitions>
                         <TextBlock Text="转发到中台" FontWeight="SemiBold" Margin="0,12,0,0" VerticalAlignment="Top" />
                         <StackPanel Grid.Column="1" Margin="12,0,0,0">
                             <ToggleButton x:Name="ForwardToggle" Style="{StaticResource SwitchToggle}" HorizontalAlignment="Left"
                                           AutomationProperties.Name="转发到中台" Click="ForwardClick" />
                             <TextBlock x:Name="ForwardHelp" Style="{StaticResource HelpText}" />
+                        </StackPanel>
+                        <TextBlock x:Name="AccessLabel" Text="接入方式" Grid.Row="1" FontWeight="SemiBold" Margin="0,32,0,0"
+                                   VerticalAlignment="Top" />
+                        <StackPanel x:Name="AccessPanel" Grid.Row="1" Grid.Column="1" Margin="12,20,0,0">
+                            <Grid MinHeight="44">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <TextBlock VerticalAlignment="Center" TextWrapping="Wrap" Margin="0,0,12,0">
+                                    <Run x:Name="AccessName" FontWeight="SemiBold" />
+                                    <Run x:Name="AccessReason" Foreground="{StaticResource TextMutedBrush}" />
+                                </TextBlock>
+                                <Button x:Name="RecheckAccessButton" Grid.Column="1" VerticalAlignment="Center" Click="RecheckAccessClick">
+                                    <StackPanel Orientation="Horizontal">
+                                        <ui:Spinner x:Name="AccessSpinner" Margin="0,0,8,0" VerticalAlignment="Center" />
+                                        <TextBlock x:Name="RecheckAccessText" VerticalAlignment="Center" />
+                                    </StackPanel>
+                                </Button>
+                            </Grid>
+                            <TextBlock x:Name="AccessHelp" Style="{StaticResource HelpText}" />
                         </StackPanel>
                     </Grid>
                     </StackPanel>
