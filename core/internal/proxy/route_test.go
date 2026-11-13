@@ -307,3 +307,13 @@ func TestRoute_UnprefixedOrUnknownModelGoesOfficialUnchanged(t *testing.T) {
 		})
 	}
 }
+
+func TestRoute_OfficialRequestWithUltraEffortUnchanged(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t, nil)
+	body := `{"model":"official-model","reasoning":{"effort":"ultra"}}`
+	e.do(t, http.MethodPost, "/v1/responses", nil, []byte(body))
+	if got := e.api.onlyHit(t).Body; string(got) != body {
+		t.Fatalf("官方收到的请求体 = %q，期望逐字节不变", got)
+	}
+}

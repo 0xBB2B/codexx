@@ -118,6 +118,7 @@ type Service struct {
 	chatgptErr     string
 	relayIDs       []string
 	relayShown     []string
+	relayParam     []string
 	relayErr       string
 	fetchedAt      time.Time
 	levels         []string
@@ -405,7 +406,7 @@ func (s *Service) rebuild(ctx context.Context, fetched []string) error {
 		if err != nil {
 			return err
 		}
-		if res, err = catalog.MergeRelay(official, nil, nil); err != nil {
+		if res, err = catalog.MergeRelay(catalog.FilterOfficial(official, catalog.AccountSlugs(s.modelsCachePath())), nil, nil); err != nil {
 			return err
 		}
 		if err := store.WriteCatalog(res.Models); err != nil {
@@ -417,20 +418,21 @@ func (s *Service) rebuild(ctx context.Context, fetched []string) error {
 			return err
 		}
 		res, err = catalog.Build(ctx, catalog.BuildOptions{
-			CodexPath:    codex,
-			RelayBaseURL: s.baseURL,
-			RelayKey:     s.apiKey,
-			RelayTimeout: catalog.RelayTimeout,
-			DataDir:      s.opts.DataDir,
-			Params:       params,
-			RelayIDs:     fetched,
+			CodexPath:       codex,
+			RelayBaseURL:    s.baseURL,
+			RelayKey:        s.apiKey,
+			RelayTimeout:    catalog.RelayTimeout,
+			DataDir:         s.opts.DataDir,
+			ModelsCachePath: s.modelsCachePath(),
+			Params:          params,
+			RelayIDs:        fetched,
 		})
 		if err != nil {
 			return err
 		}
 	}
 
-	s.relayIDs, s.relayShown, s.relayErr, s.levels = res.RelayModels, res.RelayShown, errCode(res.RelayErr), res.ReasoningLevels
+	s.relayIDs, s.relayShown, s.relayParam, s.relayErr, s.levels = res.RelayModels, res.RelayShown, res.RelayFromParams, errCode(res.RelayErr), res.ReasoningLevels
 	s.fetchedAt = time.Time{}
 	if !res.RelayFetchedAt.IsZero() {
 		s.fetchedAt = res.RelayFetchedAt.UTC().Truncate(time.Second)
@@ -441,7 +443,7 @@ func (s *Service) rebuild(ctx context.Context, fetched []string) error {
 
 func (s *Service) pushRelay() {
 	if s.proxy != nil {
-		s.proxy.SetRelay(proxy.RelayConfig{Models: s.relayIDs, BaseURL: s.baseURL, Key: s.apiKey})
+		s.proxy.SetRelay(proxy.RelayConfig{Models: s.relayIDs, ParamModels: s.relayParam, BaseURL: s.baseURL, Key: s.apiKey})
 	}
 }
 
@@ -449,17 +451,18 @@ type connection struct {
 	baseURL, apiKey string
 	relayIDs        []string
 	relayShown      []string
+	relayParam      []string
 	relayErr        string
 	fetchedAt       time.Time
 	levels          []string
 }
 
 func (s *Service) snapshot() connection {
-	return connection{s.baseURL, s.apiKey, s.relayIDs, s.relayShown, s.relayErr, s.fetchedAt, s.levels}
+	return connection{s.baseURL, s.apiKey, s.relayIDs, s.relayShown, s.relayParam, s.relayErr, s.fetchedAt, s.levels}
 }
 
 func (s *Service) rollback(c connection) {
-	s.baseURL, s.apiKey, s.relayIDs, s.relayShown, s.relayErr, s.fetchedAt, s.levels = c.baseURL, c.apiKey, c.relayIDs, c.relayShown, c.relayErr, c.fetchedAt, c.levels
+	s.baseURL, s.apiKey, s.relayIDs, s.relayShown, s.relayParam, s.relayErr, s.fetchedAt, s.levels = c.baseURL, c.apiKey, c.relayIDs, c.relayShown, c.relayParam, c.relayErr, c.fetchedAt, c.levels
 	s.pushRelay()
 }
 
@@ -507,6 +510,10 @@ func (s *Service) locateCodex() (string, error) {
 		return catalog.FindCodexWindows(s.chatgptDir)
 	}
 	return "", &Error{Code: "chatgpt_not_found"}
+}
+
+func (s *Service) modelsCachePath() string {
+	return filepath.Join(filepath.Dir(s.configPath), "models_cache.json")
 }
 
 func (s *Service) configCfg() codexconfig.Config {

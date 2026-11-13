@@ -15,16 +15,19 @@ const (
 )
 
 type RelayConfig struct {
-	Models  []string
-	BaseURL string
-	Key     string
+	Models []string
+	// ParamModels 是 Models 中来自参数表、需要把 reasoning.effort 的 ultra 改回 max 再发给中台的那部分
+	ParamModels []string
+	BaseURL     string
+	Key         string
 }
 
 type relayState struct {
-	mu     sync.RWMutex
-	models map[string]struct{}
-	base   string
-	key    string
+	mu          sync.RWMutex
+	models      map[string]struct{}
+	paramModels map[string]struct{}
+	base        string
+	key         string
 }
 
 func (s *relayState) set(c RelayConfig) {
@@ -32,16 +35,22 @@ func (s *relayState) set(c RelayConfig) {
 	for _, m := range c.Models {
 		models[m] = struct{}{}
 	}
+	paramModels := make(map[string]struct{}, len(c.ParamModels))
+	for _, m := range c.ParamModels {
+		paramModels[m] = struct{}{}
+	}
 	s.mu.Lock()
+	s.paramModels = paramModels
 	s.models, s.base, s.key = models, c.BaseURL, c.Key
 	s.mu.Unlock()
 }
 
 type route struct {
-	relay  bool
-	target *url.URL
-	key    string
-	model  string
+	relay      bool
+	target     *url.URL
+	key        string
+	model      string
+	ultraToMax bool
 }
 
 func (s *Server) decideRoute(r *http.Request, urlPath, model string) (route, error) {
@@ -51,6 +60,7 @@ func (s *Server) decideRoute(r *http.Request, urlPath, model string) (route, err
 	origName := strings.TrimPrefix(model, catalog.RelaySlugPrefix)
 	_, isRelay := s.relayState.models[origName]
 	isRelay = isRelay && origName != model
+	_, ultraToMax := s.relayState.paramModels[origName]
 	base, key := s.relayState.base, s.relayState.key
 	s.relayState.mu.RUnlock()
 
@@ -67,7 +77,7 @@ func (s *Server) decideRoute(r *http.Request, urlPath, model string) (route, err
 	u.Path = strings.TrimRight(u.Path, "/") + rest
 	u.RawPath = ""
 	u.RawQuery = r.URL.RawQuery
-	return route{relay: isRelay, target: u, key: key, model: origName}, nil
+	return route{relay: isRelay, target: u, key: key, model: origName, ultraToMax: isRelay && ultraToMax}, nil
 }
 
 func rewriteRelayHeaders(h http.Header, key string) {

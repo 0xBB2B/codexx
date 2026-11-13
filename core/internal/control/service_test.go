@@ -21,6 +21,8 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/klauspost/compress/zstd"
+
 	"modelbridge/internal/control"
 )
 
@@ -960,7 +962,7 @@ func TestSetForwardingTrue_SameNameModelUsesPrefixedSlugAndOriginalNameUpstream(
 	if want := []any{"gpt-a", "gpt-b", "relay-deepseek-flash", "relay-gpt-a"}; !reflect.DeepEqual(slugs, want) {
 		t.Errorf("slugs = %v, want %v（两边都没有的 unknown-model-x 不出现）", slugs, want)
 	}
-	if display["relay-gpt-a"] != "gpt-a（中台）" {
+	if display["relay-gpt-a"] != "中台 gpt-a" {
 		t.Errorf("display_name = %v", display["relay-gpt-a"])
 	}
 
@@ -1047,6 +1049,197 @@ func TestModelCount_ExcludesRelayModelsHiddenInPicker(t *testing.T) {
 			}
 			if res.RelayModelCount != 2 || res.ModelsChanged {
 				t.Errorf("SaveConnection = %+v，want 数量 2 且不报模型有变化", res)
+			}
+		})
+	}
+}
+
+const threeOfficialJSON = `{"models":[` +
+	`{"slug":"gpt-a","priority":3,"display_name":"A"},` +
+	`{"slug":"gpt-b","priority":5,"display_name":"B","context_window":123456,"max_context_window":123456,"input_modalities":["text","image"]},` +
+	`{"slug":"gpt-c","priority":8,"display_name":"C"}]}`
+
+func writeModelsCache(t *testing.T, e *env, content string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(filepath.Dir(e.configPath), "models_cache.json"), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func catalogModels(t *testing.T, e *env) []map[string]any {
+	t.Helper()
+	var file struct {
+		Models []map[string]any `json:"models"`
+	}
+	if err := json.Unmarshal([]byte(readFile(t, e.catalogPath())), &file); err != nil {
+		t.Fatal(err)
+	}
+	return file.Models
+}
+
+func catalogSlugs(models []map[string]any) []any {
+	var out []any
+	for _, m := range models {
+		out = append(out, m["slug"])
+	}
+	return out
+}
+
+func TestCatalog_OfficialLimitedToAccountModelsCache(t *testing.T) {
+	e := newEnv(t, true, func(e *env) { e.codexPath = writeFakeCodex(t, threeOfficialJSON, 0) })
+	writeModelsCache(t, e, `{"fetched_at":"2026-01-01T00:00:00Z","etag":"e","client_version":"0.0.0","identity":"placeholder","models":[{"slug":"gpt-c","visibility":"list"},{"slug":"ghost-not-in-full-set"},{"slug":"gpt-a","visibility":"list"}]}`)
+	e.relay.setIDs("gpt-b", "deepseek-flash")
+	st := e.initRelay(t)
+
+	models := catalogModels(t, e)
+	if want := []any{"gpt-a", "gpt-c", "relay-deepseek-flash", "relay-gpt-b"}; !reflect.DeepEqual(catalogSlugs(models), want) {
+		t.Fatalf("slugs = %v, want %v（官方只留名单里有的，顺序同全集；账号没有的 gpt-b 仍有中台同名条目）", catalogSlugs(models), want)
+	}
+	if st.Relay.ModelCount != 2 {
+		t.Errorf("ModelCount = %d, want 2", st.Relay.ModelCount)
+	}
+	rb := models[3]
+	if rb["display_name"] != "中台 gpt-b" || rb["context_window"] != float64(123456) || !reflect.DeepEqual(rb["input_modalities"], []any{"text", "image"}) {
+		t.Errorf("relay-gpt-b 应照搬全集里的 gpt-b 参数: %v", rb)
+	}
+	if rb["priority"] == nil || models[2]["priority"] == nil {
+		t.Fatal("中台条目缺 priority")
+	}
+	p0, p1 := models[2]["priority"].(float64), rb["priority"].(float64)
+	if p0 <= models[1]["priority"].(float64) || p1 != p0+1 {
+		t.Errorf("中台 priority = %v, %v，应在官方之后连续递增", p0, p1)
+	}
+
+	if _, err := e.svc.SetForwarding(context.Background(), false); err != nil {
+		t.Fatal(err)
+	}
+	st, err := e.svc.RefreshModels(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.Relay.ModelCount != 2 {
+		t.Errorf("转发关着 ModelCount = %d, want 2", st.Relay.ModelCount)
+	}
+}
+
+func TestCatalog_ModelsCacheUnusable_AllOfficialKept(t *testing.T) {
+	tests := []struct {
+		name  string
+		cache *string
+	}{
+		{"文件不存在", nil},
+		{"不是合法 JSON", ptr("not json")},
+		{"models 为空", ptr(`{"models":[]}`)},
+		{"没有 models 字段", ptr(`{"etag":"e"}`)},
+		{"名单里的模型全集里一个都没有", ptr(`{"models":[{"slug":"ghost-a"},{"slug":"ghost-b"}]}`)},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			e := newEnv(t, true, func(e *env) { e.codexPath = writeFakeCodex(t, threeOfficialJSON, 0) })
+			if tt.cache != nil {
+				writeModelsCache(t, e, *tt.cache)
+			}
+			e.relay.setIDs("deepseek-flash")
+			e.initRelay(t)
+			want := []any{"gpt-a", "gpt-b", "gpt-c", "relay-deepseek-flash"}
+			if got := catalogSlugs(catalogModels(t, e)); !reflect.DeepEqual(got, want) {
+				t.Errorf("slugs = %v, want %v", got, want)
+			}
+		})
+	}
+}
+
+func postBodyViaProxy(t *testing.T, addr, body string, zstdBody bool) {
+	t.Helper()
+	var payload []byte = []byte(body)
+	req, err := http.NewRequest(http.MethodPost, "http://"+addr+"/v1/responses", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if zstdBody {
+		enc, err := zstd.NewWriter(nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		payload = enc.EncodeAll(payload, nil)
+		enc.Close()
+		req.Header.Set("Content-Encoding", "zstd")
+	}
+	req.Body = io.NopCloser(bytes.NewReader(payload))
+	req.ContentLength = int64(len(payload))
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	_, _ = io.Copy(io.Discard, resp.Body)
+}
+
+func TestForwarding_UltraEffortChangedBackToMaxOnlyForParamsTableModels(t *testing.T) {
+	tests := []struct {
+		name       string
+		model      string
+		effort     string
+		zstd       bool
+		wantEffort string
+	}{
+		{"参数表模型 ultra 改回 max", "relay-deepseek-flash", "ultra", false, "max"},
+		{"参数表模型 ultra 改回 max（zstd）", "relay-deepseek-flash", "ultra", true, "max"},
+		{"参数表模型 high 原样", "relay-deepseek-flash", "high", false, "high"},
+		{"官方同名中台模型 ultra 原样", "relay-gpt-a", "ultra", false, "ultra"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			e := newEnv(t, true)
+			e.relay.setIDs("deepseek-flash", "gpt-a")
+			e.initRelay(t)
+			postBodyViaProxy(t, e.listenAddr, `{"model":"`+tt.model+`","reasoning":{"effort":"`+tt.effort+`"}}`, tt.zstd)
+			bodies := e.relay.forwardedBodies()
+			if len(bodies) != 1 {
+				t.Fatalf("中台收到 %d 次请求", len(bodies))
+			}
+			var sent struct {
+				Reasoning struct {
+					Effort string `json:"effort"`
+				} `json:"reasoning"`
+			}
+			if err := json.Unmarshal([]byte(bodies[0]), &sent); err != nil {
+				t.Fatalf("请求体不是 JSON: %q", bodies[0])
+			}
+			if sent.Reasoning.Effort != tt.wantEffort {
+				t.Errorf("中台收到的 effort = %q, want %q（%s）", sent.Reasoning.Effort, tt.wantEffort, bodies[0])
+			}
+		})
+	}
+}
+
+func TestForwarding_ParamsTableModel_NoReasoningFieldsAdded(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+		want map[string]any
+	}{
+		{"不带 reasoning", `{"model":"relay-deepseek-flash","input":"hi"}`, map[string]any{"model": "deepseek-flash", "input": "hi"}},
+		{"reasoning 为空对象", `{"model":"relay-deepseek-flash","reasoning":{}}`, map[string]any{"model": "deepseek-flash", "reasoning": map[string]any{}}},
+		{"reasoning 只有 summary", `{"model":"relay-deepseek-flash","reasoning":{"summary":"auto"}}`, map[string]any{"model": "deepseek-flash", "reasoning": map[string]any{"summary": "auto"}}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			e := newEnv(t, true)
+			e.relay.setIDs("deepseek-flash")
+			e.initRelay(t)
+			postBodyViaProxy(t, e.listenAddr, tt.body, false)
+			bodies := e.relay.forwardedBodies()
+			if len(bodies) != 1 {
+				t.Fatalf("中台收到 %d 次请求", len(bodies))
+			}
+			var got map[string]any
+			if err := json.Unmarshal([]byte(bodies[0]), &got); err != nil {
+				t.Fatalf("请求体不是 JSON: %q", bodies[0])
+			}
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("中台收到的请求体 = %s，期望字段集合 %v（只有 model 改回原名）", bodies[0], tt.want)
 			}
 		})
 	}

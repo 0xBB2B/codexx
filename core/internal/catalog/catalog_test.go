@@ -342,7 +342,7 @@ func TestBuild_RelayEntriesUsePrefixedSlugAndSuffixedDisplayName(t *testing.T) {
 	tests := []struct{ slug, display string }{
 		{"relay-glm-5.3", "glm-5.3（中台）"},
 		{"relay-auto", "auto（中台）"},
-		{"relay-gpt-x", "gpt-x（中台）"},
+		{"relay-gpt-x", "中台 gpt-x"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.slug, func(t *testing.T) {
@@ -460,5 +460,89 @@ func TestBuild_RelayHasOnlyUnknownModels_OnlyOfficial(t *testing.T) {
 	res, models := buildSameName(t, []string{"unknown-model-x"})
 	if len(models) != 3 || len(res.ReasoningLevels) != 0 {
 		t.Errorf("models = %d, levels = %v", len(models), res.ReasoningLevels)
+	}
+}
+
+func buildWithParams(t *testing.T, officialJSON string, params []catalog.Param, ids []string) (*catalog.Result, []map[string]any) {
+	t.Helper()
+	codex, _ := writeFakeCodex(t, officialJSON, 0)
+	opts := buildOpts(t, codex, "", t.TempDir())
+	opts.Params = params
+	opts.RelayIDs = ids
+	res, err := catalog.Build(context.Background(), opts)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	return res, roundtrip(t, res.Models)
+}
+
+func efforts(t *testing.T, e map[string]any) []any {
+	t.Helper()
+	var out []any
+	for _, l := range e["supported_reasoning_levels"].([]any) {
+		out = append(out, l.(map[string]any)["effort"])
+	}
+	return out
+}
+
+func TestBuild_ParamsTableMaxLevelWrittenAsUltra(t *testing.T) {
+	params := []catalog.Param{
+		{ID: "m-max", ContextWindow: 1, InputModalities: []string{"text"}, ReasoningLevels: []string{"low", "high", "max"}, DefaultReasoningLevel: strp("max"), Source: "s"},
+		{ID: "m-high", ContextWindow: 1, InputModalities: []string{"text"}, ReasoningLevels: []string{"none", "high", "max"}, DefaultReasoningLevel: strp("high"), Source: "s"},
+	}
+	res, models := buildWithParams(t, officialJSON, params, []string{"m-max", "m-high"})
+
+	a := bySlug(t, models, "relay-m-max")
+	if got, want := efforts(t, a), []any{"low", "high", "ultra"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("efforts = %v, want %v", got, want)
+	}
+	if a["default_reasoning_level"] != "ultra" {
+		t.Errorf("default_reasoning_level = %v, want ultra", a["default_reasoning_level"])
+	}
+	b := bySlug(t, models, "relay-m-high")
+	if got, want := efforts(t, b), []any{"none", "high", "ultra"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("efforts = %v, want %v", got, want)
+	}
+	if b["default_reasoning_level"] != "high" {
+		t.Errorf("default_reasoning_level = %v，非 max 的默认等级不变", b["default_reasoning_level"])
+	}
+	if want := []string{"low", "high", "ultra", "none"}; !reflect.DeepEqual(res.ReasoningLevels, want) {
+		t.Errorf("ReasoningLevels = %v, want %v（写 Codex 配置用 ultra，不含 max）", res.ReasoningLevels, want)
+	}
+}
+
+func TestBuild_SameNameRelayKeepsOfficialMaxAndUltra(t *testing.T) {
+	const official = `{"models":[{"slug":"gpt-x","priority":3,"supported_reasoning_levels":[{"effort":"high","description":"h"},{"effort":"max","description":"m"},{"effort":"ultra","description":"u"}],"default_reasoning_level":"max"}]}`
+	res, models := buildWithParams(t, official, nil, []string{"gpt-x"})
+	e := bySlug(t, models, "relay-gpt-x")
+	if got, want := efforts(t, e), []any{"high", "max", "ultra"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("efforts = %v, want %v（同名照搬官方，不替换）", got, want)
+	}
+	if e["default_reasoning_level"] != "max" {
+		t.Errorf("default_reasoning_level = %v, want max", e["default_reasoning_level"])
+	}
+	if want := []string{"high", "max", "ultra"}; !reflect.DeepEqual(res.ReasoningLevels, want) {
+		t.Errorf("ReasoningLevels = %v, want %v", res.ReasoningLevels, want)
+	}
+}
+
+func TestBuild_DisplayName_GptPrefixedNamesUseLeadingLabel(t *testing.T) {
+	params := []catalog.Param{
+		{ID: "GPT-Y", ContextWindow: 1, InputModalities: []string{"text"}, Source: "s"},
+		{ID: "glm-5.3", ContextWindow: 1, InputModalities: []string{"text"}, Source: "s"},
+		{ID: "my-gpt-1", ContextWindow: 1, InputModalities: []string{"text"}, Source: "s"},
+	}
+	_, models := buildWithParams(t, officialJSON, params, []string{"GPT-Y", "glm-5.3", "my-gpt-1"})
+	tests := []struct{ slug, display string }{
+		{"relay-GPT-Y", "中台 GPT-Y"},
+		{"relay-glm-5.3", "glm-5.3（中台）"},
+		{"relay-my-gpt-1", "my-gpt-1（中台）"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.slug, func(t *testing.T) {
+			if got := bySlug(t, models, tt.slug)["display_name"]; got != tt.display {
+				t.Errorf("display_name = %v, want %s", got, tt.display)
+			}
+		})
 	}
 }

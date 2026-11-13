@@ -11,7 +11,9 @@ type BuildOptions struct {
 	RelayKey     string
 	RelayTimeout time.Duration
 	DataDir      string
-	Params       []Param
+	// ModelsCachePath 是 Codex 的 models_cache.json，用来把官方条目限定在当前账号可用的模型
+	ModelsCachePath string
+	Params          []Param
 	// RelayIDs 非 nil 时视为调用方刚拉到的中台列表，Build 不再请求中台
 	RelayIDs []string
 }
@@ -45,7 +47,9 @@ func Build(ctx context.Context, opts BuildOptions) (*Result, error) {
 	}
 	for _, p := range paramOnly {
 		res.RelayModels = append(res.RelayModels, p.ID)
+		res.RelayFromParams = append(res.RelayFromParams, p.ID)
 	}
+	res.Models = append(FilterOfficial(official, AccountSlugs(opts.ModelsCachePath)), res.Models[len(official):]...)
 	res.RelayModels = append(res.RelayModels, sameName...)
 	res.RelayShown = ShownRelayNames(paramOnly, sameName, official)
 	res.RelayErr = relayErr

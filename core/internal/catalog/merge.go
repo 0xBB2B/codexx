@@ -1,8 +1,11 @@
 package catalog
 
 import (
+	"encoding/json"
 	"errors"
 	"maps"
+	"os"
+	"strings"
 	"time"
 )
 
@@ -13,6 +16,7 @@ type Result struct {
 	ReasoningLevels []string
 	RelayModels     []string
 	RelayShown      []string
+	RelayFromParams []string
 	RelayErr        error
 	StoreErr        error
 	RelayFetchedAt  time.Time
@@ -74,6 +78,9 @@ func MergeRelay(official []Entry, relay []Param, sameName []string) (*Result, er
 		e := Entry(maps.Clone(official[0]))
 		supported := make([]map[string]any, 0, len(p.ReasoningLevels))
 		for _, l := range p.ReasoningLevels {
+			if l == "max" {
+				l = "ultra"
+			}
 			supported = append(supported, map[string]any{"effort": l, "description": l})
 			addLevel(l)
 		}
@@ -83,7 +90,11 @@ func MergeRelay(official []Entry, relay []Param, sameName []string) (*Result, er
 		e["supported_reasoning_levels"] = supported
 		e["visibility"] = "list"
 		if p.DefaultReasoningLevel != nil {
-			e["default_reasoning_level"] = *p.DefaultReasoningLevel
+			d := *p.DefaultReasoningLevel
+			if d == "max" {
+				d = "ultra"
+			}
+			e["default_reasoning_level"] = d
 		} else {
 			delete(e, "default_reasoning_level")
 		}
@@ -109,9 +120,16 @@ func MergeRelay(official []Entry, relay []Param, sameName []string) (*Result, er
 	return &Result{Models: models, ReasoningLevels: levels}, nil
 }
 
+func relayDisplayName(name string) string {
+	if t := strings.TrimLeft(name, " \t\r\n"); len(t) >= 3 && strings.EqualFold(t[:3], "gpt") {
+		return "中台 " + name
+	}
+	return name + "（中台）"
+}
+
 func applyRelayOverrides(e Entry, name string, priority float64) {
 	e["slug"] = RelaySlugPrefix + name
-	e["display_name"] = name + "（中台）"
+	e["display_name"] = relayDisplayName(name)
 	e["description"] = "中台模型"
 	e["supported_in_api"] = true
 	e["priority"] = priority
@@ -151,6 +169,46 @@ func ShownRelayNames(paramOnly []Param, sameName []string, official []Entry) []s
 		if !hidden[n] {
 			out = append(out, n)
 		}
+	}
+	return out
+}
+
+func FilterOfficial(official []Entry, accountSlugs []string) []Entry {
+	if len(accountSlugs) == 0 {
+		return official
+	}
+	allowed := make(map[string]bool, len(accountSlugs))
+	for _, slug := range accountSlugs {
+		allowed[slug] = true
+	}
+	var out []Entry
+	for _, e := range official {
+		if slug, ok := e["slug"].(string); ok && allowed[slug] {
+			out = append(out, e)
+		}
+	}
+	if len(out) == 0 {
+		return official
+	}
+	return out
+}
+
+func AccountSlugs(modelsCachePath string) []string {
+	b, err := os.ReadFile(modelsCachePath)
+	if err != nil {
+		return nil
+	}
+	var file struct {
+		Models []struct {
+			Slug string `json:"slug"`
+		} `json:"models"`
+	}
+	if json.Unmarshal(b, &file) != nil {
+		return nil
+	}
+	var out []string
+	for _, m := range file.Models {
+		out = append(out, m.Slug)
 	}
 	return out
 }
