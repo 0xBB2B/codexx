@@ -340,9 +340,9 @@ func bySlug(t *testing.T, models []map[string]any, slug string) map[string]any {
 func TestBuild_RelayEntriesUsePrefixedSlugAndSuffixedDisplayName(t *testing.T) {
 	_, models := buildSameName(t, []string{"glm-5.3", "auto", "gpt-x"})
 	tests := []struct{ slug, display string }{
-		{"relay-glm-5.3", "glm-5.3（中台）"},
-		{"relay-auto", "auto（中台）"},
-		{"relay-gpt-x", "中台 gpt-x"},
+		{"relay-glm-5.3", "中台 · glm-5.3"},
+		{"relay-auto", "中台 · auto"},
+		{"relay-gpt-x", "中台 · gpt-x"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.slug, func(t *testing.T) {
@@ -534,9 +534,9 @@ func TestBuild_DisplayName_GptPrefixedNamesUseLeadingLabel(t *testing.T) {
 	}
 	_, models := buildWithParams(t, officialJSON, params, []string{"GPT-Y", "glm-5.3", "my-gpt-1"})
 	tests := []struct{ slug, display string }{
-		{"relay-GPT-Y", "中台 GPT-Y"},
-		{"relay-glm-5.3", "glm-5.3（中台）"},
-		{"relay-my-gpt-1", "my-gpt-1（中台）"},
+		{"relay-GPT-Y", "中台 · GPT-Y"},
+		{"relay-glm-5.3", "中台 · glm-5.3"},
+		{"relay-my-gpt-1", "中台 · my-gpt-1"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.slug, func(t *testing.T) {

@@ -82,7 +82,7 @@ func TestMerge_RelayEntryOverridesAndKeepsBase(t *testing.T) {
 	e := roundtrip(t, res.Models)[4]
 
 	exact := map[string]any{
-		"slug": "relay-deepseek-v3.2", "display_name": "deepseek-v3.2（中台）", "description": "中台模型",
+		"slug": "relay-deepseek-v3.2", "display_name": "中台 · deepseek-v3.2", "description": "中台模型",
 		"visibility": "list", "supported_in_api": true,
 		"context_window": float64(128000), "max_context_window": float64(128000),
 		"input_modalities":                  []any{"text"},

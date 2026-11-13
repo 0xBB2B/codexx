@@ -5,7 +5,6 @@ import (
 	"errors"
 	"maps"
 	"os"
-	"strings"
 	"time"
 )
 
@@ -121,10 +120,7 @@ func MergeRelay(official []Entry, relay []Param, sameName []string) (*Result, er
 }
 
 func relayDisplayName(name string) string {
-	if t := strings.TrimLeft(name, " \t\r\n"); len(t) >= 3 && strings.EqualFold(t[:3], "gpt") {
-		return "中台 " + name
-	}
-	return name + "（中台）"
+	return "中台 · " + name
 }
 
 func applyRelayOverrides(e Entry, name string, priority float64) {

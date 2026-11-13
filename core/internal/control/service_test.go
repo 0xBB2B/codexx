@@ -962,7 +962,7 @@ func TestSetForwardingTrue_SameNameModelUsesPrefixedSlugAndOriginalNameUpstream(
 	if want := []any{"gpt-a", "gpt-b", "relay-deepseek-flash", "relay-gpt-a"}; !reflect.DeepEqual(slugs, want) {
 		t.Errorf("slugs = %v, want %v（两边都没有的 unknown-model-x 不出现）", slugs, want)
 	}
-	if display["relay-gpt-a"] != "中台 gpt-a" {
+	if display["relay-gpt-a"] != "中台 · gpt-a" {
 		t.Errorf("display_name = %v", display["relay-gpt-a"])
 	}
 
@@ -1099,7 +1099,7 @@ func TestCatalog_OfficialLimitedToAccountModelsCache(t *testing.T) {
 		t.Errorf("ModelCount = %d, want 2", st.Relay.ModelCount)
 	}
 	rb := models[3]
-	if rb["display_name"] != "中台 gpt-b" || rb["context_window"] != float64(123456) || !reflect.DeepEqual(rb["input_modalities"], []any{"text", "image"}) {
+	if rb["display_name"] != "中台 · gpt-b" || rb["context_window"] != float64(123456) || !reflect.DeepEqual(rb["input_modalities"], []any{"text", "image"}) {
 		t.Errorf("relay-gpt-b 应照搬全集里的 gpt-b 参数: %v", rb)
 	}
 	if rb["priority"] == nil || models[2]["priority"] == nil {
