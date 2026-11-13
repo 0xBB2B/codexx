@@ -76,17 +76,44 @@ struct MainWindow: View {
         Card(title: "转发") {
             FieldRow(
                 label: "转发到中台",
-                help: chatGPTFound
-                    ? (model.forwardingEnabled
-                        ? "开启时，Codex 的模型列表里会多出中台模型；选官方模型时仍然访问官方服务。"
-                        : "已关闭：Codex 配置已还原为开启前的样子，只显示官方模型。")
-                    : "找到 ChatGPT 后才能打开。"
+                help: model.forwardingHelpText
             ) {
                 SwitchRow(label: "转发到中台", isOn: Binding(
                     get: { model.forwardingEnabled },
                     set: { value in Task { await model.toggleForwarding(enabled: value) } }
                 ))
                 .disabled(model.forwardingToggleDisabled)
+            }
+            accessRow
+        }
+    }
+
+    @ViewBuilder
+    private var accessRow: some View {
+        if let name = model.accessModeName {
+            FieldRow(label: "接入方式", help: model.accessHelpText) {
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack(spacing: 12) {
+                        HStack(spacing: 4) {
+                            Text(name).font(Fonts.label).foregroundColor(Palette.text)
+                            if let reason = model.accessReasonText {
+                                Text(reason).font(Fonts.control).foregroundColor(Palette.textMuted)
+                            }
+                        }
+                        Spacer()
+                        Button { Task { await model.recheckAccess() } } label: {
+                            BusyLabel(text: model.isDetectingAccess ? "正在检测…" : "重新检测", busy: model.isDetectingAccess)
+                        }
+                        .secondaryAction(compact: true)
+                        .disabled(model.isDetectingAccess)
+                    }
+                    .frame(minHeight: 44, alignment: .center)
+                    if model.accessDetectFailed {
+                        Label("没能检测 ChatGPT 登录状态，沿用上次的方式。", systemImage: "exclamationmark.triangle.fill")
+                            .font(Fonts.caption)
+                            .foregroundColor(Palette.warning)
+                    }
+                }
             }
         }
     }

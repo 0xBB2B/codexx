@@ -52,6 +52,7 @@ struct Notice: Equatable, Sendable {
 struct Confirmation: Equatable, Sendable {
     enum Kind: Equatable, Sendable {
         case toggleForwarding(enabled: Bool)
+        case switchAccess
         case restartAfterSave
         case loginStartOff
         case quit
@@ -147,6 +148,7 @@ final class AppModel: ObservableObject {
     @Published var mainWindowRequested = false
     @Published var isSaving = false
     @Published var isSwitchingForwarding = false
+    @Published var isDetectingAccess = false
 
     @Published var coreRunning = true
     @Published var setupFollowUpIssues: [String] = []
@@ -163,9 +165,11 @@ final class AppModel: ObservableObject {
     private let chatGPT: any ChatGPTControlling
     private let trash: any AppTrashing
     private let appURL: URL
+    private let restartNote = "\n\nChatGPT 正在运行，需要重启才能生效。重启会中断 Codex 里正在进行的任务。"
     private var savedBaseURL: String?
     private var savedKey: String?
     private var switchTarget = false
+    private var startupAligned = false
 
     init(
         core: any CoreClient,
@@ -198,7 +202,7 @@ final class AppModel: ObservableObject {
     }
 
     var forwardingToggleDisabled: Bool {
-        !coreRunning || status?.chatgpt?.found == false || isSwitchingForwarding
+        !coreRunning || status?.chatgpt?.found == false || isSwitchingForwarding || isDetectingAccess
     }
 
     var switchingMessage: String? {
@@ -210,6 +214,56 @@ final class AppModel: ObservableObject {
         guard forwardingEnabled else { return "转发关闭时不获取" }
         let count = status?.relay?.modelCount ?? 0
         return count > 0 ? "已获取 \(count) 个" : "暂无，Codex 里只显示官方模型"
+    }
+
+    var accessModeName: String? {
+        guard forwardingEnabled else { return nil }
+        switch status?.access?.mode {
+        case "relay": return "只用中台"
+        case "both": return "官方 + 中台"
+        default: return nil
+        }
+    }
+
+    var accessReasonText: String? {
+        switch status?.access?.detect {
+        case "logged_in": "· 已检测到 ChatGPT 登录"
+        case "not_logged_in": "· 没有检测到 ChatGPT 登录"
+        case "failed": "· 沿用上次的方式"
+        default: nil
+        }
+    }
+
+    var accessHelpText: String? {
+        switch status?.access?.mode {
+        case "relay":
+            "不需要登录 ChatGPT。模型列表里只有中台模型，默认选中「中台 · auto」。登录 ChatGPT 后点「重新检测」，就能同时用官方模型。"
+        case "both":
+            "模型列表里官方模型在上，中台模型在下；选官方模型时仍然访问官方服务。"
+        default: nil
+        }
+    }
+
+    var accessDetectFailed: Bool { status?.access?.detect == "failed" }
+
+    var forwardingHelpText: String {
+        if status?.chatgpt?.found == false { return "找到 ChatGPT 后才能打开。" }
+        return forwardingEnabled
+            ? "开启时，本助手按下方的接入方式修改 Codex 配置。"
+            : "已关闭：Codex 配置已还原为开启前的样子。"
+    }
+
+    var setupSucceededText: String? {
+        guard case .succeeded(_, let count) = setupPhase else { return nil }
+        let tail = "助手会在你登录电脑时自动启动，在菜单栏里常驻。"
+        switch status?.access?.mode {
+        case "relay":
+            return "已获取 \(count) 个中台模型。没有检测到 ChatGPT 登录，接入方式为「只用中台」：Codex 不需要登录，模型列表里只有中台模型。重启 ChatGPT 后就能使用。" + tail
+        case "both":
+            return "已获取 \(count) 个中台模型。已检测到 ChatGPT 登录，接入方式为「官方 + 中台」。重启 ChatGPT 后，就能在 Codex 的模型列表里选用它们。" + tail
+        default:
+            return "已获取 \(count) 个中台模型。重启 ChatGPT 后，Codex 的模型列表里就会出现它们。" + tail
+        }
     }
 
     var banners: [Banner] {
@@ -299,7 +353,10 @@ final class AppModel: ObservableObject {
         let statuses = core.statusEvents()
         let lifecycle = core.lifecycleEvents()
         Task { [weak self] in
-            for await value in statuses { self?.apply(value) }
+            for await value in statuses {
+                self?.apply(value)
+                await self?.alignOnStartup(value)
+            }
         }
         Task { [weak self] in
             for await event in lifecycle {
@@ -364,18 +421,54 @@ final class AppModel: ObservableObject {
 
     func toggleForwarding(enabled: Bool) async {
         if chatGPT.isRunning() {
+            if enabled {
+                isDetectingAccess = true
+                await refresh("detect_access")
+                isDetectingAccess = false
+            }
+            let access = status?.access
+            let note: String
+            if enabled {
+                note = access?.target == "relay"
+                    ? "没有检测到 ChatGPT 登录，打开后 Codex 不需要登录，模型列表里只有中台模型。"
+                    : "打开后，Codex 的模型列表里会多出中台模型。"
+            } else {
+                note = access?.mode == "relay"
+                    ? "关闭后会把 Codex 配置还原成开启前的样子。没有登录 ChatGPT 时，关闭后 Codex 里的模型都无法使用。"
+                    : "关闭后会把 Codex 配置还原成开启前的样子，Codex 里只剩官方模型。"
+            }
             pendingConfirmation = Confirmation(
                 kind: .toggleForwarding(enabled: enabled),
                 title: enabled ? "打开转发并重启 ChatGPT？" : "关闭转发并重启 ChatGPT？",
-                message: (enabled
-                    ? "打开后，Codex 的模型列表里会多出中台模型。"
-                    : "关闭后会把 Codex 配置还原成开启前的样子，Codex 里只剩官方模型。")
-                    + "\n\nChatGPT 正在运行，需要重启才能生效。重启会中断 Codex 里正在进行的任务。",
+                message: note + restartNote,
                 confirmLabel: enabled ? "打开并重启" : "关闭并重启"
             )
         } else {
             await setForwarding(enabled, thenRestart: false)
         }
+    }
+
+    func recheckAccess() async {
+        isDetectingAccess = true
+        defer { isDetectingAccess = false }
+        guard let data = try? await core.call("detect_access", params: Empty()),
+              let value = try? JSONDecoder.snakeCase.decode(CoreStatus.self, from: data) else {
+            notice = Notice(title: "没能重新检测", kind: .error)
+            return
+        }
+        apply(value)
+        guard let access = value.access, access.detect != "failed" else { return }
+        if access.target == access.mode {
+            switch access.mode {
+            case "relay":
+                notice = Notice(title: "接入方式没有变化", detail: "仍然没有检测到 ChatGPT 登录，继续只用中台模型。", kind: .info)
+            case "both":
+                notice = Notice(title: "接入方式没有变化", detail: "仍然检测到 ChatGPT 登录，继续同时使用官方模型和中台模型。", kind: .info)
+            default: break
+            }
+            return
+        }
+        await reconcileAccess(value)
     }
 
     func saveConnection() async {
@@ -501,6 +594,8 @@ final class AppModel: ObservableObject {
         pendingConfirmation = nil
         switch pending.kind {
         case .toggleForwarding(let enabled): await setForwarding(enabled, thenRestart: true)
+        case .switchAccess:
+            if await applyAccess() { await restartChatGPT() }
         case .restartAfterSave: await restartChatGPT()
         case .loginStartOff: applyLoginStart(false)
         case .quit: await shutdown(restore: true)
@@ -523,6 +618,42 @@ final class AppModel: ObservableObject {
             return
         }
         if thenRestart { await restartChatGPT() }
+    }
+
+    private func alignOnStartup(_ value: CoreStatus) async {
+        guard !startupAligned, value.forwarding, value.access?.target != nil, value.access?.detect != "failed" else { return }
+        startupAligned = true
+        await reconcileAccess(value)
+    }
+
+    private func reconcileAccess(_ value: CoreStatus) async {
+        guard let target = value.access?.target, target != value.access?.mode else { return }
+        if chatGPT.isRunning() {
+            let toBoth = target == "both"
+            pendingConfirmation = Confirmation(
+                kind: .switchAccess,
+                title: toBoth
+                    ? "已检测到 ChatGPT 登录，切换到「官方 + 中台」并重启 ChatGPT？"
+                    : "没有检测到 ChatGPT 登录，切换到「只用中台」并重启 ChatGPT？",
+                message: (toBoth
+                    ? "切换后，Codex 里会同时显示官方模型和中台模型。"
+                    : "切换后，Codex 不需要登录，模型列表里只有中台模型。") + restartNote,
+                confirmLabel: "切换并重启"
+            )
+        } else {
+            _ = await applyAccess()
+        }
+    }
+
+    private func applyAccess() async -> Bool {
+        do {
+            let data = try await core.call("apply_access", params: Empty())
+            if let value = try? JSONDecoder.snakeCase.decode(CoreStatus.self, from: data) { apply(value) }
+            return true
+        } catch {
+            recordFailure(CoreFailure(error))
+            return false
+        }
     }
 
     private func runUninstall() async {

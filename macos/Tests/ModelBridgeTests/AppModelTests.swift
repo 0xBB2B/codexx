@@ -241,6 +241,53 @@ private func statusResult(forwarding: Bool) -> Result<Data, CoreError> {
     """)
 }
 
+private func quoted(_ value: String?) -> String { value.map { "\"\($0)\"" } ?? "null" }
+
+private func accessStatusJSON(
+    forwarding: Bool = true,
+    chatgptFound: Bool = true,
+    mode: String? = nil,
+    target: String? = nil,
+    detect: String? = nil
+) -> String {
+    """
+    {"version":"1.2.0","forwarding":\(forwarding),"proxy":{"running":true,"error":null},\
+    "chatgpt":{"found":\(chatgptFound),"error":null},\
+    "relay":{"model_count":6,"fetched_at":"2026-11-11T00:12:00Z","stale":false,"error":null},\
+    "taken_over":[],"restore_blocked":[],"config_path":"/Users/example/.codex/config.toml",\
+    "update":{"latest_version":null,"url":null},\
+    "access":{"mode":\(quoted(mode)),"target":\(quoted(target)),"detect":\(quoted(detect))}}
+    """
+}
+
+private func accessResult(
+    forwarding: Bool = true,
+    mode: String? = nil,
+    target: String? = nil,
+    detect: String? = nil
+) -> Result<Data, CoreError> {
+    resultJSON(accessStatusJSON(forwarding: forwarding, mode: mode, target: target, detect: detect))
+}
+
+private func accessStatus(
+    forwarding: Bool = true,
+    chatgptFound: Bool = true,
+    mode: String? = nil,
+    target: String? = nil,
+    detect: String? = nil
+) throws -> CoreStatus {
+    let json = accessStatusJSON(forwarding: forwarding, chatgptFound: chatgptFound, mode: mode, target: target, detect: detect)
+    let decoder = JSONDecoder()
+    decoder.keyDecodingStrategy = .convertFromSnakeCase
+    return try decoder.decode(CoreStatus.self, from: Data(json.utf8))
+}
+
+private let restartTail = "\n\nChatGPT 正在运行，需要重启才能生效。重启会中断 Codex 里正在进行的任务。"
+private let switchToBothTitle = "已检测到 ChatGPT 登录，切换到「官方 + 中台」并重启 ChatGPT？"
+private let switchToBothMessage = "切换后，Codex 里会同时显示官方模型和中台模型。" + restartTail
+private let switchToRelayTitle = "没有检测到 ChatGPT 登录，切换到「只用中台」并重启 ChatGPT？"
+private let switchToRelayMessage = "切换后，Codex 不需要登录，模型列表里只有中台模型。" + restartTail
+
 private func remote(_ code: String, keys: [String] = []) -> Result<Data, CoreError> {
     .failure(.remote(code: code, keys: keys))
 }
@@ -423,7 +470,7 @@ final class AppModelTests: XCTestCase {
         let h = Harness(chatGPTRunning: true, status: makeStatus(forwarding: false))
         await h.model.toggleForwarding(enabled: true)
         XCTAssertEqual(h.model.pendingConfirmation?.title, "打开转发并重启 ChatGPT？")
-        XCTAssertEqual(h.log.entries, [])
+        XCTAssertEqual(h.log.entries, ["core:detect_access"])
     }
 
     func testToggleForwarding_ChatGPTRunning_TurnOffAsksConfirmationFirst() async {
@@ -438,7 +485,7 @@ final class AppModelTests: XCTestCase {
         await h.model.toggleForwarding(enabled: true)
         h.model.cancelPending()
         XCTAssertNil(h.model.pendingConfirmation)
-        XCTAssertEqual(h.log.entries, [])
+        XCTAssertEqual(h.log.entries, ["core:detect_access"])
     }
 
     func testToggleForwarding_ChatGPTRunning_ConfirmSetsForwardingThenRestarts() async {
@@ -449,7 +496,7 @@ final class AppModelTests: XCTestCase {
         )
         await h.model.toggleForwarding(enabled: true)
         await h.model.confirmPending()
-        XCTAssertEqual(h.log.entries, ["core:set_forwarding", "chatgpt.restart"])
+        XCTAssertEqual(h.log.entries, ["core:detect_access", "core:set_forwarding", "chatgpt.restart"])
         XCTAssertEqual(h.core.calls("set_forwarding").first?.params, #"{"enabled":true}"#)
         XCTAssertNil(h.model.pendingConfirmation)
     }
@@ -1069,5 +1116,383 @@ final class AppModelTests: XCTestCase {
     func testIsChatGPTRunning_ReflectsSystem() {
         XCTAssertTrue(Harness(chatGPTRunning: true).model.isChatGPTRunning)
         XCTAssertFalse(Harness(chatGPTRunning: false).model.isChatGPTRunning)
+    }
+
+    // MARK: 接入方式展示
+
+    func testAccessTexts_RelayNotLoggedIn() throws {
+        let h = Harness(status: try accessStatus(mode: "relay", target: "relay", detect: "not_logged_in"))
+        XCTAssertEqual(h.model.accessModeName, "只用中台")
+        XCTAssertEqual(h.model.accessReasonText, "· 没有检测到 ChatGPT 登录")
+        XCTAssertEqual(
+            h.model.accessHelpText,
+            "不需要登录 ChatGPT。模型列表里只有中台模型，默认选中「中台 · auto」。登录 ChatGPT 后点「重新检测」，就能同时用官方模型。"
+        )
+        XCTAssertFalse(h.model.accessDetectFailed)
+    }
+
+    func testAccessTexts_BothLoggedIn() throws {
+        let h = Harness(status: try accessStatus(mode: "both", target: "both", detect: "logged_in"))
+        XCTAssertEqual(h.model.accessModeName, "官方 + 中台")
+        XCTAssertEqual(h.model.accessReasonText, "· 已检测到 ChatGPT 登录")
+        XCTAssertEqual(h.model.accessHelpText, "模型列表里官方模型在上，中台模型在下；选官方模型时仍然访问官方服务。")
+        XCTAssertFalse(h.model.accessDetectFailed)
+    }
+
+    func testAccessTexts_DetectFailed_KeepsLastWay() throws {
+        let h = Harness(status: try accessStatus(mode: "relay", target: "relay", detect: "failed"))
+        XCTAssertEqual(h.model.accessReasonText, "· 沿用上次的方式")
+        XCTAssertTrue(h.model.accessDetectFailed)
+    }
+
+    func testAccessModeName_ForwardingOffOrModeNil_IsNil() throws {
+        let off = Harness(status: try accessStatus(forwarding: false, mode: "both", target: "both", detect: "logged_in"))
+        XCTAssertNil(off.model.accessModeName)
+        let noMode = Harness(status: try accessStatus(mode: nil, target: nil, detect: nil))
+        XCTAssertNil(noMode.model.accessModeName)
+    }
+
+    func testForwardingHelpText_ThreeStates() throws {
+        let on = Harness(status: makeStatus(forwarding: true))
+        XCTAssertEqual(on.model.forwardingHelpText, "开启时，本助手按下方的接入方式修改 Codex 配置。")
+        let off = Harness(status: makeStatus(forwarding: false))
+        XCTAssertEqual(off.model.forwardingHelpText, "已关闭：Codex 配置已还原为开启前的样子。")
+        let notFound = Harness(status: makeStatus(forwarding: false, chatgptFound: false))
+        XCTAssertEqual(notFound.model.forwardingHelpText, "找到 ChatGPT 后才能打开。")
+    }
+
+    // MARK: 重新检测接入方式
+
+    func testRecheckAccess_IsDetectingWhileInFlight() async throws {
+        let gate = Gate()
+        let h = Harness(
+            responses: ["detect_access": accessResult(mode: "both", target: "both", detect: "logged_in")],
+            gates: ["detect_access": gate],
+            status: try accessStatus(mode: "both", target: "both", detect: "logged_in")
+        )
+        XCTAssertFalse(h.model.isDetectingAccess)
+        let task = Task { await h.model.recheckAccess() }
+        await waitUntil { !h.core.calls("detect_access").isEmpty }
+        XCTAssertTrue(h.model.isDetectingAccess)
+        await gate.open()
+        await task.value
+        XCTAssertFalse(h.model.isDetectingAccess)
+    }
+
+    func testRecheckAccess_UnchangedRelay_ShowsNoChangeNotice() async throws {
+        let h = Harness(
+            responses: ["detect_access": accessResult(mode: "relay", target: "relay", detect: "not_logged_in")],
+            status: try accessStatus(mode: "relay", target: "relay", detect: "not_logged_in")
+        )
+        await h.model.recheckAccess()
+        XCTAssertEqual(h.model.notice?.title, "接入方式没有变化")
+        XCTAssertEqual(h.model.notice?.detail, "仍然没有检测到 ChatGPT 登录，继续只用中台模型。")
+        XCTAssertEqual(h.model.notice?.kind, .info)
+        XCTAssertEqual(h.core.calls("apply_access").count, 0)
+    }
+
+    func testRecheckAccess_UnchangedBoth_ShowsNoChangeNotice() async throws {
+        let h = Harness(
+            responses: ["detect_access": accessResult(mode: "both", target: "both", detect: "logged_in")],
+            status: try accessStatus(mode: "both", target: "both", detect: "logged_in")
+        )
+        await h.model.recheckAccess()
+        XCTAssertEqual(h.model.notice?.title, "接入方式没有变化")
+        XCTAssertEqual(h.model.notice?.detail, "仍然检测到 ChatGPT 登录，继续同时使用官方模型和中台模型。")
+        XCTAssertEqual(h.model.notice?.kind, .info)
+        XCTAssertEqual(h.core.calls("apply_access").count, 0)
+    }
+
+    func testRecheckAccess_DetectFailed_NoNoticeAndNoApply() async throws {
+        let h = Harness(
+            responses: ["detect_access": accessResult(mode: "relay", target: "relay", detect: "failed")],
+            status: try accessStatus(mode: "relay", target: "relay", detect: "failed")
+        )
+        await h.model.recheckAccess()
+        XCTAssertNil(h.model.notice)
+        XCTAssertEqual(h.core.calls("apply_access").count, 0)
+    }
+
+    func testRecheckAccess_ChangedAndChatGPTNotRunning_AppliesDirectlyWithoutConfirmation() async throws {
+        let h = Harness(
+            responses: [
+                "detect_access": accessResult(mode: "relay", target: "both", detect: "logged_in"),
+                "apply_access": accessResult(mode: "both", target: "both", detect: "logged_in"),
+            ],
+            chatGPTRunning: false,
+            status: try accessStatus(mode: "relay", target: "relay", detect: "not_logged_in")
+        )
+        await h.model.recheckAccess()
+        XCTAssertNil(h.model.pendingConfirmation)
+        XCTAssertEqual(h.log.entries, ["core:detect_access", "core:apply_access"])
+        XCTAssertEqual(h.model.status?.access?.mode, "both")
+    }
+
+    func testRecheckAccess_ChangedToBothAndChatGPTRunning_AsksSwitchConfirmation() async throws {
+        let h = Harness(
+            responses: ["detect_access": accessResult(mode: "relay", target: "both", detect: "logged_in")],
+            chatGPTRunning: true,
+            status: try accessStatus(mode: "relay", target: "relay", detect: "not_logged_in")
+        )
+        await h.model.recheckAccess()
+        let pending = try XCTUnwrap(h.model.pendingConfirmation)
+        XCTAssertEqual(pending.kind, .switchAccess)
+        XCTAssertEqual(pending.title, switchToBothTitle)
+        XCTAssertEqual(pending.message, switchToBothMessage)
+        XCTAssertEqual(pending.cancelLabel, "取消")
+        XCTAssertEqual(pending.confirmLabel, "切换并重启")
+        XCTAssertEqual(h.core.calls("apply_access").count, 0)
+    }
+
+    func testRecheckAccess_ChangedToRelayAndChatGPTRunning_AsksSwitchConfirmation() async throws {
+        let h = Harness(
+            responses: ["detect_access": accessResult(mode: "both", target: "relay", detect: "not_logged_in")],
+            chatGPTRunning: true,
+            status: try accessStatus(mode: "both", target: "both", detect: "logged_in")
+        )
+        await h.model.recheckAccess()
+        let pending = try XCTUnwrap(h.model.pendingConfirmation)
+        XCTAssertEqual(pending.kind, .switchAccess)
+        XCTAssertEqual(pending.title, switchToRelayTitle)
+        XCTAssertEqual(pending.message, switchToRelayMessage)
+        XCTAssertEqual(pending.cancelLabel, "取消")
+        XCTAssertEqual(pending.confirmLabel, "切换并重启")
+    }
+
+    func testRecheckAccess_ConfirmSwitch_AppliesThenRestarts() async throws {
+        let h = Harness(
+            responses: [
+                "detect_access": accessResult(mode: "relay", target: "both", detect: "logged_in"),
+                "apply_access": accessResult(mode: "both", target: "both", detect: "logged_in"),
+            ],
+            chatGPTRunning: true,
+            status: try accessStatus(mode: "relay", target: "relay", detect: "not_logged_in")
+        )
+        await h.model.recheckAccess()
+        await h.model.confirmPending()
+        XCTAssertEqual(h.log.entries, ["core:detect_access", "core:apply_access", "chatgpt.restart"])
+        XCTAssertNil(h.model.pendingConfirmation)
+    }
+
+    func testRecheckAccess_CancelSwitch_DoesNotApply() async throws {
+        let h = Harness(
+            responses: ["detect_access": accessResult(mode: "relay", target: "both", detect: "logged_in")],
+            chatGPTRunning: true,
+            status: try accessStatus(mode: "relay", target: "relay", detect: "not_logged_in")
+        )
+        await h.model.recheckAccess()
+        h.model.cancelPending()
+        XCTAssertNil(h.model.pendingConfirmation)
+        XCTAssertEqual(h.log.entries, ["core:detect_access"])
+    }
+
+    func testRecheckAccess_ApplyRestoreBlocked_RecordsFailure() async throws {
+        let h = Harness(
+            responses: [
+                "detect_access": accessResult(mode: "relay", target: "both", detect: "logged_in"),
+                "apply_access": remote("restore_blocked", keys: ["openai_base_url"]),
+            ],
+            chatGPTRunning: false,
+            status: try accessStatus(mode: "relay", target: "relay", detect: "not_logged_in")
+        )
+        await h.model.recheckAccess()
+        XCTAssertEqual(h.model.forwardingFailure, CoreFailure(code: "restore_blocked", keys: ["openai_base_url"]))
+        XCTAssertTrue(h.model.banners.contains { $0.title == "没能自动还原 Codex 配置" })
+    }
+
+    func testRecheckAccess_ConfirmedApplyFails_DoesNotRestart() async throws {
+        let h = Harness(
+            responses: [
+                "detect_access": accessResult(mode: "relay", target: "both", detect: "logged_in"),
+                "apply_access": remote("restore_blocked", keys: ["openai_base_url"]),
+            ],
+            chatGPTRunning: true,
+            status: try accessStatus(mode: "relay", target: "relay", detect: "not_logged_in")
+        )
+        await h.model.recheckAccess()
+        await h.model.confirmPending()
+        XCTAssertEqual(h.model.forwardingFailure?.code, "restore_blocked")
+        XCTAssertFalse(h.log.entries.contains("chatgpt.restart"))
+    }
+
+    func testRecheckAccess_DetectCallFails_ShowsErrorNoticeAndStopsDetecting() async throws {
+        let h = Harness(
+            responses: ["detect_access": remote("internal_error")],
+            status: try accessStatus(mode: "relay", target: "relay", detect: "not_logged_in")
+        )
+        await h.model.recheckAccess()
+        XCTAssertEqual(h.model.notice?.title, "没能重新检测")
+        XCTAssertEqual(h.model.notice?.kind, .error)
+        XCTAssertFalse(h.model.isDetectingAccess)
+        XCTAssertEqual(h.core.calls("apply_access").count, 0)
+    }
+
+    func testStartupAlign_DetectFailed_DoesNotApplyOrAsk() async throws {
+        for running in [false, true] {
+            let h = Harness(chatGPTRunning: running)
+            await h.model.start()
+            h.core.statusContinuation.yield(try accessStatus(mode: "relay", target: "both", detect: "failed"))
+            h.core.statusContinuation.yield(try accessStatus(chatgptFound: false, mode: "relay", target: "relay", detect: "not_logged_in"))
+            await waitUntil { !h.model.banners.isEmpty }
+            try? await Task.sleep(nanoseconds: 100_000_000)
+            XCTAssertEqual(h.core.calls("apply_access").count, 0, "running=\(running)")
+            XCTAssertNil(h.model.pendingConfirmation, "running=\(running)")
+        }
+    }
+
+    func testRecheckAccess_DetectFailedWithDifferentTarget_DoesNotApplyOrAsk() async throws {
+        for running in [false, true] {
+            let h = Harness(
+                responses: ["detect_access": accessResult(mode: "relay", target: "both", detect: "failed")],
+                chatGPTRunning: running,
+                status: try accessStatus(mode: "relay", target: "relay", detect: "not_logged_in")
+            )
+            await h.model.recheckAccess()
+            XCTAssertEqual(h.core.calls("apply_access").count, 0, "running=\(running)")
+            XCTAssertNil(h.model.pendingConfirmation, "running=\(running)")
+            XCTAssertNil(h.model.notice, "running=\(running)")
+        }
+    }
+
+    func testToggleForwarding_TurnOnChatGPTRunning_DetectingDisablesToggleUntilDetectReturns() async throws {
+        let gate = Gate()
+        let h = Harness(
+            responses: ["detect_access": accessResult(forwarding: false, target: "both", detect: "logged_in")],
+            gates: ["detect_access": gate],
+            chatGPTRunning: true,
+            status: try accessStatus(forwarding: false)
+        )
+        XCTAssertFalse(h.model.forwardingToggleDisabled)
+        let task = Task { await h.model.toggleForwarding(enabled: true) }
+        await waitUntil { !h.core.calls("detect_access").isEmpty }
+        XCTAssertTrue(h.model.isDetectingAccess)
+        XCTAssertTrue(h.model.forwardingToggleDisabled)
+        await gate.open()
+        await task.value
+        XCTAssertFalse(h.model.isDetectingAccess)
+        XCTAssertFalse(h.model.forwardingToggleDisabled)
+    }
+
+    // MARK: 启动后首次对齐接入方式
+
+    func testStartupAlign_FirstStatusMismatch_AppliesOnceAndNotRepeated() async throws {
+        let h = Harness(responses: ["apply_access": accessResult(mode: "relay", target: "relay", detect: "not_logged_in")])
+        await h.model.start()
+        let mismatch = try accessStatus(mode: "both", target: "relay", detect: "not_logged_in")
+        h.core.statusContinuation.yield(mismatch)
+        await waitUntil { h.core.calls("apply_access").count == 1 }
+        XCTAssertEqual(h.core.calls("apply_access").count, 1)
+        XCTAssertNil(h.model.pendingConfirmation)
+
+        h.core.statusContinuation.yield(mismatch)
+        h.core.statusContinuation.yield(mismatch)
+        h.core.statusContinuation.yield(try accessStatus(chatgptFound: false, mode: "both", target: "both", detect: "logged_in"))
+        await waitUntil { !h.model.banners.isEmpty }
+        try? await Task.sleep(nanoseconds: 100_000_000)
+        XCTAssertEqual(h.core.calls("apply_access").count, 1)
+    }
+
+    func testStartupAlign_ChatGPTRunning_AsksConfirmationInsteadOfApplying() async throws {
+        let h = Harness(chatGPTRunning: true)
+        await h.model.start()
+        h.core.statusContinuation.yield(try accessStatus(mode: "both", target: "relay", detect: "not_logged_in"))
+        await waitUntil { h.model.pendingConfirmation != nil }
+        let pending = try XCTUnwrap(h.model.pendingConfirmation)
+        XCTAssertEqual(pending.kind, .switchAccess)
+        XCTAssertEqual(pending.title, switchToRelayTitle)
+        XCTAssertEqual(h.core.calls("apply_access").count, 0)
+    }
+
+    func testStartupAlign_ForwardingOffOrTargetNil_DoesNothing() async throws {
+        let h = Harness()
+        await h.model.start()
+        h.core.statusContinuation.yield(try accessStatus(forwarding: false, mode: "both", target: "relay", detect: "not_logged_in"))
+        h.core.statusContinuation.yield(try accessStatus(mode: "both", target: nil, detect: nil))
+        h.core.statusContinuation.yield(try accessStatus(chatgptFound: false, mode: "both", target: "both", detect: "logged_in"))
+        await waitUntil { !h.model.banners.isEmpty }
+        try? await Task.sleep(nanoseconds: 100_000_000)
+        XCTAssertEqual(h.core.calls("apply_access").count, 0)
+        XCTAssertNil(h.model.pendingConfirmation)
+    }
+
+    // MARK: 转发开关与接入方式
+
+    func testToggleForwarding_TurnOffWhileRelayAndChatGPTRunning_WarnsModelsUnusable() async throws {
+        let h = Harness(chatGPTRunning: true, status: try accessStatus(mode: "relay", target: "relay", detect: "not_logged_in"))
+        await h.model.toggleForwarding(enabled: false)
+        XCTAssertEqual(h.model.pendingConfirmation?.kind, .toggleForwarding(enabled: false))
+        XCTAssertEqual(
+            h.model.pendingConfirmation?.message,
+            "关闭后会把 Codex 配置还原成开启前的样子。没有登录 ChatGPT 时，关闭后 Codex 里的模型都无法使用。" + restartTail
+        )
+    }
+
+    func testToggleForwarding_TurnOffWhileBothAndChatGPTRunning_KeepsExistingMessage() async throws {
+        let h = Harness(chatGPTRunning: true, status: try accessStatus(mode: "both", target: "both", detect: "logged_in"))
+        await h.model.toggleForwarding(enabled: false)
+        XCTAssertEqual(
+            h.model.pendingConfirmation?.message,
+            "关闭后会把 Codex 配置还原成开启前的样子，Codex 里只剩官方模型。" + restartTail
+        )
+    }
+
+    func testToggleForwarding_TurnOnTargetRelayAndChatGPTRunning_DetectsFirstAndWarns() async throws {
+        let h = Harness(
+            responses: ["detect_access": accessResult(forwarding: false, mode: nil, target: "relay", detect: "not_logged_in")],
+            chatGPTRunning: true,
+            status: try accessStatus(forwarding: false)
+        )
+        await h.model.toggleForwarding(enabled: true)
+        XCTAssertEqual(h.log.entries, ["core:detect_access"])
+        XCTAssertEqual(h.model.pendingConfirmation?.kind, .toggleForwarding(enabled: true))
+        XCTAssertEqual(
+            h.model.pendingConfirmation?.message,
+            "没有检测到 ChatGPT 登录，打开后 Codex 不需要登录，模型列表里只有中台模型。" + restartTail
+        )
+    }
+
+    func testToggleForwarding_TurnOnTargetBothAndChatGPTRunning_KeepsExistingMessage() async throws {
+        let h = Harness(
+            responses: ["detect_access": accessResult(forwarding: false, mode: nil, target: "both", detect: "logged_in")],
+            chatGPTRunning: true,
+            status: try accessStatus(forwarding: false)
+        )
+        await h.model.toggleForwarding(enabled: true)
+        XCTAssertEqual(
+            h.model.pendingConfirmation?.message,
+            "打开后，Codex 的模型列表里会多出中台模型。" + restartTail
+        )
+    }
+
+    // MARK: 首次设置成功文案
+
+    func testSetupSucceededText_NilBeforeSetup() {
+        XCTAssertNil(Harness().model.setupSucceededText)
+    }
+
+    func testSetupSucceededText_Relay() async {
+        let h = Harness(responses: [
+            "save_connection": saveResult(changed: true, count: 12),
+            "set_forwarding": accessResult(mode: "relay", target: "relay", detect: "not_logged_in"),
+        ])
+        h.fillInputs()
+        await h.model.completeSetup()
+        XCTAssertEqual(
+            h.model.setupSucceededText,
+            "已获取 12 个中台模型。没有检测到 ChatGPT 登录，接入方式为「只用中台」：Codex 不需要登录，模型列表里只有中台模型。重启 ChatGPT 后就能使用。助手会在你登录电脑时自动启动，在菜单栏里常驻。"
+        )
+    }
+
+    func testSetupSucceededText_Both() async {
+        let h = Harness(responses: [
+            "save_connection": saveResult(changed: true, count: 7),
+            "set_forwarding": accessResult(mode: "both", target: "both", detect: "logged_in"),
+        ])
+        h.fillInputs()
+        await h.model.completeSetup()
+        XCTAssertEqual(
+            h.model.setupSucceededText,
+            "已获取 7 个中台模型。已检测到 ChatGPT 登录，接入方式为「官方 + 中台」。重启 ChatGPT 后，就能在 Codex 的模型列表里选用它们。助手会在你登录电脑时自动启动，在菜单栏里常驻。"
+        )
     }
 }

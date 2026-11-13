@@ -6,7 +6,7 @@
 | 03 | relay-only-catalog | done | 2026-11-13 |
 | 04 | relay-only-proxy | done | 2026-11-13 |
 | 05 | access-mode-service | done | 2026-11-13 |
-| 06 | macos-access-mode-ui | pending | — |
+| 06 | macos-access-mode-ui | done | 2026-11-13 |
 ## 当前
 阶段 1、2 已完成；准备执行 06-macos-access-mode-ui。
 01 审查两轮发现 3 条鲁棒性问题已自修：换方式不先还原会写坏状态文件、已有 `[model_providers]` 表头时写入失败、换方式遇手改项被永久拒绝。

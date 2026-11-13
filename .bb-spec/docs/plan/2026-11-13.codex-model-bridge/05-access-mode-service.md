@@ -12,7 +12,7 @@ description: 后台服务按登录检测结果决定接入方式，提供检测�
 - 检测结果 → 目标方式：已登录 →「官方 + 中台」(`both`)；没登录 →「只用中台」(`relay`)；检测失败 → 上次检测成功时的方式，从没成功过 → `relay`。每次检测成功都记住它对应的方式（重启后仍记得）。
 - `init` 时转发开着：先按**上次实际写入的方式**恢复转发（没有记录时按 `both`，因为旧版本只有这种方式），再检测；方式不同时**不自动切换**，由桌面端决定是直接切换还是先弹窗确认（ChatGPT 是否在运行只有桌面端知道）。
 - 打开转发：本次检测得到的目标方式直接写入。
-- 切换方式（`apply_access`）：转发开着且目标方式和当前写入方式不同 → 先把 Codex 配置还原，再按目标方式写入；结果等同于"关闭转发后按新方式打开"。还原被手改阻止时（`restore_blocked`）不切换，返回错误，状态里显示被阻止的项。方式相同或转发关着 → 什么都不改。
+- 切换方式（`apply_access`）：转发开着且目标方式和当前写入方式不同 → 直接按目标方式调用 `codexconfig.Enable`（它发现状态里记的是另一种方式时，会先在内存里还原再按新方式写入，一次落盘；被用户手改过的项保留用户的值，新方式也要写这一项时记为接管）。结果等同于"关闭转发后按新方式打开"。方式相同或转发关着 → 什么都不改。
 - 「只用中台」：Codex 配置写模型服务（plan 01 的 `RelayOnly`），目录只放中台模型（plan 03 的 `RelayOnly`），本机转发拒绝非中台请求（plan 04 的 `RelayOnly`）。「官方 + 中台」保持现有行为。
 - 关闭转发、退出、卸载：照常还原，不检测。
 - 重新获取中台模型、保存连接（会重写目录和配置）时，按当前写入的方式重写，不改变方式。
@@ -74,7 +74,7 @@ description: 后台服务按登录检测结果决定接入方式，提供检测�
 
 ## 协作关系
 - `detect` → `locateCodex` 拿到 codex 路径 → `Options.DetectLogin`（默认 `codexauth.Detect`）。找不到 codex 视为检测失败。
-- `ApplyAccess` → `codexconfig.Restore` → `rebuild`（`catalog.Build` 带 `RelayOnly`）→ `enable`（`codexconfig.Enable` 带 `RelayOnly`）→ `pushRelay`（`proxy.RelayConfig.RelayOnly`）→ `SaveSettings`。
+- `ApplyAccess` → `rebuild`（`catalog.Build` 带 `RelayOnly`）→ `enable`（`codexconfig.Enable` 带 `RelayOnly`）→ `pushRelay`（`proxy.RelayConfig.RelayOnly`）→ `SaveSettings`。
 - 依赖 plan 01~04 新增的字段和函数。
 
 ## 验证方式
@@ -85,7 +85,7 @@ description: 后台服务按登录检测结果决定接入方式，提供检测�
 - [ ] 检测失败且设置里 `last_detected_mode` 为 `both` → 目标 `both`；没有记录 → 目标 `relay`；检测成功后设置文件里记住对应方式。
 - [ ] 转发开着、记录方式为 `both`，`init` 时检测为没登录：配置仍是 `both` 的写法，状态 `{mode: both, target: relay}`；随后 `apply_access` → 配置变为 `relay` 写法，和"关闭转发后按 relay 打开"的结果逐字节一致，设置里 `access_mode` 变为 `relay`。
 - [ ] `apply_access` 在方式相同、或转发关着时：配置文件不变。
-- [ ] 切换前手改本工具写入的一项 → `apply_access` 返回 `restore_blocked`，`access.mode` 不变，状态 `restore_blocked` 含该项。
+- [ ] 「官方 + 中台」开着时手改 `openai_base_url`，再 `apply_access` 切到 `relay` → 成功，`openai_base_url` 保持手改值，其余为 `relay` 写法；状态 `taken_over` 照常反映接管项。
 - [ ] `detect_access` 只更新 `target` / `detect`，配置文件不变。
 - [ ] 转发关着时 `init`：检测函数没有被调用。
 - [ ] 关闭转发：配置和第一次打开前逐字节一致，`access.mode` 为 null。

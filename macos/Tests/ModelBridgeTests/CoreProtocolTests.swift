@@ -30,4 +30,31 @@ final class CoreProtocolTests: XCTestCase {
         let expected = try protocolErrorTable()
         XCTAssertEqual(Set(CoreProtocol.errorMessages.keys), Set(expected.keys))
     }
+
+    private func decodeStatus(_ access: String?) throws -> CoreStatus {
+        let accessField = access.map { #","access":\#($0)"# } ?? ""
+        let json = #"{"version":"1.2.0","forwarding":true\#(accessField)}"#
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        return try decoder.decode(CoreStatus.self, from: Data(json.utf8))
+    }
+
+    func testCoreStatus_DecodesAccess() throws {
+        let status = try decodeStatus(#"{"mode":"relay","target":"both","detect":"logged_in"}"#)
+        XCTAssertEqual(status.access?.mode, "relay")
+        XCTAssertEqual(status.access?.target, "both")
+        XCTAssertEqual(status.access?.detect, "logged_in")
+    }
+
+    func testCoreStatus_AccessNullFields_DecodeToNil() throws {
+        let status = try decodeStatus(#"{"mode":null,"target":null,"detect":null}"#)
+        XCTAssertNotNil(status.access)
+        XCTAssertNil(status.access?.mode)
+        XCTAssertNil(status.access?.target)
+        XCTAssertNil(status.access?.detect)
+    }
+
+    func testCoreStatus_MissingAccess_IsNil() throws {
+        XCTAssertNil(try decodeStatus(nil).access)
+    }
 }

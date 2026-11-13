@@ -38,6 +38,12 @@ struct CoreStatus: Codable, Sendable, Equatable {
         var url: String?
     }
 
+    struct Access: Codable, Sendable, Equatable {
+        var mode: String?
+        var target: String?
+        var detect: String?
+    }
+
     var version: String
     var forwarding: Bool
     var proxy: Component?
@@ -47,6 +53,7 @@ struct CoreStatus: Codable, Sendable, Equatable {
     var restoreBlocked: [String]?
     var configPath: String?
     var update: Update?
+    var access: Access?
 }
 
 enum CoreProtocol {

@@ -11,8 +11,8 @@ struct SetupWindow: View {
                     .font(Fonts.control)
                     .foregroundColor(Palette.textMuted)
             }
-            if case .succeeded(let title, let count) = model.setupPhase {
-                succeeded(title: title, count: count)
+            if case .succeeded(let title, _) = model.setupPhase {
+                succeeded(title: title)
             } else {
                 form
             }
@@ -65,11 +65,11 @@ struct SetupWindow: View {
     }
 
     @ViewBuilder
-    private func succeeded(title: String, count: Int) -> some View {
+    private func succeeded(title: String) -> some View {
         AlertBar(
             tone: .success,
             title: title,
-            detail: "已获取 \(count) 个中台模型。重启 ChatGPT 后，Codex 的模型列表里就会出现它们。助手会在你登录电脑时自动启动，在菜单栏里常驻。"
+            detail: model.setupSucceededText
         )
         ForEach(model.setupFollowUpIssues, id: \.self) { issue in
             AlertBar(tone: .warning, title: issue)
