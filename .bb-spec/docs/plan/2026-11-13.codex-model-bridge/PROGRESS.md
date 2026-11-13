@@ -4,7 +4,7 @@
 | 01 | relay-only-config | pending | — |
 | 02 | login-detect | done | 2026-11-13 |
 | 03 | relay-only-catalog | done | 2026-11-13 |
-| 04 | relay-only-proxy | pending | — |
+| 04 | relay-only-proxy | done | 2026-11-13 |
 | 05 | access-mode-service | pending | — |
 | 06 | macos-access-mode-ui | pending | — |
 ## 当前

@@ -20,6 +20,7 @@ type RelayConfig struct {
 	ParamModels []string
 	BaseURL     string
 	Key         string
+	RelayOnly   bool
 }
 
 type relayState struct {
@@ -28,6 +29,7 @@ type relayState struct {
 	paramModels map[string]struct{}
 	base        string
 	key         string
+	relayOnly   bool
 }
 
 func (s *relayState) set(c RelayConfig) {
@@ -42,6 +44,7 @@ func (s *relayState) set(c RelayConfig) {
 	s.mu.Lock()
 	s.paramModels = paramModels
 	s.models, s.base, s.key = models, c.BaseURL, c.Key
+	s.relayOnly = c.RelayOnly
 	s.mu.Unlock()
 }
 
@@ -51,6 +54,7 @@ type route struct {
 	key        string
 	model      string
 	ultraToMax bool
+	reject     bool
 }
 
 func (s *Server) decideRoute(r *http.Request, urlPath, model string) (route, error) {
@@ -62,6 +66,7 @@ func (s *Server) decideRoute(r *http.Request, urlPath, model string) (route, err
 	isRelay = isRelay && origName != model
 	_, ultraToMax := s.relayState.paramModels[origName]
 	base, key := s.relayState.base, s.relayState.key
+	relayOnly := s.relayState.relayOnly
 	s.relayState.mu.RUnlock()
 
 	if !isRelay {
@@ -77,7 +82,7 @@ func (s *Server) decideRoute(r *http.Request, urlPath, model string) (route, err
 	u.Path = strings.TrimRight(u.Path, "/") + rest
 	u.RawPath = ""
 	u.RawQuery = r.URL.RawQuery
-	return route{relay: isRelay, target: u, key: key, model: origName, ultraToMax: isRelay && ultraToMax}, nil
+	return route{relay: isRelay, target: u, key: key, model: origName, ultraToMax: isRelay && ultraToMax, reject: relayOnly && !isRelay}, nil
 }
 
 func rewriteRelayHeaders(h http.Header, key string) {

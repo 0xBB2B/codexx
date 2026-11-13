@@ -27,11 +27,19 @@ func unreachableRelayError() (code, message string) {
 	return "relay_unreachable", "连不上中台，请检查网络和 Base URL"
 }
 
+func officialUnavailableError() (code, message string) {
+	return "official_unavailable", "当前没有登录 ChatGPT，官方模型不可用，请切换到中台模型。"
+}
+
+type relayErrorDetail struct {
+	Message string `json:"message"`
+	Type    string `json:"type"`
+	Code    string `json:"code"`
+}
+
 func relayErrorBody(code, message string) []byte {
-	b, _ := json.Marshal(map[string]any{"error": map[string]string{
-		"message": message,
-		"type":    "model_bridge_error",
-		"code":    code,
-	}})
+	b, _ := json.Marshal(struct {
+		Error relayErrorDetail `json:"error"`
+	}{relayErrorDetail{message, "model_bridge_error", code}})
 	return b
 }

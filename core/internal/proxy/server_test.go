@@ -398,3 +398,167 @@ func TestRelay_InvalidBaseURL_Unreachable(t *testing.T) {
 	resp, body := e.do(t, http.MethodPost, "/v1/responses", nil, []byte(`{"model":"`+relayModel+`"}`))
 	assertNeutralError(t, e, resp, body, http.StatusBadGateway, "连不上中台，请检查网络和 Base URL", "relay_unreachable")
 }
+
+const officialUnavailableBody = `{"error":{"message":"当前没有登录 ChatGPT，官方模型不可用，请切换到中台模型。","type":"model_bridge_error","code":"official_unavailable"}}`
+
+func newRelayOnlyEnv(t *testing.T) *testEnv {
+	t.Helper()
+	e := newEnv(t, nil)
+	e.srv.SetRelay(proxy.RelayConfig{
+		Models:    []string{"glm-5.3"},
+		BaseURL:   e.relay.URL + "/v1",
+		Key:       relayKey,
+		RelayOnly: true,
+	})
+	return e
+}
+
+func (e *testEnv) upstreamHitCount() int {
+	return len(e.relay.Hits()) + len(e.api.Hits()) + len(e.chatgpt.Hits())
+}
+
+func TestRelayOnly_RelayModelStillForwarded(t *testing.T) {
+	t.Parallel()
+	e := newRelayOnlyEnv(t)
+	resp, body := e.do(t, http.MethodPost, "/v1/responses", nil, []byte(`{"model":"relay-glm-5.3"}`))
+	if resp.StatusCode != http.StatusOK || string(body) != upstreamReply {
+		t.Fatalf("响应 = %d %s，期望中台回复", resp.StatusCode, body)
+	}
+	hit := e.relay.onlyHit(t)
+	if !strings.Contains(string(hit.Body), `"glm-5.3"`) || strings.Contains(string(hit.Body), "relay-glm-5.3") {
+		t.Fatalf("中台收到的模型名应改回原名，实际 %s", hit.Body)
+	}
+	if hit.Header.Get("Authorization") != "Bearer "+relayKey {
+		t.Fatalf("中台应收到中台 Key，实际 %q", hit.Header.Get("Authorization"))
+	}
+	if n := len(e.api.Hits()) + len(e.chatgpt.Hits()); n != 0 {
+		t.Fatalf("官方服务不应收到请求，实际 %d 次", n)
+	}
+	waitLog(t, e.log, "relay", "200")
+}
+
+func TestRelayOnly_NonRelayRequestsRejected(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name string
+		hdr  map[string]string
+		body string
+	}{
+		{"官方模型名", nil, `{"model":"gpt-a"}`},
+		{"没有 model 字段", nil, `{"input":"hi"}`},
+		{"不认识的模型", nil, `{"model":"unknown-model"}`},
+		{"带前缀但不在中台模型表里", nil, `{"model":"relay-not-listed"}`},
+		{"带 ChatGPT-Account-ID 的官方模型", map[string]string{"ChatGPT-Account-ID": accountID}, `{"model":"gpt-a"}`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			e := newRelayOnlyEnv(t)
+			resp, body := e.do(t, http.MethodPost, "/v1/responses", tt.hdr, []byte(tt.body))
+			if resp.StatusCode != http.StatusBadRequest {
+				t.Fatalf("状态码 = %d，期望 400", resp.StatusCode)
+			}
+			if ct := resp.Header.Get("Content-Type"); ct != "application/json" {
+				t.Fatalf("Content-Type = %q", ct)
+			}
+			if string(body) != officialUnavailableBody {
+				t.Fatalf("正文 = %s", body)
+			}
+			if n := e.upstreamHitCount(); n != 0 {
+				t.Fatalf("不应有任何上游收到请求，实际 %d 次", n)
+			}
+		})
+	}
+}
+
+func TestRelayOnly_RejectedRequestLogged(t *testing.T) {
+	t.Parallel()
+	e := newRelayOnlyEnv(t)
+	hdr := map[string]string{
+		"Authorization":      "Bearer sk-official-marker",
+		"Cookie":             cookieValue,
+		"ChatGPT-Account-ID": accountID,
+	}
+	e.do(t, http.MethodPost, "/v1/responses", hdr, []byte(`{"model":"gpt-a"}`))
+	e.do(t, http.MethodPost, "/v1/responses", hdr, []byte(`{"input":"hi"}`))
+	waitLog(t, e.log, "rejected", "400")
+
+	logged := e.log.String()
+	if n := strings.Count(logged, "rejected"); n != 2 {
+		t.Fatalf("应有 2 行 rejected 日志，实际 %d：%s", n, logged)
+	}
+	for _, forbidden := range []string{"sk-official-marker", "Authorization", cookieValue, accountID, "gpt-a"} {
+		if strings.Contains(logged, forbidden) {
+			t.Errorf("日志里出现了不该记录的内容 %q：%s", forbidden, logged)
+		}
+	}
+}
+
+func TestRelayOnly_SwitchedOffAtRuntime(t *testing.T) {
+	t.Parallel()
+	e := newRelayOnlyEnv(t)
+	resp, body := e.do(t, http.MethodPost, "/v1/responses", nil, []byte(`{"model":"gpt-a"}`))
+	if resp.StatusCode != http.StatusBadRequest || string(body) != officialUnavailableBody {
+		t.Fatalf("开启时应拒绝，实际 %d %s", resp.StatusCode, body)
+	}
+
+	e.srv.SetRelay(proxy.RelayConfig{
+		Models:    []string{"glm-5.3"},
+		BaseURL:   e.relay.URL + "/v1",
+		Key:       relayKey,
+		RelayOnly: false,
+	})
+	resp, body = e.do(t, http.MethodPost, "/v1/responses", nil, []byte(`{"model":"gpt-a"}`))
+	if resp.StatusCode != http.StatusOK || string(body) != upstreamReply {
+		t.Fatalf("关闭后应转发官方，实际 %d %s", resp.StatusCode, body)
+	}
+	e.api.onlyHit(t)
+}
+
+func TestRelayOnly_SwitchedOnAtRuntime(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t, nil)
+	resp, _ := e.do(t, http.MethodPost, "/v1/responses", nil, []byte(`{"model":"gpt-a"}`))
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("默认应转发官方，实际 %d", resp.StatusCode)
+	}
+	e.api.onlyHit(t)
+
+	e.srv.SetRelay(proxy.RelayConfig{
+		Models:    []string{"glm-5.3"},
+		BaseURL:   e.relay.URL + "/v1",
+		Key:       relayKey,
+		RelayOnly: true,
+	})
+	resp, body := e.do(t, http.MethodPost, "/v1/responses", nil, []byte(`{"model":"gpt-a"}`))
+	if resp.StatusCode != http.StatusBadRequest || string(body) != officialUnavailableBody {
+		t.Fatalf("开启后应拒绝，实际 %d %s", resp.StatusCode, body)
+	}
+	if n := len(e.api.Hits()); n != 1 {
+		t.Fatalf("官方服务不应再收到请求，累计 %d 次", n)
+	}
+}
+
+func TestRelayOnly_HealthAndWebSocketUnchanged(t *testing.T) {
+	t.Parallel()
+	e := newRelayOnlyEnv(t)
+
+	resp, body := e.do(t, http.MethodGet, "/_health", nil, nil)
+	if resp.StatusCode != http.StatusOK || string(body) != `{"ok":true}` {
+		t.Fatalf("/_health = %d %s", resp.StatusCode, body)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/responses", nil)
+	req.RemoteAddr = "127.0.0.1:50000"
+	req.Host = "127.0.0.1:47311"
+	req.Header.Set("Connection", "Upgrade")
+	req.Header.Set("Upgrade", "websocket")
+	rec := httptest.NewRecorder()
+	e.srv.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusUpgradeRequired {
+		t.Fatalf("WebSocket 升级状态码 = %d，期望 426", rec.Code)
+	}
+	if n := e.upstreamHitCount(); n != 0 {
+		t.Fatalf("不应有上游收到请求，实际 %d 次", n)
+	}
+}

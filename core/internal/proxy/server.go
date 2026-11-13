@@ -196,6 +196,14 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
+	if rt.reject {
+		dest = "rejected"
+		code, msg := officialUnavailableError()
+		sw.Header().Set("Content-Type", "application/json")
+		sw.WriteHeader(http.StatusBadRequest)
+		_, _ = sw.Write(relayErrorBody(code, msg))
+		return
+	}
 	if rt.relay {
 		dest = "relay"
 		plain = relayBody(plain, rt.model, rt.ultraToMax)
