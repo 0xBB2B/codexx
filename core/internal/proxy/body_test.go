@@ -23,10 +23,10 @@ func requireBodyWithModel(t *testing.T, body []byte, model, input string) {
 	t.Helper()
 	var got map[string]any
 	if err := json.Unmarshal(body, &got); err != nil {
-		t.Fatalf("中台收到的请求体不是 JSON: %q", body)
+		t.Fatalf("中转收到的请求体不是 JSON: %q", body)
 	}
 	if got["model"] != model || got["input"] != input || len(got) != 2 {
-		t.Fatalf("中台收到的请求体 = %q，期望 model=%s 且其余字段不变", body, model)
+		t.Fatalf("中转收到的请求体 = %q，期望 model=%s 且其余字段不变", body, model)
 	}
 }
 
@@ -42,7 +42,7 @@ func TestBody_ZstdRelay_DecompressedAndEncodingDropped(t *testing.T) {
 	hit := e.relay.onlyHit(t)
 	requireBodyWithModel(t, hit.Body, relayOrigName, "hello")
 	if v := hit.Header.Get("Content-Encoding"); v != "" {
-		t.Fatalf("中台不应收到 Content-Encoding，实际 %q", v)
+		t.Fatalf("中转不应收到 Content-Encoding，实际 %q", v)
 	}
 	if n := len(e.api.Hits()) + len(e.chatgpt.Hits()); n != 0 {
 		t.Fatalf("官方不应收到请求，实际 %d 次", n)
@@ -152,6 +152,6 @@ func TestBody_BadZstd_ForwardedOfficialAsIs(t *testing.T) {
 		t.Fatalf("官方收到的请求体 = %q，期望原始字节", hit.Body)
 	}
 	if n := len(e.relay.Hits()); n != 0 {
-		t.Fatalf("中台不应收到请求，实际 %d 次", n)
+		t.Fatalf("中转不应收到请求，实际 %d 次", n)
 	}
 }

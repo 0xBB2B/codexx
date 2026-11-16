@@ -2,9 +2,11 @@ package proxy_test
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 
 	"modelbridge/internal/proxy"
@@ -49,14 +51,14 @@ func TestRoute_RelayModel(t *testing.T) {
 			hit := e.relay.onlyHit(t)
 			var sent map[string]any
 			if err := json.Unmarshal(hit.Body, &sent); err != nil || sent["model"] != strings.TrimPrefix(tt.model, "relay-") {
-				t.Fatalf("中台收到的请求体 = %q，model 应是原名", hit.Body)
+				t.Fatalf("中转收到的请求体 = %q，model 应是原名", hit.Body)
 			}
 			wantPath := strings.TrimPrefix(tt.path, "/v1")
 			if hit.Path != "/v1"+wantPath {
-				t.Fatalf("中台收到的路径 = %q，期望 Base URL(/v1) + %q", hit.Path, wantPath)
+				t.Fatalf("中转收到的路径 = %q，期望 Base URL(/v1) + %q", hit.Path, wantPath)
 			}
 			if n := len(e.api.Hits()) + len(e.chatgpt.Hits()); n != 0 {
-				t.Fatalf("中台模型不应发往官方，实际 %d 次", n)
+				t.Fatalf("中转模型不应发往官方，实际 %d 次", n)
 			}
 		})
 	}
@@ -88,20 +90,20 @@ func TestRoute_RelayHeaders_OnlyAllowlistPlusAuthorization(t *testing.T) {
 	}
 	for k, v := range wantValues {
 		if got.Get(k) != v {
-			t.Errorf("中台收到的 %s = %q，期望 %q", k, got.Get(k), v)
+			t.Errorf("中转收到的 %s = %q，期望 %q", k, got.Get(k), v)
 		}
 	}
 	transportOnly := map[string]bool{"Accept-Encoding": true, "Content-Length": true}
 	for k := range got {
 		if _, ok := wantValues[http.CanonicalHeaderKey(k)]; !ok && !transportOnly[k] {
-			t.Errorf("中台收到了不该有的请求头 %s", k)
+			t.Errorf("中转收到了不该有的请求头 %s", k)
 		}
 	}
 	for k, vs := range got {
 		for _, v := range vs {
 			for _, secret := range []string{cookieValue, accountID, "sk-official-0000", "custom-marker-0000", "originator-marker-0000"} {
 				if strings.Contains(v, secret) {
-					t.Errorf("请求头 %s 把 %q 带到了中台", k, secret)
+					t.Errorf("请求头 %s 把 %q 带到了中转", k, secret)
 				}
 			}
 		}
@@ -177,7 +179,7 @@ func TestRoute_UnrecognizedModelGoesOfficial(t *testing.T) {
 		method string
 		body   string
 	}{
-		{"模型不在中台集合", http.MethodPost, `{"model":"official-model"}`},
+		{"模型不在中转集合", http.MethodPost, `{"model":"official-model"}`},
 		{"没有 model 字段", http.MethodPost, `{"input":"x"}`},
 		{"不是合法 JSON", http.MethodPost, `not-json`},
 		{"空请求体", http.MethodGet, ``},
@@ -189,7 +191,7 @@ func TestRoute_UnrecognizedModelGoesOfficial(t *testing.T) {
 			e.do(t, tt.method, "/v1/models", nil, []byte(tt.body))
 			e.api.onlyHit(t)
 			if n := len(e.relay.Hits()); n != 0 {
-				t.Fatalf("中台不应收到请求，实际 %d 次", n)
+				t.Fatalf("中转不应收到请求，实际 %d 次", n)
 			}
 		})
 	}
@@ -248,20 +250,20 @@ func TestRoute_PrefixedRelayModel_RewrittenToOriginalName(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
 		name      string
-		relayList []string
-		model     string
+		internal  string
 		wantModel string
 	}{
-		{"带点的模型名", []string{"glm-5.3", "auto"}, "relay-glm-5.3", "glm-5.3"},
-		{"和官方同名的模型", []string{"gpt-x"}, "relay-gpt-x", "gpt-x"},
-		{"原名本身以 relay- 开头只去一层前缀", []string{"relay-x"}, "relay-relay-x", "relay-x"},
+		{"带点的模型名", "relay-glm-5.3", "glm-5.3"},
+		{"和官方同名的模型", "relay-gpt-x", "gpt-x"},
+		{"原名本身以 relay- 开头", "relay-relay-x", "relay-x"},
+		{"编号 2 的配置", "relay2-auto", "auto"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			e := newEnv(t, nil)
-			e.srv.SetRelay(proxy.RelayConfig{Models: tt.relayList, BaseURL: e.relay.URL + "/v1", Key: relayKey})
-			body := `{"model":"` + tt.model + `","input":"hello","stream":true}`
+			e.srv.SetRelay(proxy.RelayConfig{Routes: map[string]proxy.RelayTarget{tt.internal: e.target(tt.wantModel)}})
+			body := `{"model":"` + tt.internal + `","input":"hello","stream":true}`
 			resp, _ := e.do(t, http.MethodPost, "/v1/responses", nil, []byte(body))
 			if resp.StatusCode != http.StatusOK {
 				t.Fatalf("状态码 = %d", resp.StatusCode)
@@ -271,7 +273,7 @@ func TestRoute_PrefixedRelayModel_RewrittenToOriginalName(t *testing.T) {
 				t.Fatal(err)
 			}
 			if sent["model"] != tt.wantModel || sent["input"] != "hello" || sent["stream"] != true || len(sent) != 3 {
-				t.Fatalf("中台收到的请求体 = %v，期望 model=%s 且其余字段不变", sent, tt.wantModel)
+				t.Fatalf("中转收到的请求体 = %v，期望 model=%s 且其余字段不变", sent, tt.wantModel)
 			}
 			if n := len(e.api.Hits()) + len(e.chatgpt.Hits()); n != 0 {
 				t.Fatalf("不应发往官方，实际 %d 次", n)
@@ -280,29 +282,192 @@ func TestRoute_PrefixedRelayModel_RewrittenToOriginalName(t *testing.T) {
 	}
 }
 
-func TestRoute_UnprefixedOrUnknownModelGoesOfficialUnchanged(t *testing.T) {
+func TestRoute_MultiConfig_EachGoesToOwnBaseURLAndKey(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t, nil)
+	relayB := newFakeUpstream(t, nil)
+	const keyB = "sk-example-b-0000"
+	e.srv.SetRelay(proxy.RelayConfig{Routes: map[string]proxy.RelayTarget{
+		"relay-auto":  e.target("auto"),
+		"relay2-auto": {BaseURL: relayB.URL + "/v1", Key: keyB, Model: "auto"},
+	}})
+	for _, internal := range []string{"relay-auto", "relay2-auto"} {
+		e.do(t, http.MethodPost, "/v1/responses", nil, []byte(`{"model":"`+internal+`","input":"hi"}`))
+	}
+	hitA, hitB := e.relay.onlyHit(t), relayB.onlyHit(t)
+	if got := hitA.Header.Get("Authorization"); got != "Bearer "+relayKey {
+		t.Errorf("中转 A 收到的 Authorization = %q", got)
+	}
+	if got := hitB.Header.Get("Authorization"); got != "Bearer "+keyB {
+		t.Errorf("中转 B 收到的 Authorization = %q", got)
+	}
+	for name, hit := range map[string]upstreamHit{"A": hitA, "B": hitB} {
+		var sent map[string]any
+		if err := json.Unmarshal(hit.Body, &sent); err != nil || sent["model"] != "auto" {
+			t.Errorf("中转 %s 收到的请求体 = %q，期望 model=auto", name, hit.Body)
+		}
+	}
+	if n := len(e.api.Hits()) + len(e.chatgpt.Hits()); n != 0 {
+		t.Fatalf("不应发往官方，实际 %d 次", n)
+	}
+}
+
+func TestRoute_ConcurrentSetRelay_KeysNeverCross(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t, nil)
+	relayB := newFakeUpstream(t, nil)
+	const keyB = "sk-example-b-0000"
+	cfgA := proxy.RelayConfig{Routes: map[string]proxy.RelayTarget{"relay-auto": e.target("auto")}}
+	cfgB := proxy.RelayConfig{Routes: map[string]proxy.RelayTarget{"relay-auto": {BaseURL: relayB.URL + "/v1", Key: keyB, Model: "auto"}}}
+	e.srv.SetRelay(cfgA)
+
+	stop := make(chan struct{})
+	var swapper sync.WaitGroup
+	swapper.Add(1)
+	go func() {
+		defer swapper.Done()
+		for i := 0; ; i++ {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			if i%2 == 0 {
+				e.srv.SetRelay(cfgB)
+			} else {
+				e.srv.SetRelay(cfgA)
+			}
+		}
+	}()
+	var senders sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		senders.Add(1)
+		go func() {
+			defer senders.Done()
+			for j := 0; j < 10; j++ {
+				e.do(t, http.MethodPost, "/v1/responses", nil, []byte(`{"model":"relay-auto","input":"hi"}`))
+			}
+		}()
+	}
+	senders.Wait()
+	close(stop)
+	swapper.Wait()
+
+	for _, hit := range e.relay.Hits() {
+		if got := hit.Header.Get("Authorization"); got != "Bearer "+relayKey {
+			t.Errorf("中转 A 收到的 Authorization = %q，只应是自己的 Key", got)
+		}
+	}
+	for _, hit := range relayB.Hits() {
+		if got := hit.Header.Get("Authorization"); got != "Bearer "+keyB {
+			t.Errorf("中转 B 收到的 Authorization = %q，只应是自己的 Key", got)
+		}
+	}
+	if n := len(e.relay.Hits()) + len(relayB.Hits()); n != 80 {
+		t.Errorf("两个中转共收到 %d 次请求，期望 80", n)
+	}
+}
+
+func TestRoute_ParamModel_UltraRewrittenToMax(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
-		name      string
-		relayList []string
-		body      string
+		name       string
+		fromParams bool
+		wantEffort string
 	}{
-		{"和中台同名的官方名不带前缀", []string{"gpt-x"}, `{"model":"gpt-x","input":"hello"}`},
-		{"带前缀但不在本次中台模型里", []string{"gpt-x"}, `{"model":"relay-unknown","input":"hello"}`},
-		{"中台为空时带前缀的名字", nil, `{"model":"relay-gpt-x","input":"hello"}`},
-		{"原名以 relay- 开头时不带第二层前缀", []string{"relay-x"}, `{"model":"relay-x","input":"hello"}`},
+		{"参数表模型 ultra 改回 max", true, "max"},
+		{"非参数表模型 ultra 不变", false, "ultra"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			e := newEnv(t, nil)
-			e.srv.SetRelay(proxy.RelayConfig{Models: tt.relayList, BaseURL: e.relay.URL + "/v1", Key: relayKey})
-			e.do(t, http.MethodPost, "/v1/responses", nil, []byte(tt.body))
-			if got := e.api.onlyHit(t).Body; string(got) != tt.body {
-				t.Fatalf("官方收到的请求体 = %q，期望逐字节不变 %q", got, tt.body)
+			target := e.target("auto")
+			target.FromParams = tt.fromParams
+			e.srv.SetRelay(proxy.RelayConfig{Routes: map[string]proxy.RelayTarget{"relay-auto": target}})
+			e.do(t, http.MethodPost, "/v1/responses", nil, []byte(`{"model":"relay-auto","reasoning":{"effort":"ultra"}}`))
+			var sent struct {
+				Reasoning struct {
+					Effort string `json:"effort"`
+				} `json:"reasoning"`
 			}
+			if err := json.Unmarshal(e.relay.onlyHit(t).Body, &sent); err != nil {
+				t.Fatal(err)
+			}
+			if sent.Reasoning.Effort != tt.wantEffort {
+				t.Fatalf("中转收到的 effort = %q，期望 %q", sent.Reasoning.Effort, tt.wantEffort)
+			}
+		})
+	}
+}
+
+func TestRoute_RelayShapedNameNotInTable_RejectedAsDeleted(t *testing.T) {
+	t.Parallel()
+	const wantMessage = "这个模型所在的中转配置已删除，请换一个模型。"
+	for _, relayOnly := range []bool{false, true} {
+		for _, model := range []string{"relay3-auto", "relay-unknown", "relay12-x"} {
+			t.Run(fmt.Sprintf("%s/relayOnly=%v", model, relayOnly), func(t *testing.T) {
+				t.Parallel()
+				e := newEnv(t, nil)
+				relayB := newFakeUpstream(t, nil)
+				e.srv.SetRelay(proxy.RelayConfig{
+					Routes: map[string]proxy.RelayTarget{
+						"relay-auto":  e.target("auto"),
+						"relay2-auto": {BaseURL: relayB.URL + "/v1", Key: "sk-example-b-0000", Model: "auto"},
+					},
+					RelayOnly: relayOnly,
+				})
+				resp, body := e.do(t, http.MethodPost, "/v1/responses", nil, []byte(`{"model":"`+model+`"}`))
+				if resp.StatusCode != http.StatusBadRequest {
+					t.Fatalf("状态码 = %d，期望 400", resp.StatusCode)
+				}
+				var got relayErrorBody
+				if err := json.Unmarshal(body, &got); err != nil || got.Error.Message != wantMessage ||
+					got.Error.Type != "model_bridge_error" || got.Error.Code != "relay_deleted" {
+					t.Fatalf("响应 = %s，期望 message=%q type=model_bridge_error code=relay_deleted", body, wantMessage)
+				}
+				if n := e.upstreamHitCount() + len(relayB.Hits()); n != 0 {
+					t.Fatalf("不应有任何上游收到请求，实际 %d 次", n)
+				}
+				waitLog(t, e.log, "rejected")
+			})
+		}
+	}
+}
+
+func TestRoute_NonRelayShapedName(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name      string
+		relayOnly bool
+		model     string
+		wantOff   bool
+	}{
+		{"官方加中转方式下 gpt-x 走官方", false, "gpt-x", true},
+		{"官方加中转方式下 relayx-foo 走官方", false, "relayx-foo", true},
+		{"只用中转方式下 gpt-x 被拒绝", true, "gpt-x", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			e := newEnv(t, nil)
+			e.srv.SetRelay(proxy.RelayConfig{Routes: map[string]proxy.RelayTarget{"relay-auto": e.target("auto")}, RelayOnly: tt.relayOnly})
+			body := `{"model":"` + tt.model + `","input":"hello"}`
+			resp, got := e.do(t, http.MethodPost, "/v1/responses", nil, []byte(body))
 			if n := len(e.relay.Hits()); n != 0 {
-				t.Fatalf("中台不应收到请求，实际 %d 次", n)
+				t.Fatalf("中转不应收到请求，实际 %d 次", n)
+			}
+			if tt.wantOff {
+				if hit := e.api.onlyHit(t); string(hit.Body) != body {
+					t.Fatalf("官方收到的请求体 = %q，期望逐字节不变", hit.Body)
+				}
+				return
+			}
+			if resp.StatusCode != http.StatusBadRequest || string(got) != officialUnavailableBody {
+				t.Fatalf("响应 = %d %s", resp.StatusCode, got)
+			}
+			if n := len(e.api.Hits()); n != 0 {
+				t.Fatalf("官方不应收到请求，实际 %d 次", n)
 			}
 		})
 	}

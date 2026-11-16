@@ -38,7 +38,7 @@ func newNormalizeEnv(t *testing.T, dataDir string, relayHandler http.HandlerFunc
 		LogOutput:          e.log,
 		DataDir:            dataDir,
 	})
-	e.srv.SetRelay(proxy.RelayConfig{Models: []string{relayOrigName}, BaseURL: e.relay.URL + "/v1", Key: relayKey})
+	e.srv.SetRelay(proxy.RelayConfig{Routes: map[string]proxy.RelayTarget{relayModel: e.target(relayOrigName)}})
 	e.front = httptest.NewServer(e.srv.Handler())
 	t.Cleanup(e.front.Close)
 	return e
@@ -61,7 +61,7 @@ func TestNormalize_RelayRequestCleaned(t *testing.T) {
 	e.do(t, http.MethodPost, "/v1/responses", jsonHdr, []byte(body))
 	got := string(e.relay.onlyHit(t).Body)
 	if strings.Contains(got, "ENC") || strings.Contains(got, "web_search") {
-		t.Fatalf("中台收到的请求未整理：%s", got)
+		t.Fatalf("中转收到的请求未整理：%s", got)
 	}
 	if !strings.Contains(got, `"shell"`) || !strings.Contains(got, "你好") {
 		t.Fatalf("function 工具和可见消息应保留：%s", got)
@@ -80,7 +80,7 @@ func TestNormalize_RelayStreamPassthroughAndRecorded(t *testing.T) {
 	})
 	_, got := e.do(t, http.MethodPost, "/v1/responses", jsonHdr, []byte(`{"model":"`+relayModel+`","stream":true,"input":[]}`))
 	if string(got) != stream {
-		t.Fatalf("客户端收到的字节与中台发出的不一致\n得到：%q", got)
+		t.Fatalf("客户端收到的字节与中转发出的不一致\n得到：%q", got)
 	}
 
 	file := filepath.Join(dir, "relay-reasoning-ids.json")
@@ -100,7 +100,7 @@ func TestNormalize_RelayStreamPassthroughAndRecorded(t *testing.T) {
 	off := `{"model":"official-model","input":[` + nVisibleMsg + `,` + nRelayRs + `]}`
 	e2.do(t, http.MethodPost, "/v1/responses", jsonHdr, []byte(off))
 	if h := string(e2.api.onlyHit(t).Body); strings.Contains(h, "rs_relay_1") {
-		t.Fatalf("重启后官方仍收到中台 reasoning：%s", h)
+		t.Fatalf("重启后官方仍收到中转 reasoning：%s", h)
 	}
 }
 
@@ -111,7 +111,7 @@ func TestNormalize_RelayErrorResponseNotRecorded(t *testing.T) {
 		w.WriteHeader(http.StatusInternalServerError)
 	})
 	resp, body := e.do(t, http.MethodPost, "/v1/responses", jsonHdr, []byte(`{"model":"`+relayModel+`","input":[]}`))
-	assertNeutralError(t, e, resp, body, 500, "中台服务返回 500：中台服务暂时不可用", "relay_5xx")
+	assertNeutralError(t, e, resp, body, 500, "中转服务返回 500：中转服务暂时不可用", "relay_5xx")
 }
 
 func TestNormalize_OfficialRequest(t *testing.T) {
@@ -125,7 +125,7 @@ func TestNormalize_OfficialRequest(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	t.Run("带中台推理条目：官方收到的请求体里没有它", func(t *testing.T) {
+	t.Run("带中转推理条目：官方收到的请求体里没有它", func(t *testing.T) {
 		t.Parallel()
 		e := newNormalizeEnv(t, dir, nil)
 		raw := `{"model":"official-model","input":[` + nVisibleMsg + `,` + nRelayRs + `,` + nOfficialRs + `]}`
@@ -136,7 +136,7 @@ func TestNormalize_OfficialRequest(t *testing.T) {
 		}
 	})
 
-	t.Run("带中台推理条目的 zstd 请求：明文发出并去掉 Content-Encoding", func(t *testing.T) {
+	t.Run("带中转推理条目的 zstd 请求：明文发出并去掉 Content-Encoding", func(t *testing.T) {
 		t.Parallel()
 		e := newNormalizeEnv(t, dir, nil)
 		raw := `{"model":"official-model","input":[` + nRelayRs + `,` + nVisibleMsg + `]}`
@@ -187,7 +187,7 @@ func TestCompactionTakeover_Stream(t *testing.T) {
 
 	hit := e.relay.onlyHit(t)
 	if hit.Path != "/v1/responses" {
-		t.Fatalf("中台收到的路径 = %q", hit.Path)
+		t.Fatalf("中转收到的路径 = %q", hit.Path)
 	}
 	var sent map[string]any
 	if err := json.Unmarshal(hit.Body, &sent); err != nil {
@@ -200,7 +200,7 @@ func TestCompactionTakeover_Stream(t *testing.T) {
 		t.Fatalf("总结请求未整理：%s", hit.Body)
 	}
 	if hit.Header.Get("Authorization") != "Bearer "+relayKey {
-		t.Fatalf("总结请求的 Authorization 应使用中台 Key")
+		t.Fatalf("总结请求的 Authorization 应使用中转 Key")
 	}
 
 	if !strings.HasPrefix(resp.Header.Get("Content-Type"), "text/event-stream") {
@@ -243,7 +243,7 @@ func TestCompactionTakeover_RelayFailure(t *testing.T) {
 	})
 	body := `{"model":"` + relayModel + `","input":[` + nVisibleMsg + `,{"type":"compaction_trigger"}]}`
 	resp, got := e.do(t, http.MethodPost, "/v1/responses", jsonHdr, []byte(body))
-	assertNeutralError(t, e, resp, got, 500, "中台服务返回 500：中台服务暂时不可用", "relay_5xx")
+	assertNeutralError(t, e, resp, got, 500, "中转服务返回 500：中转服务暂时不可用", "relay_5xx")
 }
 
 func TestCompactionTakeover_EmptySummaryIsRelayError(t *testing.T) {
@@ -252,7 +252,7 @@ func TestCompactionTakeover_EmptySummaryIsRelayError(t *testing.T) {
 	body := `{"model":"` + relayModel + `","input":[` + nVisibleMsg + `,{"type":"compaction_trigger"}]}`
 	resp, got := e.do(t, http.MethodPost, "/v1/responses", jsonHdr, []byte(body))
 	if resp.StatusCode < 400 {
-		t.Fatalf("状态码 = %d，摘要为空应按中台错误处理", resp.StatusCode)
+		t.Fatalf("状态码 = %d，摘要为空应按中转错误处理", resp.StatusCode)
 	}
 	var m struct {
 		Error struct{ Type, Code string } `json:"error"`
@@ -281,7 +281,7 @@ func TestCompactEndpoint_RelayModel(t *testing.T) {
 	}
 	hit := e.relay.onlyHit(t)
 	if hit.Path != "/v1/responses" {
-		t.Fatalf("中台收到的路径 = %q，期望 /v1/responses", hit.Path)
+		t.Fatalf("中转收到的路径 = %q，期望 /v1/responses", hit.Path)
 	}
 	if strings.Contains(string(hit.Body), `"stream":true`) || !strings.Contains(string(hit.Body), normalize.SummaryInstructions) {
 		t.Fatalf("总结请求不对：%s", hit.Body)
@@ -308,7 +308,7 @@ func TestCompactEndpoint_RelayFailure(t *testing.T) {
 	})
 	body := `{"model":"` + relayModel + `","input":[` + nVisibleMsg + `]}`
 	resp, got := e.do(t, http.MethodPost, "/v1/responses/compact", jsonHdr, []byte(body))
-	assertNeutralError(t, e, resp, got, 500, "中台服务返回 500：中台服务暂时不可用", "relay_5xx")
+	assertNeutralError(t, e, resp, got, 500, "中转服务返回 500：中转服务暂时不可用", "relay_5xx")
 }
 
 func TestCompactionTakeover_NotLimitedByResponseHeaderTimeout(t *testing.T) {
@@ -325,6 +325,33 @@ func TestCompactionTakeover_NotLimitedByResponseHeaderTimeout(t *testing.T) {
 	body := `{"model":"` + relayModel + `","input":[` + nVisibleMsg + `,{"type":"compaction_trigger"}]}`
 	resp, got := e.do(t, http.MethodPost, "/v1/responses", jsonHdr, []byte(body))
 	if resp.StatusCode != http.StatusOK || !strings.Contains(string(got), "response.completed") {
-		t.Fatalf("慢中台的压缩应成功，状态 %d，响应 %q", resp.StatusCode, got)
+		t.Fatalf("慢中转的压缩应成功，状态 %d，响应 %q", resp.StatusCode, got)
+	}
+}
+
+func TestCompactionTakeover_MultiConfig_EachUsesOwnKey(t *testing.T) {
+	t.Parallel()
+	e := newNormalizeEnv(t, t.TempDir(), summaryReply(nSecretText))
+	relayB := newFakeUpstream(t, summaryReply(nSecretText))
+	const keyB = "sk-example-b-0000"
+	e.srv.SetRelay(proxy.RelayConfig{Routes: map[string]proxy.RelayTarget{
+		"relay-auto":  e.target("auto"),
+		"relay2-auto": {BaseURL: relayB.URL + "/v1", Key: keyB, Model: "auto"},
+	}})
+	for _, internal := range []string{"relay-auto", "relay2-auto"} {
+		body := `{"model":"` + internal + `","input":[` + nVisibleMsg + `,{"type":"compaction_trigger"}]}`
+		resp, _ := e.do(t, http.MethodPost, "/v1/responses", jsonHdr, []byte(body))
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("%s 压缩请求状态码 = %d", internal, resp.StatusCode)
+		}
+	}
+	if got := e.relay.onlyHit(t).Header.Get("Authorization"); got != "Bearer "+relayKey {
+		t.Errorf("中转 A 收到的 Authorization = %q", got)
+	}
+	if got := relayB.onlyHit(t).Header.Get("Authorization"); got != "Bearer "+keyB {
+		t.Errorf("中转 B 收到的 Authorization = %q", got)
+	}
+	if n := len(e.api.Hits()) + len(e.chatgpt.Hits()); n != 0 {
+		t.Errorf("不应发往官方，实际 %d 次", n)
 	}
 }

@@ -119,14 +119,17 @@ func newEnv(t *testing.T, relayHandler http.HandlerFunc) *testEnv {
 		OfficialChatGPTURL: e.chatgpt.URL + "/backend-api/codex",
 		LogOutput:          e.log,
 	})
-	e.srv.SetRelay(proxy.RelayConfig{
-		Models:  []string{relayOrigName, "model-b"},
-		BaseURL: e.relay.URL + "/v1",
-		Key:     relayKey,
-	})
+	e.srv.SetRelay(proxy.RelayConfig{Routes: map[string]proxy.RelayTarget{
+		relayModel:      e.target(relayOrigName),
+		"relay-model-b": e.target("model-b"),
+	}})
 	e.front = httptest.NewServer(e.srv.Handler())
 	t.Cleanup(e.front.Close)
 	return e
+}
+
+func (e *testEnv) target(model string) proxy.RelayTarget {
+	return proxy.RelayTarget{BaseURL: e.relay.URL + "/v1", Key: relayKey, Model: model}
 }
 
 func (e *testEnv) do(t *testing.T, method, path string, hdr map[string]string, body []byte) (*http.Response, []byte) {
@@ -265,7 +268,7 @@ func TestHandler_StreamingForwardedImmediately(t *testing.T) {
 		name string
 		body string
 	}{
-		{"中台", `{"model":"` + relayModel + `"}`},
+		{"中转", `{"model":"` + relayModel + `"}`},
 		{"官方", `{"model":"official-model"}`},
 	}
 	for _, tt := range tests {
@@ -388,26 +391,24 @@ func TestRelay_ResponseHeaderTimeout_Unreachable(t *testing.T) {
 	t.Cleanup(func() { close(release) })
 
 	resp, body := e.do(t, http.MethodPost, "/v1/responses", nil, []byte(`{"model":"`+relayModel+`"}`))
-	assertNeutralError(t, e, resp, body, http.StatusBadGateway, "连不上中台，请检查网络和 Base URL", "relay_unreachable")
+	assertNeutralError(t, e, resp, body, http.StatusBadGateway, "连不上中转服务，请检查网络和 Base URL", "relay_unreachable")
 }
 
 func TestRelay_InvalidBaseURL_Unreachable(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t, nil)
-	e.srv.SetRelay(proxy.RelayConfig{Models: []string{relayOrigName}, BaseURL: "http://[::1", Key: relayKey})
+	e.srv.SetRelay(proxy.RelayConfig{Routes: map[string]proxy.RelayTarget{relayModel: {BaseURL: "http://[::1", Key: relayKey, Model: relayOrigName}}})
 	resp, body := e.do(t, http.MethodPost, "/v1/responses", nil, []byte(`{"model":"`+relayModel+`"}`))
-	assertNeutralError(t, e, resp, body, http.StatusBadGateway, "连不上中台，请检查网络和 Base URL", "relay_unreachable")
+	assertNeutralError(t, e, resp, body, http.StatusBadGateway, "连不上中转服务，请检查网络和 Base URL", "relay_unreachable")
 }
 
-const officialUnavailableBody = `{"error":{"message":"当前没有登录 ChatGPT，官方模型不可用，请切换到中台模型。","type":"model_bridge_error","code":"official_unavailable"}}`
+const officialUnavailableBody = `{"error":{"message":"当前没有登录 ChatGPT，官方模型不可用，请切换到中转模型。","type":"model_bridge_error","code":"official_unavailable"}}`
 
 func newRelayOnlyEnv(t *testing.T) *testEnv {
 	t.Helper()
 	e := newEnv(t, nil)
 	e.srv.SetRelay(proxy.RelayConfig{
-		Models:    []string{"glm-5.3"},
-		BaseURL:   e.relay.URL + "/v1",
-		Key:       relayKey,
+		Routes:    map[string]proxy.RelayTarget{"relay-glm-5.3": e.target("glm-5.3")},
 		RelayOnly: true,
 	})
 	return e
@@ -422,14 +423,14 @@ func TestRelayOnly_RelayModelStillForwarded(t *testing.T) {
 	e := newRelayOnlyEnv(t)
 	resp, body := e.do(t, http.MethodPost, "/v1/responses", nil, []byte(`{"model":"relay-glm-5.3"}`))
 	if resp.StatusCode != http.StatusOK || string(body) != upstreamReply {
-		t.Fatalf("响应 = %d %s，期望中台回复", resp.StatusCode, body)
+		t.Fatalf("响应 = %d %s，期望中转回复", resp.StatusCode, body)
 	}
 	hit := e.relay.onlyHit(t)
 	if !strings.Contains(string(hit.Body), `"glm-5.3"`) || strings.Contains(string(hit.Body), "relay-glm-5.3") {
-		t.Fatalf("中台收到的模型名应改回原名，实际 %s", hit.Body)
+		t.Fatalf("中转收到的模型名应改回原名，实际 %s", hit.Body)
 	}
 	if hit.Header.Get("Authorization") != "Bearer "+relayKey {
-		t.Fatalf("中台应收到中台 Key，实际 %q", hit.Header.Get("Authorization"))
+		t.Fatalf("中转应收到中转 Key，实际 %q", hit.Header.Get("Authorization"))
 	}
 	if n := len(e.api.Hits()) + len(e.chatgpt.Hits()); n != 0 {
 		t.Fatalf("官方服务不应收到请求，实际 %d 次", n)
@@ -447,7 +448,6 @@ func TestRelayOnly_NonRelayRequestsRejected(t *testing.T) {
 		{"官方模型名", nil, `{"model":"gpt-a"}`},
 		{"没有 model 字段", nil, `{"input":"hi"}`},
 		{"不认识的模型", nil, `{"model":"unknown-model"}`},
-		{"带前缀但不在中台模型表里", nil, `{"model":"relay-not-listed"}`},
 		{"带 ChatGPT-Account-ID 的官方模型", map[string]string{"ChatGPT-Account-ID": accountID}, `{"model":"gpt-a"}`},
 	}
 	for _, tt := range tests {
@@ -503,9 +503,7 @@ func TestRelayOnly_SwitchedOffAtRuntime(t *testing.T) {
 	}
 
 	e.srv.SetRelay(proxy.RelayConfig{
-		Models:    []string{"glm-5.3"},
-		BaseURL:   e.relay.URL + "/v1",
-		Key:       relayKey,
+		Routes:    map[string]proxy.RelayTarget{"relay-glm-5.3": e.target("glm-5.3")},
 		RelayOnly: false,
 	})
 	resp, body = e.do(t, http.MethodPost, "/v1/responses", nil, []byte(`{"model":"gpt-a"}`))
@@ -525,9 +523,7 @@ func TestRelayOnly_SwitchedOnAtRuntime(t *testing.T) {
 	e.api.onlyHit(t)
 
 	e.srv.SetRelay(proxy.RelayConfig{
-		Models:    []string{"glm-5.3"},
-		BaseURL:   e.relay.URL + "/v1",
-		Key:       relayKey,
+		Routes:    map[string]proxy.RelayTarget{"relay-glm-5.3": e.target("glm-5.3")},
 		RelayOnly: true,
 	})
 	resp, body := e.do(t, http.MethodPost, "/v1/responses", nil, []byte(`{"model":"gpt-a"}`))

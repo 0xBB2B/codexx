@@ -5,8 +5,6 @@ import (
 	"net/url"
 	"strings"
 	"sync"
-
-	"modelbridge/internal/catalog"
 )
 
 const (
@@ -14,37 +12,33 @@ const (
 	defaultOfficialChatGPTURL = "https://chatgpt.com/backend-api/codex"
 )
 
+type RelayTarget struct {
+	BaseURL string
+	Key     string
+	// Model 是发给中转服务的原模型名
+	Model string
+	// FromParams 为真时，reasoning.effort 的 ultra 要改回 max 再发给中转
+	FromParams bool
+}
+
 type RelayConfig struct {
-	Models []string
-	// ParamModels 是 Models 中来自参数表、需要把 reasoning.effort 的 ultra 改回 max 再发给中台的那部分
-	ParamModels []string
-	BaseURL     string
-	Key         string
-	RelayOnly   bool
+	Routes    map[string]RelayTarget
+	RelayOnly bool
 }
 
 type relayState struct {
-	mu          sync.RWMutex
-	models      map[string]struct{}
-	paramModels map[string]struct{}
-	base        string
-	key         string
-	relayOnly   bool
+	mu        sync.RWMutex
+	routes    map[string]RelayTarget
+	relayOnly bool
 }
 
 func (s *relayState) set(c RelayConfig) {
-	models := make(map[string]struct{}, len(c.Models))
-	for _, m := range c.Models {
-		models[m] = struct{}{}
-	}
-	paramModels := make(map[string]struct{}, len(c.ParamModels))
-	for _, m := range c.ParamModels {
-		paramModels[m] = struct{}{}
+	routes := make(map[string]RelayTarget, len(c.Routes))
+	for k, v := range c.Routes {
+		routes[k] = v
 	}
 	s.mu.Lock()
-	s.paramModels = paramModels
-	s.models, s.base, s.key = models, c.BaseURL, c.Key
-	s.relayOnly = c.RelayOnly
+	s.routes, s.relayOnly = routes, c.RelayOnly
 	s.mu.Unlock()
 }
 
@@ -55,20 +49,21 @@ type route struct {
 	model      string
 	ultraToMax bool
 	reject     bool
+	deleted    bool
 }
 
 func (s *Server) decideRoute(r *http.Request, urlPath, model string) (route, error) {
 	rest := strings.TrimPrefix(urlPath, "/v1")
 
 	s.relayState.mu.RLock()
-	origName := strings.TrimPrefix(model, catalog.RelaySlugPrefix)
-	_, isRelay := s.relayState.models[origName]
-	isRelay = isRelay && origName != model
-	_, ultraToMax := s.relayState.paramModels[origName]
-	base, key := s.relayState.base, s.relayState.key
+	t, isRelay := s.relayState.routes[model]
 	relayOnly := s.relayState.relayOnly
 	s.relayState.mu.RUnlock()
 
+	if !isRelay && looksLikeRelaySlug(model) {
+		return route{deleted: true}, nil
+	}
+	base := t.BaseURL
 	if !isRelay {
 		base = s.officialAPIURL
 		if r.Header.Get("ChatGPT-Account-ID") != "" {
@@ -82,7 +77,19 @@ func (s *Server) decideRoute(r *http.Request, urlPath, model string) (route, err
 	u.Path = strings.TrimRight(u.Path, "/") + rest
 	u.RawPath = ""
 	u.RawQuery = r.URL.RawQuery
-	return route{relay: isRelay, target: u, key: key, model: origName, ultraToMax: isRelay && ultraToMax, reject: relayOnly && !isRelay}, nil
+	return route{relay: isRelay, target: u, key: t.Key, model: t.Model, ultraToMax: t.FromParams, reject: relayOnly && !isRelay}, nil
+}
+
+func looksLikeRelaySlug(model string) bool {
+	rest, ok := strings.CutPrefix(model, "relay")
+	if !ok {
+		return false
+	}
+	if strings.HasPrefix(rest, "-") {
+		return true
+	}
+	digits := strings.TrimLeft(rest, "0123456789")
+	return len(digits) < len(rest) && strings.HasPrefix(digits, "-")
 }
 
 func rewriteRelayHeaders(h http.Header, key string) {

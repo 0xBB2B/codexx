@@ -196,9 +196,12 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	if rt.reject {
+	if rt.reject || rt.deleted {
 		dest = "rejected"
 		code, msg := officialUnavailableError()
+		if rt.deleted {
+			code, msg = relayDeletedError()
+		}
 		sw.Header().Set("Content-Type", "application/json")
 		sw.WriteHeader(http.StatusBadRequest)
 		_, _ = sw.Write(relayErrorBody(code, msg))

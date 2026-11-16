@@ -4,7 +4,7 @@
 | 01 | 01-core-relay-catalog | pending | — |
 | 08 | 08-app-icon-assets | done | 2026-11-16 |
 | 10 | 10-site-readme-rename | done | 2026-11-16 |
-| 02 | 02-core-proxy-routing | pending | — |
+| 02 | 02-core-proxy-routing | done | 2026-11-16 |
 | 03 | 03-core-control-relays | pending | — |
 | 04 | 04-macos-relay-model | pending | — |
 | 06 | 06-windows-relay-model | pending | — |

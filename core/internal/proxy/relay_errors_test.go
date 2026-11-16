@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -32,11 +34,11 @@ func assertNeutralError(t *testing.T, e *testEnv, resp *http.Response, body []by
 		t.Fatalf("错误体 = %+v，期望 message=%q code=%q", got.Error, wantMessage, wantCode)
 	}
 	if strings.Contains(string(body), leakMarker) {
-		t.Fatalf("响应里出现了中台的原始内容：%s", body)
+		t.Fatalf("响应里出现了中转的原始内容：%s", body)
 	}
 	waitLog(t, e.log, "relay")
 	if strings.Contains(e.log.String(), leakMarker) {
-		t.Fatalf("日志里出现了中台的原始内容：%s", e.log.String())
+		t.Fatalf("日志里出现了中转的原始内容：%s", e.log.String())
 	}
 }
 
@@ -47,13 +49,13 @@ func TestRelayError_StatusMapping(t *testing.T) {
 		wantMessage string
 		wantCode    string
 	}{
-		{401, "中台服务返回 401：API Key 无效或已过期", "relay_401"},
-		{403, "中台服务返回 403：API Key 没有权限", "relay_403"},
-		{404, "中台服务返回 404：Base URL 不正确", "relay_404"},
-		{429, "中台服务返回 429：请求太频繁，请稍后重试", "relay_429"},
-		{500, "中台服务返回 500：中台服务暂时不可用", "relay_5xx"},
-		{502, "中台服务返回 502：中台服务暂时不可用", "relay_5xx"},
-		{503, "中台服务返回 503：中台服务暂时不可用", "relay_5xx"},
+		{401, "中转服务返回 401：API Key 无效或已过期", "relay_401"},
+		{403, "中转服务返回 403：API Key 没有权限", "relay_403"},
+		{404, "中转服务返回 404：Base URL 不正确", "relay_404"},
+		{429, "中转服务返回 429：请求太频繁，请稍后重试", "relay_429"},
+		{500, "中转服务返回 500：中转服务暂时不可用", "relay_5xx"},
+		{502, "中转服务返回 502：中转服务暂时不可用", "relay_5xx"},
+		{503, "中转服务返回 503：中转服务暂时不可用", "relay_5xx"},
 	}
 	for _, tt := range tests {
 		t.Run(fmt.Sprint(tt.status), func(t *testing.T) {
@@ -66,7 +68,7 @@ func TestRelayError_StatusMapping(t *testing.T) {
 			resp, body := e.do(t, http.MethodPost, "/v1/responses", nil, []byte(`{"model":"`+relayModel+`"}`))
 			assertNeutralError(t, e, resp, body, tt.status, tt.wantMessage, tt.wantCode)
 			if resp.Header.Get("X-Leak") != "" {
-				t.Fatalf("中台的响应头被透传：%v", resp.Header)
+				t.Fatalf("中转的响应头被透传：%v", resp.Header)
 			}
 		})
 	}
@@ -74,9 +76,9 @@ func TestRelayError_StatusMapping(t *testing.T) {
 
 func TestRelayError_Unreachable(t *testing.T) {
 	t.Parallel()
-	const wantMessage = "连不上中台，请检查网络和 Base URL"
+	const wantMessage = "连不上中转服务，请检查网络和 Base URL"
 
-	t.Run("连接被中台直接断开", func(t *testing.T) {
+	t.Run("连接被中转直接断开", func(t *testing.T) {
 		t.Parallel()
 		e := newEnv(t, func(w http.ResponseWriter, r *http.Request) {
 			conn, _, err := w.(http.Hijacker).Hijack()
@@ -88,7 +90,7 @@ func TestRelayError_Unreachable(t *testing.T) {
 		assertNeutralError(t, e, resp, body, http.StatusBadGateway, wantMessage, "relay_unreachable")
 	})
 
-	t.Run("中台端口无人监听", func(t *testing.T) {
+	t.Run("中转端口无人监听", func(t *testing.T) {
 		t.Parallel()
 		e := newEnv(t, nil)
 		e.relay.Close()
@@ -133,7 +135,7 @@ func TestRelayError_Other4xx(t *testing.T) {
 				_, _ = w.Write([]byte(leakMarker))
 			})
 			resp, body := e.do(t, http.MethodPost, "/v1/responses", nil, []byte(`{"model":"`+relayModel+`"}`))
-			assertNeutralError(t, e, resp, body, status, fmt.Sprintf("中台服务返回 %d：请求未被中台接受", status), "relay_4xx")
+			assertNeutralError(t, e, resp, body, status, fmt.Sprintf("中转服务返回 %d：请求未被中转服务接受", status), "relay_4xx")
 		})
 	}
 }
@@ -153,7 +155,41 @@ func TestRelayError_TrailerNotLeaked(t *testing.T) {
 	}
 	for k, vs := range resp.Header {
 		if strings.Contains(strings.ToLower(k+strings.Join(vs, ",")), strings.ToLower(trailerName)) {
-			t.Fatalf("响应头里出现了中台的 trailer 声明：%v", resp.Header)
+			t.Fatalf("响应头里出现了中转的 trailer 声明：%v", resp.Header)
 		}
+	}
+}
+
+func TestRelayError_NoZhongtaiInSourceOrBodies(t *testing.T) {
+	t.Parallel()
+	const word = "中台"
+	files, err := filepath.Glob("*.go")
+	if err != nil || len(files) == 0 {
+		t.Fatalf("找不到源码文件：%v", err)
+	}
+	for _, f := range files {
+		if strings.HasSuffix(f, "_test.go") {
+			continue
+		}
+		src, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(src), word) {
+			t.Errorf("%s 里还有 %q", f, word)
+		}
+	}
+
+	for _, status := range []int{401, 403, 404, 429, 500, 400} {
+		e := newEnv(t, func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(status) })
+		_, body := e.do(t, http.MethodPost, "/v1/responses", nil, []byte(`{"model":"`+relayModel+`"}`))
+		if strings.Contains(string(body), word) {
+			t.Errorf("中转返回 %d 时错误体含 %q：%s", status, word, body)
+		}
+	}
+	e := newEnv(t, nil)
+	_, body := e.do(t, http.MethodPost, "/v1/responses", nil, []byte(`{"model":"relay9-x"}`))
+	if strings.Contains(string(body), word) {
+		t.Errorf("配置已删除的错误体含 %q：%s", word, body)
 	}
 }
