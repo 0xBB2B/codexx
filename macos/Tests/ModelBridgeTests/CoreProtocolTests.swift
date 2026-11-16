@@ -20,7 +20,9 @@ final class CoreProtocolTests: XCTestCase {
 
     func testErrorMessages_CoverEveryCodeInProtocolWithIdenticalText() throws {
         let expected = try protocolErrorTable()
-        XCTAssertEqual(expected.count, 18)
+        for code in ["name_empty", "name_too_long", "name_has_dot", "name_duplicate", "relay_limit", "relay_last", "relay_not_found", "relay_401"] {
+            XCTAssertNotNil(expected[code], "PROTOCOL.md 缺少 \(code)")
+        }
         for (code, text) in expected {
             XCTAssertEqual(CoreProtocol.errorMessages[code], text, "错误码 \(code)")
         }
@@ -29,6 +31,13 @@ final class CoreProtocolTests: XCTestCase {
     func testErrorMessages_NoCodesBeyondProtocol() throws {
         let expected = try protocolErrorTable()
         XCTAssertEqual(Set(CoreProtocol.errorMessages.keys), Set(expected.keys))
+    }
+
+    func testErrorMessages_NoLegacyWording() {
+        let forbidden = "\u{4E2D}\u{53F0}"
+        for (code, text) in CoreProtocol.errorMessages {
+            XCTAssertFalse(text.contains(forbidden), "错误码 \(code)")
+        }
     }
 
     private func decodeStatus(_ access: String?) throws -> CoreStatus {

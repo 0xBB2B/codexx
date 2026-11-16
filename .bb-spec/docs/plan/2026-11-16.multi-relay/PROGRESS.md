@@ -6,7 +6,7 @@
 | 10 | 10-site-readme-rename | done | 2026-11-16 |
 | 02 | 02-core-proxy-routing | done | 2026-11-16 |
 | 03 | 03-core-control-relays | done | 2026-11-16 |
-| 04 | 04-macos-relay-model | pending | — |
+| 04 | 04-macos-relay-model | done | 2026-11-16 |
 | 06 | 06-windows-relay-model | pending | — |
 | 05 | 05-macos-main-window | pending | — |
 | 07 | 07-windows-main-window | pending | — |
@@ -16,6 +16,7 @@
 ## 阻塞
 （无）
 ## 重试与自修（每次记一条）
+- 04/06 外壳模型自修第 1 轮（两端同根因一起修）：首次设置撤回、撤回失败如实提示、删 Key 失败提示、卸载按前缀清 Key、迁移写回失败仍用迁移结果、Windows 删除进行中状态、设置原子写、PROTOCOL name_duplicate 说明移出文案 → 结果：
 - 03-core-control-relays 自修第 1 轮：save/delete/refresh 在写 Codex 配置失败后磁盘目录与缓存未回滚；models_changed 对从没获取成功的配置恒为 false；init 未限 10 个；补 4 条测试 → 结果：已修，复查 12/12，新报备份还原不安全
 - 03-core-control-relays 自修第 2 轮：备份时读失败的文件被误删、还原写盘非原子且错误被忽略 → 结果：已修（只记录读成功或确定不存在的文件、原子还原、还原失败可见并在成功后清除、Sync），复查 12/12 无 ❌
 - 01-core-relay-catalog 自修第 1 轮：「何时联网」改为每个配置显式模式（联网/只读缓存/用传入列表）、多个配置并发获取、relay_test.go 残留「中台」、补测试（缓存不含 Key/URL、空列表、单配置刷新失败） → 结果：

@@ -90,7 +90,7 @@ final class CoreProcessTests: XCTestCase {
             arguments: CoreProcess.arguments(dataDir: dir),
             restartDelay: restartDelay,
             stableResetInterval: stableResetInterval,
-            initParams: { CoreInitParams(baseURL: "https://relay.example.com", apiKey: key, chatgptDir: nil) }
+            initParams: { CoreInitParams(relays: [CoreRelayInit(id: "1", name: "中转", baseURL: "https://relay.example.com", apiKey: key)], chatgptDir: nil) }
         )
     }
 
@@ -124,10 +124,10 @@ final class CoreProcessTests: XCTestCase {
     }
 
     func testInitParams_EncodedWithSnakeCaseKeysAndNulls() throws {
-        let data = try JSONEncoder().encode(CoreInitParams(baseURL: nil, apiKey: nil, chatgptDir: nil))
+        let data = try JSONEncoder().encode(CoreInitParams(relays: [], chatgptDir: nil))
         let obj = try json(data)
-        XCTAssertEqual(Set(obj.keys), ["base_url", "api_key", "chatgpt_dir"])
-        XCTAssertTrue(obj["api_key"] is NSNull)
+        XCTAssertEqual(Set(obj.keys), ["relays", "chatgpt_dir"])
+        XCTAssertTrue(obj["chatgpt_dir"] is NSNull)
     }
 
     func testStart_SendsInitOverStdinWithParams() async throws {
@@ -249,12 +249,12 @@ final class CoreProcessTests: XCTestCase {
         try await core.start()
         defer { Task { await core.stop() } }
         _ = try await core.call(
-            "save_connection",
-            params: ["base_url": "https://relay.example.com", "api_key": apiKey]
+            "save_relay",
+            params: ["name": "中转", "base_url": "https://relay.example.com", "api_key": apiKey]
         )
         XCTAssertFalse(logLines("argv.txt").joined().contains(apiKey))
         XCTAssertFalse(logLines("env.txt").joined().contains(apiKey))
-        XCTAssertTrue(logLines("requests.log").contains { $0.contains("\"method\":\"save_connection\"") && $0.contains(apiKey) })
+        XCTAssertTrue(logLines("requests.log").contains { $0.contains("\"method\":\"save_relay\"") && $0.contains(apiKey) })
     }
 
     func testDefaults_RestartDelay2sAndStableReset60s() {

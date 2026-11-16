@@ -1,8 +1,25 @@
 import Foundation
 
-enum SetupField: Hashable, Sendable {
+enum RelayField: Hashable, Sendable {
+    case name
     case baseURL
     case apiKey
+}
+
+enum SetupCopy {
+    static let title = "连接中转服务"
+    static let subtitle = "填写中转服务提供的 Base URL 和 API Key。设置完成后，Codex 的模型列表里会多出中转模型。"
+    static let connecting = "正在连接中转…"
+    static let failedTitle = "没能连上中转服务"
+}
+
+struct RelayRow: Equatable, Identifiable, Sendable {
+    let id: String
+    let name: String
+    let text: String
+    let canRetry: Bool
+    let canEdit: Bool
+    let canDelete: Bool
 }
 
 enum SetupPhase: Equatable, Sendable {
@@ -37,7 +54,8 @@ struct CoreFailure: Equatable, Sendable {
     }
 
     var message: String {
-        CoreProtocol.errorMessages[code] ?? CoreProtocol.errorMessages["internal_error"] ?? code
+        let text = CoreProtocol.errorMessages[code] ?? CoreProtocol.errorMessages["internal_error"] ?? code
+        return text.replacingOccurrences(of: "<keys[0]>", with: keys.first ?? "")
     }
 }
 
@@ -55,6 +73,7 @@ struct Confirmation: Equatable, Sendable {
         case loginStartOff
         case quit
         case uninstall
+        case deleteRelay(id: String)
     }
 
     let kind: Kind
@@ -76,25 +95,13 @@ struct Banner: Hashable, Sendable {
     var action: Action?
 }
 
-struct StoredConnection: Sendable {
-    var baseURL: String?
-    var apiKey: Result<String?, Error>
-
-    static func load(settings: any SettingsStoring, keychain: any KeyStoring) -> StoredConnection {
-        StoredConnection(
-            baseURL: (try? settings.loadBaseURL()) ?? nil,
-            apiKey: Result { try keychain.load() }
-        )
-    }
-}
-
 private enum StorageFailure: Error {
     case keychain
     case settings
 
     var message: String {
         switch self {
-        case .keychain: "无法写入系统钥匙串。"
+        case .keychain: "无法写入钥匙串。"
         case .settings: "无法写入设置文件。"
         }
     }
@@ -106,19 +113,50 @@ struct UpdateInfo: Equatable, Sendable {
 }
 
 private struct Empty: Encodable, Sendable {}
-private struct SaveParams: Encodable, Sendable {
+private struct SaveRelayParams: Encodable, Sendable {
+    let id: String?
+    let name: String
     let baseURL: String
     let apiKey: String
 
     enum CodingKeys: String, CodingKey {
+        case id, name
         case baseURL = "base_url"
         case apiKey = "api_key"
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(id, forKey: .id)
+        try c.encode(name, forKey: .name)
+        try c.encode(baseURL, forKey: .baseURL)
+        try c.encode(apiKey, forKey: .apiKey)
+    }
+}
+private struct RelayIDParams: Encodable, Sendable { let id: String }
+private struct RefreshParams: Encodable, Sendable {
+    let id: String?
+
+    enum CodingKeys: String, CodingKey { case id }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(id, forKey: .id)
     }
 }
 private struct ForwardingParams: Encodable, Sendable { let enabled: Bool }
 private struct ShutdownParams: Encodable, Sendable { let restore: Bool }
 private struct UpdateParams: Encodable, Sendable { let manual: Bool }
-private struct SaveResult: Decodable { let modelsChanged: Bool; let relayModelCount: Int }
+private struct PersistError: Error {
+    static let notRevokedLine = "\n已在本次运行中生效，但没能保存到本机，重启助手后会恢复成原来的样子。"
+
+    let failure: StorageFailure
+    let revoked: Bool
+
+    var message: String { failure.message + (revoked ? "" : Self.notRevokedLine) }
+}
+
+private struct SaveResult: Decodable { let id: String; let name: String; let modelCount: Int }
 private struct UpdateResult: Decodable { let latestVersion: String?; let url: String?; let isNewer: Bool }
 
 private extension JSONDecoder {
@@ -131,10 +169,18 @@ private extension JSONDecoder {
 
 @MainActor
 final class AppModel: ObservableObject {
-    @Published var baseURL = ""
-    @Published var apiKey = ""
+    @Published private(set) var relays: [RelayConfig] = []
+    @Published var draftName = ""
+    @Published var draftBaseURL = ""
+    @Published var draftAPIKey = ""
+    @Published var showRelayForm = false
+    @Published private(set) var editingRelayID: String?
+    @Published var relayFieldErrors: [RelayField: String] = [:]
+    @Published private(set) var relaySaveAlert: DialogAlert?
+    @Published private(set) var isSavingRelay = false
+    @Published private(set) var isDeletingRelay = false
+    @Published private var retryingRelayIDs: Set<String> = []
     @Published var status: CoreStatus?
-    @Published var setupFieldErrors: [SetupField: String] = [:]
     @Published var setupPhase: SetupPhase = .idle
     @Published var showSetup = false
     @Published var pendingConfirmation: Confirmation?
@@ -147,7 +193,6 @@ final class AppModel: ObservableObject {
     @Published var availableUpdate: UpdateInfo?
     @Published var loginStartEnabled = false
     @Published var mainWindowRequested = false
-    @Published var isSaving = false
     @Published var isSwitchingForwarding = false
     @Published var isDetectingAccess = false
 
@@ -170,8 +215,6 @@ final class AppModel: ObservableObject {
     private static let detectFailedTitle = "没能检测 ChatGPT 登录状态"
     private static let keychainDeniedTitle = "无法读取已保存的 API Key，请重新输入"
     private static let updateFailedTitle = "暂时无法检查更新，请稍后再试"
-    private var savedBaseURL: String?
-    private var savedKey: String?
     private var noticeTimers: [UUID: Task<Void, Never>] = [:]
     private var startupAligned = false
 
@@ -195,7 +238,56 @@ final class AppModel: ObservableObject {
 
     var forwardingEnabled: Bool { status?.forwarding ?? false }
 
-    var needsSetup: Bool { savedBaseURL == nil }
+    static let maxRelays = 10
+
+    var needsSetup: Bool { relays.isEmpty }
+
+    var forwardingTitle: String { "使用中转 · " + (forwardingEnabled ? "已开启" : "已关闭") }
+
+    var relayListCaption: String {
+        relays.count >= Self.maxRelays ? "已有 \(Self.maxRelays) 个，达到上限。" : "已有 \(relays.count) 个，最多 \(Self.maxRelays) 个。"
+    }
+
+    var canAddRelay: Bool { relays.count < Self.maxRelays }
+
+    var relayFormLocked: Bool { isSavingRelay }
+
+    var relaySaveButtonTitle: String {
+        isSavingRelay ? "正在保存并获取模型…" : (editingRelayID == nil ? "添加" : "保存")
+    }
+
+    var deleteBlockedReason: String? { relays.count <= 1 ? CoreProtocol.errorMessages["relay_last"] : nil }
+
+    var deleteBusyLabel: String? { isDeletingRelay ? "正在删除…" : nil }
+
+    var deleteCancelDisabled: Bool { isDeletingRelay }
+
+    var relayRows: [RelayRow] {
+        relays.map { relay in
+            let entry = status?.relays?.first { $0.id == relay.id }
+            let count = entry?.modelCount ?? 0
+            let text: String
+            var canRetry = false
+            if retryingRelayIDs.contains(relay.id) {
+                text = "正在获取…"
+            } else if !forwardingEnabled {
+                text = "转发关闭时不获取"
+            } else if entry?.fetchedAt == nil, count == 0 {
+                text = "还没获取到模型"
+                canRetry = true
+            } else if entry?.stale == true {
+                text = "没更新，沿用上次的 \(count) 个"
+                canRetry = true
+            } else {
+                text = "\(count) 个模型"
+            }
+            let idle = !retryingRelayIDs.contains(relay.id)
+            return RelayRow(
+                id: relay.id, name: relay.name, text: text,
+                canRetry: canRetry, canEdit: idle, canDelete: idle && canDeleteRelay(id: relay.id)
+            )
+        }
+    }
 
     var isChatGPTRunning: Bool { chatGPT.isRunning() }
 
@@ -210,16 +302,16 @@ final class AppModel: ObservableObject {
     }
 
     var modelCountText: String {
-        guard forwardingEnabled else { return "转发关闭时不获取" }
-        let count = status?.relay?.modelCount ?? 0
-        return count > 0 ? "已获取 \(count) 个" : "暂无，Codex 里只显示官方模型"
+        guard forwardingEnabled else { return "中转模型 转发关闭时不获取" }
+        let total = (status?.relays ?? []).reduce(0) { $0 + ($1.modelCount ?? 0) }
+        return "中转模型 \(total) 个（\(relays.count) 个配置）"
     }
 
     var accessModeName: String? {
         guard forwardingEnabled else { return nil }
         switch status?.access?.mode {
-        case "relay": return "只用中台"
-        case "both": return "官方 + 中台"
+        case "relay": return "只用中转"
+        case "both": return "官方 + 中转"
         default: return nil
         }
     }
@@ -236,9 +328,10 @@ final class AppModel: ObservableObject {
     var accessHelpText: String? {
         switch status?.access?.mode {
         case "relay":
-            "不需要登录 ChatGPT。模型列表里只有中台模型，默认选中「中台 · auto」。登录 ChatGPT 后点「重新检测」，就能同时用官方模型。"
+            status?.defaultRelay.map { "不用登录 ChatGPT。只有中转模型，默认选中「\($0) · auto」。" }
+                ?? "不用登录 ChatGPT。只有中转模型，没有默认选中的模型。"
         case "both":
-            "模型列表里官方模型在上，中台模型在下；选官方模型时仍然访问官方服务。"
+            "官方模型在上，中转模型在下；选官方模型时仍访问官方服务。"
         default: nil
         }
     }
@@ -252,13 +345,13 @@ final class AppModel: ObservableObject {
 
     var setupSucceededText: String? {
         guard case .succeeded(_, let count) = setupPhase else { return nil }
-        let head = "已获取 \(count) 个中台模型。"
+        let head = "已获取 \(count) 个中转模型。"
         let tail = "\n请重启 ChatGPT 后使用。助手会在你登录电脑时自动启动，在菜单栏里常驻。"
         switch status?.access?.mode {
         case "relay":
-            return head + "没有检测到 ChatGPT 登录，接入方式为「只用中台」：Codex 不需要登录，模型列表里只有中台模型。" + tail
+            return head + "没有检测到 ChatGPT 登录，接入方式为「只用中转」：Codex 不需要登录，模型列表里只有中转模型。" + tail
         case "both":
-            return head + "已检测到 ChatGPT 登录，接入方式为「官方 + 中台」。" + tail
+            return head + "已检测到 ChatGPT 登录，接入方式为「官方 + 中转」。" + tail
         default:
             return head + tail
         }
@@ -274,22 +367,6 @@ final class AppModel: ObservableObject {
                     title: "已接管 Codex 原有的接入设置",
                     detail: "开启转发前，Codex 配置里已有别的「官方服务地址」设置。原值已备份，关闭转发或卸载时会还原。",
                     kind: .info
-                ))
-            }
-            let relay = status.relay
-            if relay?.stale == true {
-                result.append(Banner(
-                    title: "中台模型列表本次没有更新",
-                    detail: relay?.error.flatMap { CoreProtocol.errorMessages[$0] } ?? "Codex 里继续使用上次获取的列表。",
-                    kind: .warning,
-                    action: .refreshModels
-                ))
-            } else if relay?.error != nil, (relay?.modelCount ?? 0) == 0 {
-                result.append(Banner(
-                    title: "还没有获取到中台模型",
-                    detail: relay?.error.flatMap { CoreProtocol.errorMessages[$0] },
-                    kind: .error,
-                    action: .refreshModels
                 ))
             }
             if let blocked = status.restoreBlocked, !blocked.isEmpty {
@@ -331,23 +408,16 @@ final class AppModel: ObservableObject {
         return result
     }
 
-    func start(stored: StoredConnection? = nil) async {
-        let stored = stored ?? StoredConnection.load(settings: settings, keychain: keychain)
-        if let url = stored.baseURL {
-            baseURL = url
-            savedBaseURL = url
+    func start(stored: StoredRelays? = nil) async {
+        let stored = stored ?? StoredRelays.load(settings: settings, keychain: keychain)
+        relays = stored.relays
+        let denied = stored.keys.values.contains {
+            if case .failure(KeychainError.accessDenied) = $0 { return true }
+            return false
         }
-        switch stored.apiKey {
-        case .success(let key?):
-            apiKey = key
-            savedKey = key
-        case .success(nil):
-            break
-        case .failure(KeychainError.accessDenied):
+        if denied {
             addNotice(Notice(title: Self.keychainDeniedTitle, kind: .warning))
             mainWindowRequested = true
-        case .failure:
-            break
         }
 
         let statuses = core.statusEvents()
@@ -373,23 +443,26 @@ final class AppModel: ObservableObject {
         addNotice(Notice(title: "后台服务没能启动，请退出后重新打开", kind: .error))
     }
 
+    func beginSetup() {
+        resetDraft(name: ShellSettings.legacyRelayName)
+    }
+
     func completeSetup() async {
         if setupPhase == .connecting { return }
-        guard validateInputs() else { return }
+        guard validateDraft() else { return }
         setupPhase = .connecting
         setupFollowUpIssues = []
         let saved: SaveResult
         do {
             saved = try await saveToCore()
         } catch {
-            setupPhase = .failed(title: "没能连上中台", detail: CoreFailure(error).message)
+            setupPhase = .failed(title: SetupCopy.failedTitle, detail: CoreFailure(error).message)
             return
         }
         do {
-            try persistConnection()
+            try await persistDraft(saved)
         } catch {
-            await rollbackCore()
-            setupPhase = .failed(title: "没有保存", detail: (error as? StorageFailure)?.message ?? "")
+            setupPhase = .failed(title: "没有保存", detail: (error as? PersistError)?.message ?? "")
             return
         }
         var issues: [String] = []
@@ -410,7 +483,7 @@ final class AppModel: ObservableObject {
         setupFollowUpIssues = issues
         setupPhase = .succeeded(
             title: forwardingOn ? "设置完成，转发已开启" : "设置完成，但转发没能开启",
-            modelCount: saved.relayModelCount
+            modelCount: saved.modelCount
         )
     }
 
@@ -447,9 +520,9 @@ final class AppModel: ObservableObject {
         if access.target == access.mode {
             switch access.mode {
             case "relay":
-                addNotice(Notice(title: "接入方式没有变化", detail: "仍然没有检测到 ChatGPT 登录，继续只用中台模型。", kind: .info))
+                addNotice(Notice(title: "接入方式没有变化", detail: "仍然没有检测到 ChatGPT 登录，继续只用中转模型。", kind: .info))
             case "both":
-                addNotice(Notice(title: "接入方式没有变化", detail: "仍然检测到 ChatGPT 登录，继续同时使用官方模型和中台模型。", kind: .info))
+                addNotice(Notice(title: "接入方式没有变化", detail: "仍然检测到 ChatGPT 登录，继续同时使用官方模型和中转模型。", kind: .info))
             default: break
             }
             return
@@ -457,39 +530,74 @@ final class AppModel: ObservableObject {
         await reconcileAccess(value)
     }
 
-    func saveConnection() async {
-        if isSaving { return }
-        guard validateInputs() else { return }
-        isSaving = true
-        defer { isSaving = false }
+    func beginAddRelay() {
+        guard canAddRelay else { return }
+        resetDraft(name: "")
+        showRelayForm = true
+    }
+
+    func beginEditRelay(id: String) {
+        guard let relay = relays.first(where: { $0.id == id }) else { return }
+        resetDraft(name: relay.name)
+        editingRelayID = id
+        draftBaseURL = relay.baseURL
+        draftAPIKey = ((try? keychain.load(relayID: id)) ?? nil) ?? ""
+        showRelayForm = true
+    }
+
+    func cancelRelayForm() {
+        guard !isSavingRelay else { return }
+        showRelayForm = false
+        relaySaveAlert = nil
+    }
+
+    func saveRelay() async {
+        if isSavingRelay { return }
+        guard validateDraft() else { return }
+        isSavingRelay = true
+        defer { isSavingRelay = false }
+        relaySaveAlert = nil
         let saved: SaveResult
         do {
             saved = try await saveToCore()
         } catch {
-            addNotice(Notice(title: "没有保存", detail: CoreFailure(error).message, kind: .error))
+            let failure = CoreFailure(error)
+            let suffix = failure.code == "relay_401" ? "。已填的内容都还在，改好后再保存。" : ""
+            relaySaveAlert = DialogAlert(title: "没有保存", message: failure.message + suffix, severity: .danger)
             return
         }
+        let adding = editingRelayID == nil
         do {
-            try persistConnection()
+            try await persistDraft(saved)
         } catch {
-            await rollbackCore()
-            addNotice(Notice(title: "没有保存", detail: (error as? StorageFailure)?.message, kind: .error))
+            relaySaveAlert = DialogAlert(title: "没有保存", message: (error as? PersistError)?.message ?? "", severity: .danger)
             return
         }
-        removeNotices(titled: "没有保存", Self.keychainDeniedTitle)
-        if saved.modelsChanged, chatGPT.isRunning() {
-            addNotice(Notice(
-                title: "已保存",
-                detail: "现在可用 \(saved.relayModelCount) 个中台模型。重启 ChatGPT 后，Codex 里会显示新的列表。",
-                kind: .success
-            ))
-        } else {
-            addNotice(Notice(
-                title: "已保存，不需要重启 ChatGPT",
-                detail: "已重新获取中台模型，不需要重启 ChatGPT。",
-                kind: .success
-            ))
-        }
+        removeNotices(titled: Self.keychainDeniedTitle)
+        showRelayForm = false
+        addNotice(adding
+            ? Notice(title: "已添加「\(saved.name)」", detail: "已获取 \(saved.modelCount) 个模型。重启 ChatGPT 后生效。", kind: .success)
+            : Notice(title: "已保存「\(saved.name)」", detail: "重启 ChatGPT 后生效。", kind: .success))
+    }
+
+    func canDeleteRelay(id: String) -> Bool { relays.count > 1 && relays.contains { $0.id == id } }
+
+    func requestDeleteRelay(id: String) {
+        guard canDeleteRelay(id: id), let relay = relays.first(where: { $0.id == id }) else { return }
+        let count = status?.relays?.first { $0.id == id }?.modelCount ?? 0
+        let models = count > 0 ? "的 \(count) 个模型" : "的模型"
+        pendingConfirmation = Confirmation(
+            kind: .deleteRelay(id: id),
+            title: "删除配置「\(relay.name)」？",
+            message: "删除后：\n· Codex 的模型列表里不再有「\(relay.name)」\(models)\n· 它的 API Key 会从系统钥匙串里删除\n\n重启 ChatGPT 后生效。",
+            confirmLabel: "删除"
+        )
+    }
+
+    func retryRelay(id: String) async {
+        retryingRelayIDs.insert(id)
+        defer { retryingRelayIDs.remove(id) }
+        await refresh("refresh_models", params: RefreshParams(id: id))
     }
 
     func setLoginStart(_ enabled: Bool) async {
@@ -497,7 +605,7 @@ final class AppModel: ObservableObject {
             pendingConfirmation = Confirmation(
                 kind: .loginStartOff,
                 title: "关闭「登录时启动」？",
-                message: "关闭后，下次登录电脑时助手不会自动运行。在你手动打开助手之前，Codex 里的官方模型和中台模型都无法使用，因为转发仍然开着。如果以后不打算常驻，建议先关闭转发。",
+                message: "关闭后，下次登录电脑时助手不会自动运行。在你手动打开助手之前，Codex 里的官方模型和中转模型都无法使用，因为转发仍然开着。如果以后不打算常驻，建议先关闭转发。",
                 confirmLabel: "仍然关闭"
             )
             return
@@ -556,19 +664,28 @@ final class AppModel: ObservableObject {
         }
     }
 
-    func refreshModels() async { await refresh("refresh_models") }
+    func refreshModels() async { await refresh("refresh_models", params: RefreshParams(id: nil)) }
 
     func recheckStatus() async {
         forwardingFailure = nil
-        await refresh("status")
+        await refresh("status", params: Empty())
     }
 
-    func cancelPending() { pendingConfirmation = nil }
+    func cancelPending() {
+        guard !isDeletingRelay else { return }
+        pendingConfirmation = nil
+    }
 
     func confirmPending() async {
-        guard let pending = pendingConfirmation else { return }
+        guard let pending = pendingConfirmation, !isDeletingRelay else { return }
+        if case .deleteRelay(let id) = pending.kind {
+            await deleteRelay(id: id)
+            pendingConfirmation = nil
+            return
+        }
         pendingConfirmation = nil
         switch pending.kind {
+        case .deleteRelay: break
         case .loginStartOff: applyLoginStart(false)
         case .quit: await shutdown(restore: true)
         case .uninstall: await runUninstall()
@@ -637,8 +754,8 @@ final class AppModel: ObservableObject {
         guard let target = value.access?.target, target != value.access?.mode else { return }
         guard await applyAccess(), chatGPT.isRunning() else { return }
         addNotice(target == "both"
-            ? Notice(title: "已切换到「官方 + 中台」", detail: "已检测到 ChatGPT 登录。重启 ChatGPT 后生效。", kind: .success)
-            : Notice(title: "已切换到「只用中台」", detail: "没有检测到 ChatGPT 登录。重启 ChatGPT 后生效。", kind: .success))
+            ? Notice(title: "已切换到「官方 + 中转」", detail: "已检测到 ChatGPT 登录。重启 ChatGPT 后生效。", kind: .success)
+            : Notice(title: "已切换到「只用中转」", detail: "没有检测到 ChatGPT 登录。重启 ChatGPT 后生效。", kind: .success))
     }
 
     private func applyAccess() async -> Bool {
@@ -667,7 +784,7 @@ final class AppModel: ObservableObject {
             return
         }
         var leftovers: [String] = []
-        do { try keychain.delete() } catch { leftovers.append("钥匙串里的 API Key") }
+        do { try keychain.deleteAll() } catch { leftovers.append("钥匙串里的 API Key") }
         do { try settings.deleteAll() } catch { leftovers.append("助手的设置文件") }
         do { try loginItem.disable() } catch { leftovers.append("登录时启动") }
         uninstallLeftovers = leftovers
@@ -691,13 +808,8 @@ final class AppModel: ObservableObject {
         mainWindowRequested = true
     }
 
-    private func rollbackCore() async {
-        guard let url = savedBaseURL, let key = savedKey else { return }
-        _ = try? await core.call("save_connection", params: SaveParams(baseURL: url, apiKey: key))
-    }
-
-    private func refresh(_ method: String) async {
-        guard let data = try? await core.call(method, params: Empty()),
+    private func refresh<P: Encodable & Sendable>(_ method: String, params: P) async {
+        guard let data = try? await core.call(method, params: params),
               let value = try? JSONDecoder.snakeCase.decode(CoreStatus.self, from: data) else { return }
         apply(value)
     }
@@ -719,37 +831,124 @@ final class AppModel: ObservableObject {
         }
     }
 
-    private func validateInputs() -> Bool {
-        var errors: [SetupField: String] = [:]
-        let url = baseURL.trimmingCharacters(in: .whitespaces)
+    private func resetDraft(name: String) {
+        editingRelayID = nil
+        draftName = name
+        draftBaseURL = ""
+        draftAPIKey = ""
+        relayFieldErrors = [:]
+        relaySaveAlert = nil
+    }
+
+    private func validateDraft() -> Bool {
+        var errors: [RelayField: String] = [:]
+        let name = draftName.trimmingCharacters(in: .whitespaces)
+        if name.isEmpty {
+            errors[.name] = CoreProtocol.errorMessages["name_empty"]
+        } else if name.count > 16 {
+            errors[.name] = "名字最多 16 个字，现在是 \(name.count) 个。"
+        } else if name.contains("·") {
+            errors[.name] = CoreProtocol.errorMessages["name_has_dot"]
+        } else if let same = relays.first(where: { $0.id != editingRelayID && $0.name.lowercased() == name.lowercased() }) {
+            errors[.name] = CoreFailure(code: "name_duplicate", keys: [same.name]).message
+        }
+        let url = draftBaseURL.trimmingCharacters(in: .whitespaces)
         if url.isEmpty {
             errors[.baseURL] = "请填写 Base URL。"
         } else if !url.hasPrefix("https://") {
             errors[.baseURL] = CoreProtocol.errorMessages["invalid_base_url"]
         }
-        if apiKey.trimmingCharacters(in: .whitespaces).isEmpty { errors[.apiKey] = "请填写 API Key。" }
-        setupFieldErrors = errors
+        if draftAPIKey.trimmingCharacters(in: .whitespaces).isEmpty { errors[.apiKey] = "请填写 API Key。" }
+        relayFieldErrors = errors
         return errors.isEmpty
     }
 
     private func saveToCore() async throws -> SaveResult {
         let data = try await core.call(
-            "save_connection",
-            params: SaveParams(baseURL: baseURL.trimmingCharacters(in: .whitespaces), apiKey: apiKey)
+            "save_relay",
+            params: SaveRelayParams(
+                id: editingRelayID,
+                name: draftName.trimmingCharacters(in: .whitespaces),
+                baseURL: draftBaseURL.trimmingCharacters(in: .whitespaces),
+                apiKey: draftAPIKey
+            )
         )
         return try JSONDecoder.snakeCase.decode(SaveResult.self, from: data)
     }
 
-    private func persistConnection() throws {
-        let url = baseURL.trimmingCharacters(in: .whitespaces)
-        do { try keychain.save(apiKey) } catch { throw StorageFailure.keychain }
+    private func persistDraft(_ saved: SaveResult) async throws {
+        let previous = relays.first { $0.id == saved.id }
+        let previousKey = (try? keychain.load(relayID: saved.id)) ?? nil
         do {
-            try settings.saveBaseURL(url)
+            try persistDraftLocally(saved, previousKey: previousKey)
         } catch {
-            if let savedKey { try? keychain.save(savedKey) } else { try? keychain.delete() }
+            let revoked = await revokeCore(saved, previous: previous, previousKey: previousKey)
+            throw PersistError(failure: error as? StorageFailure ?? .settings, revoked: revoked)
+        }
+    }
+
+    private func revokeCore(_ saved: SaveResult, previous: RelayConfig?, previousKey: String?) async -> Bool {
+        do {
+            if let previous {
+                guard let previousKey else { return false }
+                let restore = SaveRelayParams(id: previous.id, name: previous.name, baseURL: previous.baseURL, apiKey: previousKey)
+                _ = try await core.call("save_relay", params: restore)
+            } else if relays.isEmpty {
+                _ = try await core.call("init", params: CoreInitParams(relays: [], chatgptDir: nil))
+            } else {
+                _ = try await core.call("delete_relay", params: RelayIDParams(id: saved.id))
+            }
+            return true
+        } catch {
+            return false
+        }
+    }
+
+    private func persistDraftLocally(_ saved: SaveResult, previousKey: String?) throws {
+        let config = RelayConfig(id: saved.id, name: saved.name, baseURL: draftBaseURL.trimmingCharacters(in: .whitespaces))
+        do { try keychain.save(draftAPIKey, relayID: saved.id) } catch { throw StorageFailure.keychain }
+        var list = relays
+        if let index = list.firstIndex(where: { $0.id == saved.id }) { list[index] = config } else { list.append(config) }
+        do {
+            try settings.saveRelays(list)
+        } catch {
+            if let previousKey { try? keychain.save(previousKey, relayID: saved.id) } else { try? keychain.delete(relayID: saved.id) }
             throw StorageFailure.settings
         }
-        savedBaseURL = url
-        savedKey = apiKey
+        relays = list
+    }
+
+    private func deleteRelay(id: String) async {
+        guard let relay = relays.first(where: { $0.id == id }) else { return }
+        isDeletingRelay = true
+        defer { isDeletingRelay = false }
+        let failedTitle = "没有删除「\(relay.name)」"
+        let remaining = relays.filter { $0.id != id }
+        do {
+            try settings.saveRelays(remaining)
+        } catch {
+            addNotice(Notice(title: failedTitle, detail: StorageFailure.settings.message, kind: .error))
+            return
+        }
+        do {
+            let data = try await core.call("delete_relay", params: RelayIDParams(id: id))
+            if let value = try? JSONDecoder.snakeCase.decode(CoreStatus.self, from: data) { apply(value) }
+        } catch {
+            var detail = CoreFailure(error).message
+            do { try settings.saveRelays(relays) } catch { detail += "\n本机设置没能恢复，重启助手后这个配置会消失，需要重新添加。" }
+            addNotice(Notice(title: failedTitle, detail: detail, kind: .error))
+            return
+        }
+        relays = remaining
+        do {
+            try keychain.delete(relayID: id)
+            addNotice(Notice(title: "已删除「\(relay.name)」", detail: "重启 ChatGPT 后生效。", kind: .success))
+        } catch {
+            addNotice(Notice(
+                title: "已删除「\(relay.name)」",
+                detail: "重启 ChatGPT 后生效。\n但没能从系统钥匙串里删除它的 API Key。",
+                kind: .warning
+            ))
+        }
     }
 }

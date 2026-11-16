@@ -64,8 +64,20 @@ final class FakeCore: CoreClient, @unchecked Sendable {
         responses[method] = result
     }
 
+    private var queued: [String: [Result<Data, CoreError>]] = [:]
+
+    func enqueue(_ method: String, _ results: [Result<Data, CoreError>]) {
+        lock.lock(); defer { lock.unlock() }
+        queued[method, default: []].append(contentsOf: results)
+    }
+
     private func response(_ method: String) -> Result<Data, CoreError>? {
         lock.lock(); defer { lock.unlock() }
+        if var pending = queued[method], !pending.isEmpty {
+            let next = pending.removeFirst()
+            queued[method] = pending
+            return next
+        }
         return responses[method]
     }
 
@@ -129,72 +141,6 @@ final class FakeTrash: AppTrashing, @unchecked Sendable {
     }
 }
 
-final class FakeKeychain: KeyStoring, @unchecked Sendable {
-    private let log: CallLog
-    private let lock = NSLock()
-    private var stored: String?
-    private let loadError: KeychainError?
-    private let failing: Set<String>
-    private var loads = 0
-
-    init(log: CallLog, stored: String? = nil, loadError: KeychainError? = nil, failing: Set<String> = []) {
-        self.log = log
-        self.stored = stored
-        self.loadError = loadError
-        self.failing = failing
-    }
-
-    var loadCount: Int {
-        lock.lock()
-        defer { lock.unlock() }
-        return loads
-    }
-
-    func save(_ value: String) throws {
-        log.append("keychain.save:\(value)")
-        if failing.contains("keychain.save") { throw Boom() }
-        lock.lock()
-        stored = value
-        lock.unlock()
-    }
-
-    func load() throws -> String? {
-        lock.lock()
-        loads += 1
-        lock.unlock()
-        if let loadError { throw loadError }
-        lock.lock()
-        defer { lock.unlock() }
-        return stored
-    }
-
-    func delete() throws {
-        log.append("keychain.delete")
-        if failing.contains("keychain.delete") { throw Boom() }
-    }
-}
-
-final class FakeSettings: SettingsStoring, @unchecked Sendable {
-    private let log: CallLog
-    private let failing: Set<String>
-    init(log: CallLog, failing: Set<String> = []) {
-        self.log = log
-        self.failing = failing
-    }
-
-    func loadBaseURL() throws -> String? { nil }
-
-    func saveBaseURL(_ baseURL: String) throws {
-        log.append("settings.saveBaseURL:\(baseURL)")
-        if failing.contains("settings.saveBaseURL") { throw Boom() }
-    }
-
-    func deleteAll() throws {
-        log.append("settings.deleteAll")
-        if failing.contains("settings.deleteAll") { throw Boom() }
-    }
-}
-
 final class FakeLoginItem: LoginItemControlling, @unchecked Sendable {
     private let log: CallLog
     private let failing: Set<String>
@@ -234,20 +180,24 @@ private extension AppModel {
     var noticeTitles: [String] { notices.map(\.title) }
 }
 
+private func saveRelayResultExample(_ id: String, _ name: String) -> Result<Data, CoreError> {
+    resultJSON(#"{"id":"\#(id)","name":"\#(name)","model_count":5,"models_changed":true}"#)
+}
+
 private let exampleURL = "https://relay.example.com"
 private let exampleKey = "sk-example-0000"
 
 private func resultJSON(_ text: String) -> Result<Data, CoreError> { .success(Data(text.utf8)) }
 
 private func saveResult(changed: Bool, count: Int = 6) -> Result<Data, CoreError> {
-    resultJSON(#"{"models_changed":\#(changed),"relay_model_count":\#(count)}"#)
+    resultJSON(#"{"id":"1","name":"中转","model_count":\#(count),"models_changed":\#(changed)}"#)
 }
 
 private func statusResult(forwarding: Bool) -> Result<Data, CoreError> {
     resultJSON("""
     {"version":"1.2.0","forwarding":\(forwarding),"proxy":{"running":true,"error":null},\
     "chatgpt":{"found":true,"error":null},\
-    "relay":{"model_count":6,"fetched_at":"2026-11-11T00:12:00Z","stale":false,"error":null},\
+    "default_relay":null,"relays":[],\
     "taken_over":[],"restore_blocked":[],"config_path":"/Users/example/.codex/config.toml",\
     "update":{"latest_version":null,"url":null}}
     """)
@@ -265,7 +215,7 @@ private func accessStatusJSON(
     """
     {"version":"1.2.0","forwarding":\(forwarding),"proxy":{"running":true,"error":null},\
     "chatgpt":{"found":\(chatgptFound),"error":null},\
-    "relay":{"model_count":6,"fetched_at":"2026-11-11T00:12:00Z","stale":false,"error":null},\
+    "default_relay":null,"relays":[],\
     "taken_over":[],"restore_blocked":[],"config_path":"/Users/example/.codex/config.toml",\
     "update":{"latest_version":null,"url":null},\
     "access":{"mode":\(quoted(mode)),"target":\(quoted(target)),"detect":\(quoted(detect))}}
@@ -302,34 +252,34 @@ private func makeStatus(
     forwarding: Bool = true,
     proxyError: String? = nil,
     chatgptFound: Bool = true,
-    relay: CoreStatus.Relay = .init(modelCount: 6, fetchedAt: "2026-11-11T00:12:00Z", stale: false, error: nil),
     takenOver: [String] = [],
     restoreBlocked: [String] = [],
     configPath: String? = "/Users/example/.codex/config.toml"
 ) -> CoreStatus {
-    CoreStatus(
-        version: "1.2.0",
-        forwarding: forwarding,
-        proxy: .init(running: proxyError == nil, error: proxyError),
-        chatgpt: .init(found: chatgptFound, error: nil),
-        relay: relay,
-        takenOver: takenOver,
-        restoreBlocked: restoreBlocked,
-        configPath: configPath,
-        update: .init(latestVersion: nil, url: nil)
-    )
+    func list(_ items: [String]) -> String { "[" + items.map { "\"\($0)\"" }.joined(separator: ",") + "]" }
+    let json = """
+    {"version":"1.3.0","forwarding":\(forwarding),"proxy":{"running":\(proxyError == nil),"error":\(quoted(proxyError))},\
+    "chatgpt":{"found":\(chatgptFound),"error":null},"default_relay":null,"relays":[],\
+    "taken_over":\(list(takenOver)),"restore_blocked":\(list(restoreBlocked)),"config_path":\(quoted(configPath)),\
+    "update":{"latest_version":null,"url":null}}
+    """
+    let decoder = JSONDecoder()
+    decoder.keyDecodingStrategy = .convertFromSnakeCase
+    return try! decoder.decode(CoreStatus.self, from: Data(json.utf8))
 }
 
 @MainActor
 private struct Harness {
     let log: CallLog
     let core: FakeCore
-    let keychain: FakeKeychain
+    let keychain: RelayFakeKeychain
+    let settings: RelayFakeSettings
     let trash: FakeTrash
     let terminations = TerminationCounter()
     let model: AppModel
 
     init(
+        relays: [RelayConfig] = [],
         responses: [String: Result<Data, CoreError>] = [:],
         gates: [String: Gate] = [:],
         chatGPTRunning: Bool = false,
@@ -340,12 +290,16 @@ private struct Harness {
     ) {
         log = CallLog()
         core = FakeCore(log: log, responses: responses, gates: gates)
-        keychain = FakeKeychain(log: log, loadError: keychainLoadError, failing: failing)
+        keychain = RelayFakeKeychain(
+            log: log, entries: Dictionary(uniqueKeysWithValues: relays.map { ($0.id, "sk-example-\($0.id)") }),
+            loadError: keychainLoadError, failing: failing
+        )
+        settings = RelayFakeSettings(log: log, relays: relays, failing: failing)
         trash = FakeTrash(error: trashError)
         model = AppModel(
             core: core,
             keychain: keychain,
-            settings: FakeSettings(log: log, failing: failing),
+            settings: settings,
             loginItem: FakeLoginItem(log: log, failing: failing),
             chatGPT: FakeChatGPT(running: chatGPTRunning),
             trash: trash,
@@ -356,9 +310,10 @@ private struct Harness {
         model.onTerminate = { terminations.increment() }
     }
 
-    func fillInputs() {
-        model.baseURL = exampleURL
-        model.apiKey = exampleKey
+    func fillSetup() {
+        model.beginSetup()
+        model.draftBaseURL = exampleURL
+        model.draftAPIKey = exampleKey
     }
 }
 
@@ -374,109 +329,14 @@ private func waitUntil(timeout: TimeInterval = 2, _ condition: () -> Bool) async
 final class AppModelTests: XCTestCase {
     // MARK: completeSetup
 
-    func testCompleteSetup_EmptyBaseURL_FieldErrorAndNoCoreCall() async {
-        let h = Harness()
-        h.model.apiKey = exampleKey
-        await h.model.completeSetup()
-        XCTAssertNotNil(h.model.setupFieldErrors[.baseURL])
-        XCTAssertNil(h.model.setupFieldErrors[.apiKey])
-        XCTAssertEqual(h.log.entries, [])
-    }
-
-    func testCompleteSetup_EmptyAPIKey_FieldErrorAndNoCoreCall() async {
-        let h = Harness()
-        h.model.baseURL = exampleURL
-        await h.model.completeSetup()
-        XCTAssertNotNil(h.model.setupFieldErrors[.apiKey])
-        XCTAssertNil(h.model.setupFieldErrors[.baseURL])
-        XCTAssertEqual(h.log.entries, [])
-    }
-
-    func testCompleteSetup_BothEmpty_BothFieldErrors() async {
-        let h = Harness()
-        await h.model.completeSetup()
-        XCTAssertNotNil(h.model.setupFieldErrors[.baseURL])
-        XCTAssertNotNil(h.model.setupFieldErrors[.apiKey])
-        XCTAssertEqual(h.log.entries, [])
-    }
-
-    func testCompleteSetup_NonHTTPSBaseURL_FieldErrorAndNoCoreCall() async {
-        let h = Harness()
-        h.model.baseURL = "http://relay.example.com"
-        h.model.apiKey = exampleKey
-        await h.model.completeSetup()
-        XCTAssertEqual(h.model.setupFieldErrors[.baseURL], "Base URL 要以 https:// 开头。")
-        XCTAssertEqual(h.log.entries, [])
-    }
-
-    func testCompleteSetup_Relay401_TaskErrorAndNothingPersisted() async {
-        let h = Harness(responses: ["save_connection": remote("relay_401")])
-        h.fillInputs()
-        await h.model.completeSetup()
-        XCTAssertEqual(
-            h.model.setupPhase,
-            .failed(title: "没能连上中台", detail: CoreProtocol.errorMessages["relay_401"]!)
-        )
-        XCTAssertEqual(h.log.entries, ["core:save_connection"])
-    }
-
     func testDismissSetupFailure_ReturnsToIdleAndKeepsInputs() async {
-        let h = Harness(responses: ["save_connection": remote("relay_401")])
-        h.fillInputs()
+        let h = Harness(responses: ["save_relay": remote("relay_401")])
+        h.fillSetup()
         await h.model.completeSetup()
         h.model.dismissSetupFailure()
         XCTAssertEqual(h.model.setupPhase, .idle)
-        XCTAssertEqual(h.model.baseURL, exampleURL)
-        XCTAssertEqual(h.model.apiKey, exampleKey)
-    }
-
-    func testCompleteSetup_Success_RunsStepsInOrder() async {
-        let h = Harness(responses: [
-            "save_connection": saveResult(changed: true, count: 6),
-            "set_forwarding": statusResult(forwarding: true),
-        ])
-        h.fillInputs()
-        await h.model.completeSetup()
-        XCTAssertEqual(h.log.entries, [
-            "core:save_connection",
-            "keychain.save:\(exampleKey)",
-            "settings.saveBaseURL:\(exampleURL)",
-            "core:set_forwarding",
-            "login.enable",
-        ])
-        XCTAssertEqual(h.core.calls("save_connection").first?.params, #"{"api_key":"sk-example-0000","base_url":"https://relay.example.com"}"#)
-        XCTAssertEqual(h.core.calls("set_forwarding").first?.params, #"{"enabled":true}"#)
-    }
-
-    func testCompleteSetup_Success_ShowsCompletionWithModelCount() async {
-        let h = Harness(responses: [
-            "save_connection": saveResult(changed: true, count: 12),
-            "set_forwarding": statusResult(forwarding: true),
-        ])
-        h.fillInputs()
-        await h.model.completeSetup()
-        XCTAssertEqual(h.model.setupPhase, .succeeded(title: "设置完成，转发已开启", modelCount: 12))
-    }
-
-    func testCompleteSetup_WhileInFlight_ShowsConnectingAndIgnoresSecondSubmit() async {
-        let gate = Gate()
-        let h = Harness(
-            responses: [
-                "save_connection": saveResult(changed: true),
-                "set_forwarding": statusResult(forwarding: true),
-            ],
-            gates: ["save_connection": gate]
-        )
-        h.fillInputs()
-        let first = Task { await h.model.completeSetup() }
-        await waitUntil { !h.core.calls("save_connection").isEmpty }
-        XCTAssertEqual(h.model.setupPhase, .connecting)
-
-        await h.model.completeSetup()
-        await gate.open()
-        await first.value
-
-        XCTAssertEqual(h.core.calls("save_connection").count, 1)
+        XCTAssertEqual(h.model.draftBaseURL, exampleURL)
+        XCTAssertEqual(h.model.draftAPIKey, exampleKey)
     }
 
     // MARK: toggleForwarding
@@ -573,56 +433,6 @@ final class AppModelTests: XCTestCase {
         )
     }
 
-    // MARK: saveConnection
-
-    func testSaveConnection_Failure_ShowsNotSavedKeepsInputsAndSkipsKeychain() async {
-        let h = Harness(responses: ["save_connection": remote("relay_401")], chatGPTRunning: true)
-        h.fillInputs()
-        await h.model.saveConnection()
-        XCTAssertEqual(h.model.notices.last?.title, "没有保存")
-        XCTAssertEqual(h.model.notices.last?.detail, CoreProtocol.errorMessages["relay_401"])
-        XCTAssertEqual(h.model.baseURL, exampleURL)
-        XCTAssertEqual(h.model.apiKey, exampleKey)
-        XCTAssertEqual(h.log.entries, ["core:save_connection"])
-    }
-
-    func testSaveConnection_ModelsChangedAndChatGPTRunning_ShowsRestartNoticeWithoutConfirmOrRestart() async {
-        let h = Harness(responses: ["save_connection": saveResult(changed: true, count: 9)], chatGPTRunning: true)
-        h.fillInputs()
-        await h.model.saveConnection()
-        XCTAssertEqual(h.log.entries, [
-            "core:save_connection",
-            "keychain.save:\(exampleKey)",
-            "settings.saveBaseURL:\(exampleURL)",
-        ])
-        XCTAssertNil(h.model.pendingConfirmation)
-        XCTAssertEqual(
-            h.model.noticeTexts.last,
-            NoticeText(title: "已保存", detail: "现在可用 9 个中台模型。重启 ChatGPT 后，Codex 里会显示新的列表。", kind: .success)
-        )
-    }
-
-    func testSaveConnection_ModelsUnchanged_ShowsNoRestartNeeded() async {
-        let h = Harness(responses: ["save_connection": saveResult(changed: false)], chatGPTRunning: true)
-        h.fillInputs()
-        await h.model.saveConnection()
-        XCTAssertEqual(
-            h.model.noticeTexts.last,
-            NoticeText(title: "已保存，不需要重启 ChatGPT", detail: "已重新获取中台模型，不需要重启 ChatGPT。", kind: .success)
-        )
-        XCTAssertNil(h.model.pendingConfirmation)
-        XCTAssertTrue(h.log.entries.contains("keychain.save:\(exampleKey)"))
-    }
-
-    func testSaveConnection_ModelsChangedButChatGPTNotRunning_ShowsNoRestartNeeded() async {
-        let h = Harness(responses: ["save_connection": saveResult(changed: true)], chatGPTRunning: false)
-        h.fillInputs()
-        await h.model.saveConnection()
-        XCTAssertNil(h.model.pendingConfirmation)
-        XCTAssertEqual(h.model.notices.last?.title, "已保存，不需要重启 ChatGPT")
-        XCTAssertEqual(h.model.notices.last?.kind, .success)
-    }
-
     // MARK: setLoginStart
 
     func testSetLoginStart_UncheckWhileForwardingOn_AsksThenDisablesOnConfirm() async {
@@ -696,14 +506,20 @@ final class AppModelTests: XCTestCase {
         XCTAssertEqual(h.log.entries, ["core:prepare_uninstall"])
     }
 
-    func testUninstall_Success_CleansKeychainSettingsAndLoginItem() async {
-        let h = Harness(responses: ["prepare_uninstall": resultJSON("{}")])
+    func testUninstall_Success_ClearsWholeKeychainServiceSettingsAndLoginItem() async {
+        let h = Harness(relays: [relayOne, relayTwo], responses: ["prepare_uninstall": resultJSON("{}")])
+        await h.model.start()
         await h.model.uninstall()
         await h.model.confirmPending()
         XCTAssertEqual(h.model.uninstallPhase, .finished)
         XCTAssertEqual(h.log.entries.first, "core:prepare_uninstall")
-        XCTAssertEqual(Set(h.log.entries.dropFirst()), ["keychain.delete", "settings.deleteAll", "login.disable"])
+        XCTAssertEqual(
+            Set(h.log.entries.dropFirst()),
+            ["keychain.deleteAll", "settings.deleteAll", "login.disable"]
+        )
         XCTAssertEqual(h.log.entries.count, 4)
+        XCTAssertEqual(h.keychain.stored, [:])
+        XCTAssertEqual(h.settings.stored, [])
     }
 
     // MARK: checkUpdate
@@ -748,26 +564,6 @@ final class AppModelTests: XCTestCase {
         let h = Harness(status: makeStatus(takenOver: ["openai_base_url"]))
         XCTAssertEqual(h.model.banners.map(\.title), ["已接管 Codex 原有的接入设置"])
         XCTAssertEqual(h.model.banners.first?.kind, .info)
-    }
-
-    func testBanners_RelayStale_Warning() {
-        let relay = CoreStatus.Relay(modelCount: 6, fetchedAt: "2026-11-11T00:12:00Z", stale: true, error: nil)
-        let h = Harness(status: makeStatus(relay: relay))
-        XCTAssertEqual(h.model.banners.map(\.title), ["中台模型列表本次没有更新"])
-        XCTAssertEqual(h.model.banners.first?.kind, .warning)
-    }
-
-    func testBanners_RelayNeverSucceeded_Error() {
-        let relay = CoreStatus.Relay(modelCount: 0, fetchedAt: nil, stale: false, error: "relay_unreachable")
-        let h = Harness(status: makeStatus(relay: relay))
-        XCTAssertEqual(h.model.banners.map(\.title), ["还没有获取到中台模型"])
-        XCTAssertEqual(h.model.banners.first?.kind, .error)
-    }
-
-    func testBanners_RelayErrorWithKnownModels_NotNeverSucceeded() {
-        let relay = CoreStatus.Relay(modelCount: 6, fetchedAt: "2026-11-11T00:12:00Z", stale: false, error: "relay_unreachable")
-        let h = Harness(status: makeStatus(relay: relay))
-        XCTAssertFalse(h.model.banners.map(\.title).contains("还没有获取到中台模型"))
     }
 
     func testBanners_RestoreBlocked_ErrorWithKeysAndConfigPath() {
@@ -827,8 +623,6 @@ final class AppModelTests: XCTestCase {
     func testDismissBanner_StatusBanners_EachCanBeHidden() async {
         let statuses: [CoreStatus] = [
             makeStatus(takenOver: ["openai_base_url"]),
-            makeStatus(relay: .init(modelCount: 6, fetchedAt: "2026-11-11T00:12:00Z", stale: true, error: nil)),
-            makeStatus(relay: .init(modelCount: 0, fetchedAt: nil, stale: false, error: "relay_unreachable")),
             makeStatus(restoreBlocked: ["openai_base_url"]),
             makeStatus(proxyError: "proxy_port_in_use"),
             makeStatus(chatgptFound: false),
@@ -878,27 +672,6 @@ final class AppModelTests: XCTestCase {
         XCTAssertEqual(h.model.banners.map(\.title), ["已接管 Codex 原有的接入设置"])
     }
 
-    func testDismissBanner_RelayStale_StaysHiddenUntilItBecomesStaleAgain() async {
-        func relay(stale: Bool) -> CoreStatus {
-            makeStatus(relay: .init(modelCount: 6, fetchedAt: "2026-11-11T00:12:00Z", stale: stale, error: nil))
-        }
-        let h = Harness()
-        await h.model.start()
-        h.core.statusContinuation.yield(relay(stale: true))
-        await waitUntil { !h.model.banners.isEmpty }
-        h.model.dismissBanner(h.model.banners[0])
-
-        h.core.statusContinuation.yield(relay(stale: true))
-        try? await Task.sleep(nanoseconds: 100_000_000)
-        XCTAssertEqual(h.model.banners, [])
-
-        h.core.statusContinuation.yield(relay(stale: false))
-        try? await Task.sleep(nanoseconds: 100_000_000)
-        h.core.statusContinuation.yield(relay(stale: true))
-        await waitUntil { !h.model.banners.isEmpty }
-        XCTAssertEqual(h.model.banners.map(\.title), ["中台模型列表本次没有更新"])
-    }
-
     func testDismissBanner_PublishesChange() async {
         let h = Harness()
         await h.model.start()
@@ -914,7 +687,7 @@ final class AppModelTests: XCTestCase {
     // MARK: 钥匙串与核心进程
 
     func testStart_KeychainAccessDenied_AsksToReenterKeyAndOpensMainWindow() async {
-        let h = Harness(keychainLoadError: .accessDenied(-25293))
+        let h = Harness(relays: [relayOne], keychainLoadError: .accessDenied(-25293))
         await h.model.start()
         XCTAssertEqual(h.model.notices.last?.title, "无法读取已保存的 API Key，请重新输入")
         XCTAssertTrue(h.model.mainWindowRequested)
@@ -931,15 +704,14 @@ final class AppModelTests: XCTestCase {
     // MARK: 不显示模型名
 
     func testNoModelNamesAnywhereInUI() async {
-        let relay = CoreStatus.Relay(modelCount: 2, fetchedAt: "2026-11-11T00:12:00Z", stale: true, error: "example-model-alpha not found")
         let h = Harness(
             responses: [
-                "save_connection": resultJSON(#"{"models_changed":true,"relay_model_count":2,"relay_models":["example-model-alpha","example-model-beta"]}"#),
+                "save_relay": resultJSON(#"{"id":"1","name":"中转","model_count":2,"models_changed":true,"relay_models":["example-model-alpha","example-model-beta"]}"#),
                 "set_forwarding": statusResult(forwarding: true),
             ],
-            status: makeStatus(relay: relay, takenOver: ["example-model-alpha"])
+            status: makeStatus(takenOver: ["example-model-alpha"])
         )
-        h.fillInputs()
+        h.fillSetup()
         await h.model.completeSetup()
         let rendered = [
             String(describing: h.model.setupPhase),
@@ -1059,10 +831,10 @@ final class AppModelTests: XCTestCase {
 
     func testCompleteSetup_SetForwardingFails_StillSucceedsAndExplains() async {
         let h = Harness(responses: [
-            "save_connection": saveResult(changed: true, count: 6),
+            "save_relay": saveResult(changed: true, count: 6),
             "set_forwarding": remote("config_invalid"),
         ])
-        h.fillInputs()
+        h.fillSetup()
         await h.model.completeSetup()
         XCTAssertEqual(h.model.setupPhase, .succeeded(title: "设置完成，但转发没能开启", modelCount: 6))
         XCTAssertEqual(h.model.setupFollowUpIssues, [CoreProtocol.errorMessages["config_invalid"]!])
@@ -1071,78 +843,53 @@ final class AppModelTests: XCTestCase {
 
     func testCompleteSetup_LoginEnableFails_StillSucceedsAndExplains() async {
         let h = Harness(
-            responses: ["save_connection": saveResult(changed: true), "set_forwarding": statusResult(forwarding: true)],
+            responses: ["save_relay": saveResult(changed: true), "set_forwarding": statusResult(forwarding: true)],
             failing: ["login.enable"]
         )
-        h.fillInputs()
+        h.fillSetup()
         await h.model.completeSetup()
         XCTAssertEqual(h.model.setupPhase, .succeeded(title: "设置完成，转发已开启", modelCount: 6))
         XCTAssertEqual(h.model.setupFollowUpIssues, ["没能开启登录时启动"])
     }
 
     func testCompleteSetup_Failure_KeepsInputs() async {
-        let h = Harness(responses: ["save_connection": remote("relay_401")])
-        h.fillInputs()
+        let h = Harness(responses: ["save_relay": remote("relay_401")])
+        h.fillSetup()
         await h.model.completeSetup()
-        XCTAssertEqual(h.model.baseURL, exampleURL)
-        XCTAssertEqual(h.model.apiKey, exampleKey)
+        XCTAssertEqual(h.model.draftBaseURL, exampleURL)
+        XCTAssertEqual(h.model.draftAPIKey, exampleKey)
     }
 
     // MARK: 钥匙串写入失败时回滚
-
-    func testSaveConnection_KeychainWriteFails_RollsBackCoreToOldConnection() async {
-        let h = Harness(responses: ["save_connection": saveResult(changed: true)], failing: ["keychain.save"])
-        await h.model.start(stored: StoredConnection(baseURL: "https://old.example.com", apiKey: .success("sk-old-0000")))
-        h.fillInputs()
-        await h.model.saveConnection()
-        let saves = h.core.calls("save_connection")
-        XCTAssertEqual(saves.count, 2)
-        XCTAssertEqual(saves.last?.params, #"{"api_key":"sk-old-0000","base_url":"https://old.example.com"}"#)
-        XCTAssertEqual(h.model.notices.last?.title, "没有保存")
-        XCTAssertEqual(h.model.notices.last?.detail, "无法写入系统钥匙串。")
-        XCTAssertFalse(h.log.entries.contains { $0.hasPrefix("settings.saveBaseURL") })
-        XCTAssertNil(h.model.pendingConfirmation)
-    }
-
-    func testSaveConnection_SettingsWriteFails_RestoresOldKeyInKeychain() async {
-        let h = Harness(responses: ["save_connection": saveResult(changed: true)], failing: ["settings.saveBaseURL"])
-        await h.model.start(stored: StoredConnection(baseURL: "https://old.example.com", apiKey: .success("sk-old-0000")))
-        h.fillInputs()
-        await h.model.saveConnection()
-        XCTAssertEqual(h.log.entries.filter { $0.hasPrefix("keychain.") }, ["keychain.save:\(exampleKey)", "keychain.save:sk-old-0000"])
-        XCTAssertEqual(h.core.calls("save_connection").count, 2)
-        XCTAssertEqual(h.model.notices.last?.detail, "无法写入设置文件。")
-    }
-
-    func testCompleteSetup_SettingsWriteFails_DeletesNewKeyFromKeychain() async {
-        let h = Harness(responses: ["save_connection": saveResult(changed: true)], failing: ["settings.saveBaseURL"])
-        h.fillInputs()
-        await h.model.completeSetup()
-        XCTAssertEqual(h.log.entries.filter { $0.hasPrefix("keychain.") }, ["keychain.save:\(exampleKey)", "keychain.delete"])
-        XCTAssertEqual(h.model.setupPhase, .failed(title: "没有保存", detail: "无法写入设置文件。"))
-    }
-
-    func testCompleteSetup_KeychainWriteFails_StaysOnSetupWithoutRollback() async {
-        let h = Harness(responses: ["save_connection": saveResult(changed: true)], failing: ["keychain.save"])
-        h.fillInputs()
-        await h.model.completeSetup()
-        XCTAssertEqual(h.model.setupPhase, .failed(title: "没有保存", detail: "无法写入系统钥匙串。"))
-        XCTAssertEqual(h.core.calls("save_connection").count, 1)
-        XCTAssertTrue(h.core.calls("set_forwarding").isEmpty)
-        XCTAssertEqual(h.model.apiKey, exampleKey)
-    }
 
     // MARK: 卸载清理失败
 
     func testUninstall_CleanupFails_ListsEachLeftover() async {
         let h = Harness(
+            relays: [relayOne],
             responses: ["prepare_uninstall": resultJSON("{}")],
-            failing: ["keychain.delete", "login.disable"]
+            failing: ["keychain.deleteAll", "login.disable"]
         )
+        await h.model.start()
         await h.model.uninstall()
         await h.model.confirmPending()
         XCTAssertEqual(h.model.uninstallPhase, .finished)
         XCTAssertEqual(h.model.uninstallLeftovers, ["钥匙串里的 API Key", "登录时启动"])
+    }
+
+    func testUninstall_SettingsUnreadable_StillClearsWholeKeychainService() async {
+        let h = Harness(
+            relays: [relayOne, relayTwo],
+            responses: ["prepare_uninstall": resultJSON("{}")],
+            failing: ["settings.loadRelays"]
+        )
+        await h.model.start()
+        await h.model.uninstall()
+        await h.model.confirmPending()
+        XCTAssertEqual(h.model.uninstallPhase, .finished)
+        XCTAssertTrue(h.log.entries.contains("keychain.deleteAll"))
+        XCTAssertEqual(h.keychain.stored, [:])
+        XCTAssertEqual(h.model.uninstallLeftovers, [])
     }
 
     func testUninstall_CleanupSucceeds_NoLeftovers() async {
@@ -1154,39 +901,12 @@ final class AppModelTests: XCTestCase {
 
     // MARK: 启动只读一次钥匙串
 
-    func testStart_PreloadedConnection_DoesNotReadKeychainAgain() async {
-        let h = Harness()
-        await h.model.start(stored: StoredConnection(baseURL: "https://old.example.com", apiKey: .success("sk-old-0000")))
-        XCTAssertEqual(h.keychain.loadCount, 0)
-        XCTAssertEqual(h.model.baseURL, "https://old.example.com")
-        XCTAssertEqual(h.model.apiKey, "sk-old-0000")
-    }
-
-    func testStart_PreloadedAccessDenied_AsksToReenterKey() async {
-        let h = Harness()
-        await h.model.start(stored: StoredConnection(baseURL: nil, apiKey: .failure(KeychainError.accessDenied(-25293))))
-        XCTAssertEqual(h.model.notices.last?.title, "无法读取已保存的 API Key，请重新输入")
-        XCTAssertEqual(h.keychain.loadCount, 0)
-    }
-
     // MARK: 设置窗口
 
-    func testNeedsSetup_UntilBaseURLSaved() async {
-        let h = Harness(responses: ["save_connection": saveResult(changed: true), "set_forwarding": statusResult(forwarding: true)])
-        XCTAssertTrue(h.model.needsSetup)
-        h.fillInputs()
-        await h.model.completeSetup()
-        XCTAssertFalse(h.model.needsSetup)
-
-        let stored = Harness()
-        await stored.model.start(stored: StoredConnection(baseURL: "https://old.example.com", apiKey: .success(nil)))
-        XCTAssertFalse(stored.model.needsSetup)
-    }
-
     func testFinishSetup_HidesSetupAndResetsPhase() async {
-        let h = Harness(responses: ["save_connection": saveResult(changed: true), "set_forwarding": statusResult(forwarding: true)])
+        let h = Harness(responses: ["save_relay": saveResult(changed: true), "set_forwarding": statusResult(forwarding: true)])
         h.model.showSetup = true
-        h.fillInputs()
+        h.fillSetup()
         await h.model.completeSetup()
         h.model.finishSetup()
         XCTAssertFalse(h.model.showSetup)
@@ -1200,7 +920,7 @@ final class AppModelTests: XCTestCase {
         await h.model.setLoginStart(false)
         XCTAssertEqual(
             h.model.pendingConfirmation?.message,
-            "关闭后，下次登录电脑时助手不会自动运行。在你手动打开助手之前，Codex 里的官方模型和中台模型都无法使用，因为转发仍然开着。如果以后不打算常驻，建议先关闭转发。"
+            "关闭后，下次登录电脑时助手不会自动运行。在你手动打开助手之前，Codex 里的官方模型和中转模型都无法使用，因为转发仍然开着。如果以后不打算常驻，建议先关闭转发。"
         )
     }
 
@@ -1225,19 +945,19 @@ final class AppModelTests: XCTestCase {
 
     func testAccessTexts_RelayNotLoggedIn() throws {
         let h = Harness(status: try accessStatus(mode: "relay", target: "relay", detect: "not_logged_in"))
-        XCTAssertEqual(h.model.accessModeName, "只用中台")
+        XCTAssertEqual(h.model.accessModeName, "只用中转")
         XCTAssertEqual(h.model.accessReasonText, "· 没有检测到 ChatGPT 登录")
         XCTAssertEqual(
             h.model.accessHelpText,
-            "不需要登录 ChatGPT。模型列表里只有中台模型，默认选中「中台 · auto」。登录 ChatGPT 后点「重新检测」，就能同时用官方模型。"
+            "不用登录 ChatGPT。只有中转模型，没有默认选中的模型。"
         )
     }
 
     func testAccessTexts_BothLoggedIn() throws {
         let h = Harness(status: try accessStatus(mode: "both", target: "both", detect: "logged_in"))
-        XCTAssertEqual(h.model.accessModeName, "官方 + 中台")
+        XCTAssertEqual(h.model.accessModeName, "官方 + 中转")
         XCTAssertEqual(h.model.accessReasonText, "· 已检测到 ChatGPT 登录")
-        XCTAssertEqual(h.model.accessHelpText, "模型列表里官方模型在上，中台模型在下；选官方模型时仍然访问官方服务。")
+        XCTAssertEqual(h.model.accessHelpText, "官方模型在上，中转模型在下；选官方模型时仍访问官方服务。")
     }
 
     func testAccessTexts_DetectFailed_KeepsLastWay() throws {
@@ -1291,7 +1011,7 @@ final class AppModelTests: XCTestCase {
         )
         await h.model.recheckAccess()
         XCTAssertEqual(h.model.notices.last?.title, "接入方式没有变化")
-        XCTAssertEqual(h.model.notices.last?.detail, "仍然没有检测到 ChatGPT 登录，继续只用中台模型。")
+        XCTAssertEqual(h.model.notices.last?.detail, "仍然没有检测到 ChatGPT 登录，继续只用中转模型。")
         XCTAssertEqual(h.model.notices.last?.kind, .info)
         XCTAssertEqual(h.core.calls("apply_access").count, 0)
     }
@@ -1303,7 +1023,7 @@ final class AppModelTests: XCTestCase {
         )
         await h.model.recheckAccess()
         XCTAssertEqual(h.model.notices.last?.title, "接入方式没有变化")
-        XCTAssertEqual(h.model.notices.last?.detail, "仍然检测到 ChatGPT 登录，继续同时使用官方模型和中台模型。")
+        XCTAssertEqual(h.model.notices.last?.detail, "仍然检测到 ChatGPT 登录，继续同时使用官方模型和中转模型。")
         XCTAssertEqual(h.model.notices.last?.kind, .info)
         XCTAssertEqual(h.core.calls("apply_access").count, 0)
     }
@@ -1363,7 +1083,7 @@ final class AppModelTests: XCTestCase {
         XCTAssertEqual(h.log.entries, ["core:detect_access", "core:apply_access"])
         XCTAssertEqual(
             h.model.noticeTexts.last,
-            NoticeText(title: "已切换到「官方 + 中台」", detail: "已检测到 ChatGPT 登录。重启 ChatGPT 后生效。", kind: .success)
+            NoticeText(title: "已切换到「官方 + 中转」", detail: "已检测到 ChatGPT 登录。重启 ChatGPT 后生效。", kind: .success)
         )
     }
 
@@ -1381,7 +1101,7 @@ final class AppModelTests: XCTestCase {
         XCTAssertEqual(h.log.entries, ["core:detect_access", "core:apply_access"])
         XCTAssertEqual(
             h.model.noticeTexts.last,
-            NoticeText(title: "已切换到「只用中台」", detail: "没有检测到 ChatGPT 登录。重启 ChatGPT 后生效。", kind: .success)
+            NoticeText(title: "已切换到「只用中转」", detail: "没有检测到 ChatGPT 登录。重启 ChatGPT 后生效。", kind: .success)
         )
     }
 
@@ -1556,7 +1276,7 @@ final class AppModelTests: XCTestCase {
         XCTAssertEqual(h.core.calls("apply_access").count, 1)
         XCTAssertEqual(
             h.model.noticeTexts.last,
-            NoticeText(title: "已切换到「只用中台」", detail: "没有检测到 ChatGPT 登录。重启 ChatGPT 后生效。", kind: .success)
+            NoticeText(title: "已切换到「只用中转」", detail: "没有检测到 ChatGPT 登录。重启 ChatGPT 后生效。", kind: .success)
         )
     }
 
@@ -1586,16 +1306,6 @@ final class AppModelTests: XCTestCase {
 
     // MARK: 提示去重与问题解决后移除
 
-    func testSaveConnection_RepeatedFailures_KeepSingleNotice_ThenSuccessRemovesIt() async {
-        let h = Harness(responses: ["save_connection": remote("relay_401")])
-        h.fillInputs()
-        for _ in 0..<3 { await h.model.saveConnection() }
-        XCTAssertEqual(h.model.noticeTitles, ["没有保存"])
-        h.core.setResponse("save_connection", saveResult(changed: false))
-        await h.model.saveConnection()
-        XCTAssertEqual(h.model.noticeTitles, ["已保存，不需要重启 ChatGPT"])
-    }
-
     func testRecheckAccess_DetectCallFailure_RemovedByLaterSuccess() async throws {
         let h = Harness(
             responses: ["detect_access": remote("internal_error")],
@@ -1620,12 +1330,18 @@ final class AppModelTests: XCTestCase {
     }
 
     func testKeychainWarning_RemovedBySuccessfulSave() async {
-        let h = Harness(responses: ["save_connection": saveResult(changed: false)])
-        await h.model.start(stored: StoredConnection(baseURL: nil, apiKey: .failure(KeychainError.accessDenied(-25293))))
+        let h = Harness(
+            relays: [relayOne], responses: ["save_relay": saveRelayResultExample("2", "备用")],
+            keychainLoadError: .accessDenied(-25293)
+        )
+        await h.model.start()
         XCTAssertEqual(h.model.noticeTitles, ["无法读取已保存的 API Key，请重新输入"])
-        h.fillInputs()
-        await h.model.saveConnection()
-        XCTAssertEqual(h.model.noticeTitles, ["已保存，不需要重启 ChatGPT"])
+        h.model.beginAddRelay()
+        h.model.draftName = "备用"
+        h.model.draftBaseURL = "https://b.example.com"
+        h.model.draftAPIKey = exampleKey
+        await h.model.saveRelay()
+        XCTAssertEqual(h.model.noticeTitles, ["已添加「备用」"])
     }
 
     // MARK: 启动检测失败只针对启动后第一条转发开着的状态
@@ -1758,13 +1474,15 @@ final class AppModelTests: XCTestCase {
 
     func testNotice_KeychainWarningSurvivesStartupAlignSwitch() async throws {
         let h = Harness(
+            relays: [relayOne],
             responses: ["apply_access": accessResult(mode: "relay", target: "relay", detect: "not_logged_in")],
-            chatGPTRunning: true
+            chatGPTRunning: true,
+            keychainLoadError: .accessDenied(-25293)
         )
-        await h.model.start(stored: StoredConnection(baseURL: nil, apiKey: .failure(KeychainError.accessDenied(-25293))))
+        await h.model.start()
         h.core.statusContinuation.yield(try accessStatus(mode: "both", target: "relay", detect: "not_logged_in"))
         await waitUntil { h.model.notices.count == 2 }
-        XCTAssertEqual(h.model.noticeTitles, ["无法读取已保存的 API Key，请重新输入", "已切换到「只用中台」"])
+        XCTAssertEqual(h.model.noticeTitles, ["无法读取已保存的 API Key，请重新输入", "已切换到「只用中转」"])
         XCTAssertEqual(h.model.notices.first?.kind, .warning)
     }
 
@@ -1776,27 +1494,27 @@ final class AppModelTests: XCTestCase {
 
     func testSetupSucceededText_Relay() async {
         let h = Harness(responses: [
-            "save_connection": saveResult(changed: true, count: 12),
+            "save_relay": saveResult(changed: true, count: 12),
             "set_forwarding": accessResult(mode: "relay", target: "relay", detect: "not_logged_in"),
         ])
-        h.fillInputs()
+        h.fillSetup()
         await h.model.completeSetup()
         XCTAssertEqual(
             h.model.setupSucceededText,
-            "已获取 12 个中台模型。没有检测到 ChatGPT 登录，接入方式为「只用中台」：Codex 不需要登录，模型列表里只有中台模型。\n请重启 ChatGPT 后使用。助手会在你登录电脑时自动启动，在菜单栏里常驻。"
+            "已获取 12 个中转模型。没有检测到 ChatGPT 登录，接入方式为「只用中转」：Codex 不需要登录，模型列表里只有中转模型。\n请重启 ChatGPT 后使用。助手会在你登录电脑时自动启动，在菜单栏里常驻。"
         )
     }
 
     func testSetupSucceededText_Both() async {
         let h = Harness(responses: [
-            "save_connection": saveResult(changed: true, count: 7),
+            "save_relay": saveResult(changed: true, count: 7),
             "set_forwarding": accessResult(mode: "both", target: "both", detect: "logged_in"),
         ])
-        h.fillInputs()
+        h.fillSetup()
         await h.model.completeSetup()
         XCTAssertEqual(
             h.model.setupSucceededText,
-            "已获取 7 个中台模型。已检测到 ChatGPT 登录，接入方式为「官方 + 中台」。\n请重启 ChatGPT 后使用。助手会在你登录电脑时自动启动，在菜单栏里常驻。"
+            "已获取 7 个中转模型。已检测到 ChatGPT 登录，接入方式为「官方 + 中转」。\n请重启 ChatGPT 后使用。助手会在你登录电脑时自动启动，在菜单栏里常驻。"
         )
     }
 }

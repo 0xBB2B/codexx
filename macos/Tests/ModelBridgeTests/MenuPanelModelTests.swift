@@ -6,22 +6,19 @@ private func makeAppModel(chatGPTFound: Bool = true) -> AppModel {
     let log = CallLog()
     let model = AppModel(
         core: FakeCore(log: log),
-        keychain: FakeKeychain(log: log),
-        settings: FakeSettings(log: log),
+        keychain: RelayFakeKeychain(log: log),
+        settings: RelayFakeSettings(log: log),
         loginItem: FakeLoginItem(log: log),
         chatGPT: FakeChatGPT(running: false)
     )
-    model.status = CoreStatus(
-        version: "1.2.0",
-        forwarding: false,
-        proxy: .init(running: true, error: nil),
-        chatgpt: .init(found: chatGPTFound, error: nil),
-        relay: nil,
-        takenOver: [],
-        restoreBlocked: [],
-        configPath: nil,
-        update: nil
-    )
+    let json = """
+    {"version":"1.3.0","forwarding":false,"proxy":{"running":true,"error":null},\
+    "chatgpt":{"found":\(chatGPTFound),"error":null},"default_relay":null,"relays":[],\
+    "taken_over":[],"restore_blocked":[],"config_path":null,"update":null}
+    """
+    let decoder = JSONDecoder()
+    decoder.keyDecodingStrategy = .convertFromSnakeCase
+    model.status = try! decoder.decode(CoreStatus.self, from: Data(json.utf8))
     return model
 }
 
@@ -64,7 +61,7 @@ final class MenuPanelModelTests: XCTestCase {
     func testItemTitlesAndShortcuts() {
         let panel = MenuPanelModel(model: makeAppModel())
         XCTAssertEqual(panel.groups.map { $0.map(\.title) }, [
-            ["转发到中台", "打开配置…"],
+            ["使用中转", "打开配置…"],
             ["登录时启动", "检查更新"],
             ["卸载模型接入助手…", "退出模型接入助手"],
         ])

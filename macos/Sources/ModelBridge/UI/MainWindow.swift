@@ -68,10 +68,10 @@ struct MainWindow: View {
     private var forwardingCard: some View {
         Card(title: "转发") {
             FieldRow(
-                label: "转发到中台",
+                label: "使用中转",
                 help: model.forwardingHelpText
             ) {
-                SwitchRow(label: "转发到中台", isOn: Binding(
+                SwitchRow(label: "使用中转", isOn: Binding(
                     get: { model.forwardingEnabled },
                     set: { value in Task { await model.toggleForwarding(enabled: value) } }
                 ))
@@ -107,26 +107,23 @@ struct MainWindow: View {
     }
 
     private var connectionCard: some View {
-        Card(title: "中台连接") {
-            FieldRow(label: "Base URL", help: "以 https:// 开头的完整地址。", error: model.setupFieldErrors[.baseURL]) {
-                AppTextField(
-                    label: "Base URL", placeholder: "https://relay.example.com/v1", text: $model.baseURL,
-                    mono: true, invalid: model.setupFieldErrors[.baseURL] != nil, errorText: model.setupFieldErrors[.baseURL]
-                )
-            }
-            FieldRow(label: "API Key", help: "保存在系统钥匙串中。", error: model.setupFieldErrors[.apiKey]) {
-                SecretInput(
-                    placeholder: "", text: $model.apiKey,
-                    invalid: model.setupFieldErrors[.apiKey] != nil, errorText: model.setupFieldErrors[.apiKey]
-                )
-            }
-            .disabled(model.isSaving)
-            HStack {
-                Button { Task { await model.saveConnection() } } label: {
-                    BusyLabel(text: model.isSaving ? "正在保存并重新获取模型…" : "保存修改", busy: model.isSaving)
+        Card(title: "中转配置") {
+            ForEach(model.relayRows) { row in
+                HStack(spacing: 12) {
+                    Text(row.name).font(Fonts.label).foregroundColor(Palette.text)
+                    Text(row.text).font(Fonts.control).foregroundColor(Palette.textMuted)
+                    Spacer()
+                    if row.canRetry {
+                        Button("重试") { Task { await model.retryRelay(id: row.id) } }.secondaryAction(compact: true)
+                    }
+                    Button("编辑") { model.beginEditRelay(id: row.id) }.secondaryAction(compact: true).disabled(!row.canEdit)
+                    Button("删除") { model.requestDeleteRelay(id: row.id) }.secondaryAction(compact: true).disabled(!row.canDelete)
                 }
-                .secondaryAction()
-                .disabled(model.isSaving)
+            }
+            HStack {
+                Text(model.relayListCaption).font(Fonts.control).foregroundColor(Palette.textMuted)
+                Spacer()
+                Button("添加") { model.beginAddRelay() }.secondaryAction().disabled(!model.canAddRelay)
             }
         }
         .disabled(model.isSwitchingForwarding)
@@ -136,7 +133,7 @@ struct MainWindow: View {
         Card(title: "运行状态") {
             VStack(alignment: .leading, spacing: 12) {
                 kv("ChatGPT", chatGPTFound ? "已检测到" : "未找到", good: chatGPTFound)
-                kv("中台模型", model.modelCountText, good: (model.status?.relay?.modelCount ?? 0) > 0)
+                kv("中转模型", model.modelCountText, good: model.relayRows.contains { $0.canRetry == false && $0.text.hasSuffix("个模型") })
             }
         }
     }

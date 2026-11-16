@@ -20,22 +20,25 @@ struct KeychainStore: Sendable {
     static let defaultAccount = "relay-api-key"
 
     private let service: String
-    private let account: String
 
-    init(service: String = KeychainStore.defaultService, account: String = KeychainStore.defaultAccount) {
+    init(service: String = KeychainStore.defaultService) {
         self.service = service
-        self.account = account
     }
 
-    private var identity: [String: Any] {
+    static func account(forRelayID id: String) -> String {
+        id == "1" ? defaultAccount : "\(defaultAccount)-\(id)"
+    }
+
+    private func identity(_ relayID: String) -> [String: Any] {
         [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
-            kSecAttrAccount as String: account,
+            kSecAttrAccount as String: Self.account(forRelayID: relayID),
         ]
     }
 
-    func save(_ value: String) throws {
+    func save(_ value: String, relayID: String) throws {
+        let identity = identity(relayID)
         let data = Data(value.utf8)
         let updated = SecItemUpdate(identity as CFDictionary, [
             kSecValueData as String: data,
@@ -50,8 +53,8 @@ struct KeychainStore: Sendable {
         guard added == errSecSuccess else { throw KeychainError(status: added) }
     }
 
-    func load() throws -> String? {
-        var query = identity
+    func load(relayID: String) throws -> String? {
+        var query = identity(relayID)
         query[kSecReturnData as String] = true
         query[kSecMatchLimit as String] = kSecMatchLimitOne
         var result: CFTypeRef?
@@ -61,8 +64,8 @@ struct KeychainStore: Sendable {
         return String(data: data, encoding: .utf8)
     }
 
-    func accessibleAttribute() throws -> String? {
-        var query = identity
+    func accessibleAttribute(relayID: String) throws -> String? {
+        var query = identity(relayID)
         query[kSecReturnAttributes as String] = true
         var result: CFTypeRef?
         let status = SecItemCopyMatching(query as CFDictionary, &result)
@@ -70,16 +73,27 @@ struct KeychainStore: Sendable {
         return (result as? [String: Any])?[kSecAttrAccessible as String] as? String
     }
 
-    func delete() throws {
-        let status = SecItemDelete(identity as CFDictionary)
+    func delete(relayID: String) throws {
+        let status = SecItemDelete(identity(relayID) as CFDictionary)
         guard status == errSecSuccess || status == errSecItemNotFound else { throw KeychainError(status: status) }
+    }
+
+    func deleteAll() throws {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+        ]
+        var status = SecItemDelete(query as CFDictionary)
+        while status == errSecSuccess { status = SecItemDelete(query as CFDictionary) }
+        guard status == errSecItemNotFound else { throw KeychainError(status: status) }
     }
 }
 
 protocol KeyStoring: Sendable {
-    func save(_ value: String) throws
-    func load() throws -> String?
-    func delete() throws
+    func save(_ value: String, relayID: String) throws
+    func load(relayID: String) throws -> String?
+    func delete(relayID: String) throws
+    func deleteAll() throws
 }
 
 extension KeychainStore: KeyStoring {}

@@ -6,15 +6,15 @@ private let fallbackBundleID = "io.github.modelbridge.app"
 
 private final class StartupConnection: @unchecked Sendable {
     private let lock = NSLock()
-    private var value: StoredConnection?
+    private var value: StoredRelays?
 
-    func set(_ connection: StoredConnection) {
+    func set(_ connection: StoredRelays) {
         lock.lock()
         value = connection
         lock.unlock()
     }
 
-    func take() -> StoredConnection? {
+    func take() -> StoredRelays? {
         lock.lock()
         defer { lock.unlock() }
         let taken = value
@@ -46,8 +46,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             executableURL: CoreProcess.executableURL(appBundleURL: Bundle.main.bundleURL),
             arguments: CoreProcess.arguments(dataDir: CoreProcess.defaultDataDirectory),
             initParams: {
-                let stored = startup.take() ?? StoredConnection.load(settings: settings, keychain: keychain)
-                return CoreInitParams(baseURL: stored.baseURL, apiKey: (try? stored.apiKey.get()) ?? nil, chatgptDir: nil)
+                if let stored = startup.take() {
+                    return CoreInitParams(relays: stored.initRelays, chatgptDir: nil)
+                }
+                return CoreInitParams.load(settings: settings, keychain: keychain, chatgptDir: nil)
             }
         )
         model = AppModel(core: core, keychain: keychain, settings: settings, loginItem: loginItem, chatGPT: ChatGPTApp())
@@ -74,10 +76,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let settings = settings
         let keychain = keychain
         Task {
-            let stored = await Task.detached { StoredConnection.load(settings: settings, keychain: keychain) }.value
+            let stored = await Task.detached { StoredRelays.load(settings: settings, keychain: keychain) }.value
             startup.set(stored)
-            let hasBaseURL = stored.baseURL != nil
-            if !hasBaseURL { model.showSetup = true }
+            let hasRelays = !stored.relays.isEmpty
+            if !hasRelays { model.showSetup = true }
             do {
                 try await core.start()
             } catch {
@@ -85,7 +87,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             await model.start(stored: stored)
             await model.recheckStatus()
-            if hasBaseURL && !launchedAtLogin { showMainWindow() }
+            if hasRelays && !launchedAtLogin { showMainWindow() }
         }
     }
 

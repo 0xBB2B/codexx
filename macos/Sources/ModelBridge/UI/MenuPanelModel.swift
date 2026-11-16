@@ -28,7 +28,7 @@ struct MenuPanelModel {
         groups = [
             [
                 MenuPanelItem(
-                    id: .forwarding, title: "转发到中台",
+                    id: .forwarding, title: "使用中转",
                     checked: model.forwardingEnabled, isDisabled: model.forwardingToggleDisabled
                 ),
                 MenuPanelItem(id: .openConfig, title: "打开配置…", shortcut: "⌘,"),

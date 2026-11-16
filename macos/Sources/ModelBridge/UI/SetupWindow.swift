@@ -6,8 +6,8 @@ struct SetupWindow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
             VStack(alignment: .leading, spacing: 8) {
-                Text("连接到中台").font(Fonts.pageTitle).foregroundColor(Palette.text)
-                Text("填写中台提供的 Base URL 和 API Key。设置完成后，Codex 的模型列表里会多出中台模型。")
+                Text(SetupCopy.title).font(Fonts.pageTitle).foregroundColor(Palette.text)
+                Text(SetupCopy.subtitle)
                     .font(Fonts.control)
                     .foregroundColor(Palette.textMuted)
             }
@@ -17,6 +17,7 @@ struct SetupWindow: View {
                 form
             }
         }
+        .onAppear { model.beginSetup() }
         .padding(24)
         .frame(width: 620)
         .background(Palette.background)
@@ -39,22 +40,22 @@ struct SetupWindow: View {
                 label: "Base URL",
                 required: true,
                 help: "以 https:// 开头的完整地址。",
-                error: model.setupFieldErrors[.baseURL]
+                error: model.relayFieldErrors[.baseURL]
             ) {
                 AppTextField(
-                    label: "Base URL", placeholder: "https://relay.example.com/v1", text: $model.baseURL,
-                    mono: true, invalid: model.setupFieldErrors[.baseURL] != nil, errorText: model.setupFieldErrors[.baseURL]
+                    label: "Base URL", placeholder: "https://relay.example.com/v1", text: $model.draftBaseURL,
+                    mono: true, invalid: model.relayFieldErrors[.baseURL] != nil, errorText: model.relayFieldErrors[.baseURL]
                 )
             }
             FieldRow(
                 label: "API Key",
                 required: true,
                 help: "保存在系统钥匙串中。",
-                error: model.setupFieldErrors[.apiKey]
+                error: model.relayFieldErrors[.apiKey]
             ) {
                 SecretInput(
-                    placeholder: "", text: $model.apiKey,
-                    invalid: model.setupFieldErrors[.apiKey] != nil, errorText: model.setupFieldErrors[.apiKey]
+                    placeholder: "", text: $model.draftAPIKey,
+                    invalid: model.relayFieldErrors[.apiKey] != nil, errorText: model.relayFieldErrors[.apiKey]
                 )
             }
         }
@@ -62,7 +63,7 @@ struct SetupWindow: View {
         HStack {
             Spacer()
             Button { Task { await model.completeSetup() } } label: {
-                BusyLabel(text: connecting ? "正在连接中台…" : "完成设置", busy: connecting)
+                BusyLabel(text: connecting ? SetupCopy.connecting : "完成设置", busy: connecting)
             }
             .primaryAction()
             .disabled(connecting)
