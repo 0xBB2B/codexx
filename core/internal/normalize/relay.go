@@ -72,7 +72,7 @@ func ForRelay(body []byte) ([]byte, error) {
 					continue
 				}
 			case "function_call_output":
-				// ChatGPT 桌面端插入的伴随页面状态没有 call_id，中台按 Responses 规范校验会拒收
+				// ChatGPT 桌面端插入的伴随页面状态没有 call_id，中转按 Responses 规范校验会拒收
 				if h.CallID == "" {
 					kept = append(kept, userText("以下是 "+h.Name+" 的结果："+outputText(h.Output)))
 					changed = true

@@ -2,6 +2,7 @@ package control_test
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -95,5 +96,30 @@ func TestSaveSettings_ReplacesFileAtomically(t *testing.T) {
 	entries, _ := os.ReadDir(dir)
 	if len(entries) != 2 {
 		t.Errorf("不该留下临时文件: %v", entries)
+	}
+}
+
+func TestSaveSettings_KeepsNextRelayID(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "settings.json"), []byte(`{"forwarding":true,"next_relay_id":7}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s, err := control.LoadSettings(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := control.SaveSettings(dir, s); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(filepath.Join(dir, "settings.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var m map[string]any
+	if err := json.Unmarshal(raw, &m); err != nil {
+		t.Fatal(err)
+	}
+	if got := fmt.Sprint(m["next_relay_id"]); got != "7" || m["forwarding"] != true {
+		t.Errorf("settings.json = %s, want next_relay_id 7 且 forwarding true", raw)
 	}
 }

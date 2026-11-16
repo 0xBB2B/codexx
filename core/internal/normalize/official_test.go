@@ -36,7 +36,7 @@ func TestForOfficial_RemovesRelayReasoning(t *testing.T) {
 		t.Fatal("应报告已改动")
 	}
 	if strings.Contains(string(out), "rs_relay") {
-		t.Fatalf("中台 reasoning 仍在：%s", out)
+		t.Fatalf("中转 reasoning 仍在：%s", out)
 	}
 	for _, keep := range []string{odd, officialRs, callItem} {
 		if !strings.Contains(string(out), keep) {

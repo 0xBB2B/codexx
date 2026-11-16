@@ -16,7 +16,14 @@ import (
 )
 
 func fullInput(c Config) EnableInput {
-	return EnableInput{CatalogPath: catalogPath(c), HasAutoModel: true, Efforts: []string{"none", "high"}}
+	return EnableInput{CatalogPath: catalogPath(c), DefaultModel: "relay-auto", Efforts: []string{"none", "high"}}
+}
+
+func defaultModelFor(has bool) string {
+	if has {
+		return "relay-auto"
+	}
+	return ""
 }
 
 func requireCode(t *testing.T, err error, code string, keys []string) {
@@ -39,7 +46,7 @@ func TestRestore_RoundTripByteExact(t *testing.T) {
 			t.Run(s.name, func(t *testing.T) {
 				c, cfg := newFixture(t, s)
 				in := fullInput(c)
-				in.HasAutoModel = auto
+				in.DefaultModel = defaultModelFor(auto)
 				if _, err := Enable(c, in); err != nil {
 					t.Fatal(err)
 				}
@@ -321,7 +328,7 @@ func TestRestore_RoundTripByteExact_OriginalSpelling(t *testing.T) {
 			t.Run(s.name, func(t *testing.T) {
 				c, cfg := newFixture(t, s)
 				in := fullInput(c)
-				in.HasAutoModel = auto
+				in.DefaultModel = defaultModelFor(auto)
 				if _, err := Enable(c, in); err != nil {
 					t.Fatal(err)
 				}
@@ -610,7 +617,7 @@ func TestEnable_AutoModelDroppedOnSecondEnable(t *testing.T) {
 			t.Fatal(err)
 		}
 		in := fullInput(c)
-		in.HasAutoModel = false
+		in.DefaultModel = ""
 		taken, err := Enable(c, in)
 		if err != nil {
 			t.Fatal(err)
@@ -631,7 +638,7 @@ func TestEnable_AutoModelDroppedOnSecondEnable(t *testing.T) {
 			t.Fatal(err)
 		}
 		in := fullInput(c)
-		in.HasAutoModel = false
+		in.DefaultModel = ""
 		if _, err := Enable(c, in); err != nil {
 			t.Fatal(err)
 		}
@@ -649,7 +656,7 @@ func TestEnable_AutoModelDroppedOnSecondEnable(t *testing.T) {
 		}
 		handEdit(t, cfg, `model = "relay-auto"`, `model = "mine"`)
 		in := fullInput(c)
-		in.HasAutoModel = false
+		in.DefaultModel = ""
 		taken, err := Enable(c, in)
 		if err != nil {
 			t.Fatal(err)
@@ -786,7 +793,7 @@ func TestEnable_RelayOnly_WritesProviderAndSkipsOfficialItems(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			c, cfg := newFixture(t, sample{content: "sandbox = \"read-only\"\n\n[mcp_servers.x]\ncommand = \"foo\"\n"})
 			in := relayOnlyInput(c)
-			in.HasAutoModel = tt.auto
+			in.DefaultModel = defaultModelFor(tt.auto)
 			if _, err := Enable(c, in); err != nil {
 				t.Fatal(err)
 			}
@@ -844,7 +851,7 @@ func TestRestore_RelayOnly_RoundTripByteExact(t *testing.T) {
 			t.Run(s.name+suffix, func(t *testing.T) {
 				c, cfg := newFixture(t, s)
 				in := relayOnlyInput(c)
-				in.HasAutoModel = auto
+				in.DefaultModel = defaultModelFor(auto)
 				if _, err := Enable(c, in); err != nil {
 					t.Fatal(err)
 				}
@@ -930,11 +937,11 @@ func TestEnable_SwitchModeAfterRestoreEqualsDirectEnable(t *testing.T) {
 		name      string
 		relayOnly bool
 	}{
-		{"官方加中台", false},
-		{"只用中台", true},
+		{"官方加中转", false},
+		{"只用中转", true},
 	}
 	input := func(relayOnly bool) EnableInput {
-		return EnableInput{CatalogPath: catalog, HasAutoModel: true, Efforts: []string{"none", "high"}, RelayOnly: relayOnly}
+		return EnableInput{CatalogPath: catalog, DefaultModel: "relay-auto", Efforts: []string{"none", "high"}, RelayOnly: relayOnly}
 	}
 	for _, first := range modes {
 		for _, second := range modes {
@@ -1002,7 +1009,7 @@ func TestRestore_RelayOnly_BlockedByHandEditedProviderBaseURL(t *testing.T) {
 }
 
 func switchInput(relayOnly bool) EnableInput {
-	return EnableInput{CatalogPath: "/fixed/merged-catalog.json", HasAutoModel: true, Efforts: []string{"none", "high"}, RelayOnly: relayOnly}
+	return EnableInput{CatalogPath: "/fixed/merged-catalog.json", DefaultModel: "relay-auto", Efforts: []string{"none", "high"}, RelayOnly: relayOnly}
 }
 
 func requireRestoredTo(t *testing.T, c Config, cfg string, s sample) {
@@ -1026,8 +1033,8 @@ func TestEnable_SwitchModeWithoutRestoreEqualsDirectEnable(t *testing.T) {
 		name      string
 		relayOnly bool
 	}{
-		{"官方加中台到只用中台", false},
-		{"只用中台到官方加中台", true},
+		{"官方加中转到只用中转", false},
+		{"只用中转到官方加中转", true},
 	}
 	all := append([]sample{{name: "custom 提供方", content: "model_provider = \"custom\"\nsandbox = \"a\"\n"}}, samples...)
 	all = append(all, rawFormSamples...)
@@ -1085,7 +1092,7 @@ func TestEnable_SwitchModeWithHandEditedItemKeepsUserValue(t *testing.T) {
 		t.Fatalf("思考等级应已还原: %v", m["desktop"])
 	}
 	if m["model_provider"] != "modelbridge" || m["model_catalog_json"] != "/fixed/merged-catalog.json" {
-		t.Fatalf("只用中台的项应已写入: %v", m)
+		t.Fatalf("只用中转的项应已写入: %v", m)
 	}
 	if providerTable(t, m)["base_url"] != proxyURL {
 		t.Fatalf("model_providers.modelbridge = %v", providerTable(t, m))
@@ -1143,7 +1150,7 @@ func TestEnable_SwitchModeFromRelayOnlyKeepsHandEditedProviderBaseURL(t *testing
 		t.Fatalf("wire_api 应已还原: %v", tbl)
 	}
 	if m["openai_base_url"] != proxyURL {
-		t.Fatalf("官方加中台的项应已写入: %v", m)
+		t.Fatalf("官方加中转的项应已写入: %v", m)
 	}
 	if _, ok := m["model_provider"]; ok {
 		t.Fatalf("model_provider 应已还原删除: %v", m["model_provider"])
@@ -1197,7 +1204,7 @@ func TestRestore_StateWithoutRelayOnlyFieldAndRelayOnlyState(t *testing.T) {
 			t.Fatalf("还原后 = %q, 期望 %q", got, orig)
 		}
 	})
-	t.Run("只用中台开启后还原", func(t *testing.T) {
+	t.Run("只用中转开启后还原", func(t *testing.T) {
 		c, cfg := newFixture(t, sample{content: orig})
 		if _, err := Enable(c, switchInput(true)); err != nil {
 			t.Fatal(err)
@@ -1232,5 +1239,87 @@ func TestEnable_RelayOnly_WithExistingModelProvidersTables(t *testing.T) {
 			}
 			requireRestoredTo(t, c, cfg, s)
 		})
+	}
+}
+
+func TestEnable_DefaultModelWrittenAsGiven(t *testing.T) {
+	for _, relayOnly := range []bool{false, true} {
+		name := "官方加中转"
+		if relayOnly {
+			name = "只用中转"
+		}
+		t.Run(name, func(t *testing.T) {
+			c, cfg := newFixture(t, sample{content: "sandbox = \"read-only\"\n"})
+			in := fullInput(c)
+			in.RelayOnly = relayOnly
+			in.DefaultModel = "relay2-auto"
+			if _, err := Enable(c, in); err != nil {
+				t.Fatal(err)
+			}
+			if got := parseConfig(t, readFile(t, cfg))["model"]; got != "relay2-auto" {
+				t.Fatalf("model = %v, want relay2-auto", got)
+			}
+			if e := readState(t, c).Entries["model"]; e.Written != "relay2-auto" {
+				t.Fatalf("state 里 model 记录 = %+v", e)
+			}
+		})
+	}
+}
+
+func TestEnable_DefaultModelSwitchKeepsOriginalForRestore(t *testing.T) {
+	c, cfg := newFixture(t, sample{content: "model = \"gpt-x\"\n"})
+	in := fullInput(c)
+	if _, err := Enable(c, in); err != nil {
+		t.Fatal(err)
+	}
+	in.DefaultModel = "relay3-auto"
+	taken, err := Enable(c, in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(taken) != 0 {
+		t.Fatalf("不应报接管: %v", taken)
+	}
+	if got := parseConfig(t, readFile(t, cfg))["model"]; got != "relay3-auto" {
+		t.Fatalf("model = %v, want relay3-auto", got)
+	}
+	if err := Restore(c); err != nil {
+		t.Fatal(err)
+	}
+	if got := readFile(t, cfg); got != "model = \"gpt-x\"\n" {
+		t.Fatalf("还原后 = %q", got)
+	}
+}
+
+func TestEnable_DefaultModelHandEditedIsTakenOver(t *testing.T) {
+	c, cfg := newFixture(t, sample{content: "a = 1\n"})
+	in := fullInput(c)
+	in.DefaultModel = "relay2-auto"
+	if _, err := Enable(c, in); err != nil {
+		t.Fatal(err)
+	}
+	handEdit(t, cfg, `model = "relay2-auto"`, `model = "mine"`)
+	in.DefaultModel = ""
+	taken, err := Enable(c, in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(taken, []string{"model"}) {
+		t.Fatalf("接管键 = %v", taken)
+	}
+	if l, _ := findLine(readFile(t, cfg), "model"); l != `model = "mine"` {
+		t.Fatalf("model 行 = %q", l)
+	}
+}
+
+func TestEnable_EmptyDefaultModelWritesNoModel(t *testing.T) {
+	c, cfg := newFixture(t, sample{content: "a = 1\n"})
+	in := fullInput(c)
+	in.DefaultModel = ""
+	if _, err := Enable(c, in); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := parseConfig(t, readFile(t, cfg))["model"]; ok {
+		t.Fatal("DefaultModel 为空时不应写 model")
 	}
 }

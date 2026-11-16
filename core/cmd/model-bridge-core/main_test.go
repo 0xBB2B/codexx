@@ -193,7 +193,11 @@ func (f *fixture) config(t *testing.T) string {
 }
 
 func (f *fixture) initParams() map[string]any {
-	return map[string]any{"base_url": f.relayBase(), "api_key": secretKey, "chatgpt_dir": nil}
+	return map[string]any{"relays": []any{relayParams("1", "中转", f.relayBase(), secretKey)}, "chatgpt_dir": nil}
+}
+
+func relayParams(id any, name, baseURL, key string) map[string]any {
+	return map[string]any{"id": id, "name": name, "base_url": baseURL, "api_key": key}
 }
 
 type syncBuffer struct {
@@ -266,9 +270,7 @@ func startCore(t *testing.T, f *fixture) *core {
 	}()
 	t.Cleanup(func() {
 		_ = in.Close()
-		if cmd.ProcessState == nil {
-			_ = cmd.Process.Kill()
-		}
+		_ = cmd.Process.Kill()
 	})
 	return c
 }
@@ -398,9 +400,9 @@ func TestCore_KeyNeverLeaks(t *testing.T) {
 	f := newFixture(t, true)
 	c := startCore(t, f)
 	c.result("init", f.initParams())
-	c.call("save_connection", map[string]any{"base_url": f.relayBase(), "api_key": otherKey})
-	c.result("save_connection", map[string]any{"base_url": f.relayBase(), "api_key": secretKey})
-	c.result("refresh_models", map[string]any{})
+	c.call("save_relay", relayParams("1", "中转", f.relayBase(), otherKey))
+	c.result("save_relay", relayParams("1", "中转", f.relayBase(), secretKey))
+	c.result("refresh_models", map[string]any{"id": nil})
 	resp, err := http.Post("http://"+f.listenAddr+"/v1/chat/completions", "application/json", strings.NewReader(`{"model":"deepseek-flash"}`))
 	if err != nil {
 		t.Fatal(err)
@@ -477,7 +479,7 @@ func TestCore_PrepareUninstall(t *testing.T) {
 		if errObj["code"] != "restore_blocked" || !reflect.DeepEqual(errObj["keys"], []any{"openai_base_url"}) {
 			t.Fatalf("响应 = %v", m)
 		}
-		for _, name := range []string{"model-bridge-catalog.json", "access-state.json", "relay-models.json", "settings.json"} {
+		for _, name := range []string{"model-bridge-catalog.json", "access-state.json", "relay-models-1.json", "settings.json"} {
 			if _, err := os.Stat(filepath.Join(f.dataDir, name)); err != nil {
 				t.Errorf("%s 应保留: %v", name, err)
 			}
@@ -493,7 +495,7 @@ func TestCore_PrepareUninstall(t *testing.T) {
 		if f.config(t) != originalConfig {
 			t.Errorf("配置没还原: %q", f.config(t))
 		}
-		for _, name := range []string{"model-bridge-catalog.json", "access-state.json", "relay-models.json", "settings.json"} {
+		for _, name := range []string{"model-bridge-catalog.json", "access-state.json", "relay-models-1.json", "settings.json"} {
 			if _, err := os.Stat(filepath.Join(f.dataDir, name)); !os.IsNotExist(err) {
 				t.Errorf("%s 应被删除: %v", name, err)
 			}
@@ -504,7 +506,7 @@ func TestCore_PrepareUninstall(t *testing.T) {
 	})
 }
 
-func TestCore_SaveConnectionErrors(t *testing.T) {
+func TestCore_SaveRelayErrors(t *testing.T) {
 	f := newFixture(t, false)
 	c := startCore(t, f)
 	c.result("init", f.initParams())
@@ -520,7 +522,7 @@ func TestCore_SaveConnectionErrors(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			m := c.call("save_connection", map[string]any{"base_url": tt.baseURL, "api_key": tt.key})
+			m := c.call("save_relay", relayParams(nil, "新", tt.baseURL, tt.key))
 			errObj, _ := m["error"].(map[string]any)
 			if errObj["code"] != tt.wantCode {
 				t.Fatalf("响应 = %v", m)
@@ -539,7 +541,7 @@ func TestCore_StdinClosedWhileRequestInFlight(t *testing.T) {
 	taken := f.config(t)
 
 	f.hang.Store(true)
-	line, _ := json.Marshal(map[string]any{"id": 99, "method": "refresh_models", "params": map[string]any{}})
+	line, _ := json.Marshal(map[string]any{"id": 99, "method": "refresh_models", "params": map[string]any{"id": nil}})
 	if _, err := c.in.Write(append(line, '\n')); err != nil {
 		t.Fatal(err)
 	}

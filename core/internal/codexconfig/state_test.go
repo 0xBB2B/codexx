@@ -45,7 +45,7 @@ func TestEnable_StateRecordsOriginalAndWritten(t *testing.T) {
 	orig := "openai_base_url = \"" + relayURL + "\"\nmodel = \"gpt-x\"\n"
 	c, _ := newFixture(t, sample{content: orig})
 	cat := catalogPath(c)
-	if _, err := Enable(c, EnableInput{CatalogPath: cat, HasAutoModel: true, Efforts: []string{"none"}}); err != nil {
+	if _, err := Enable(c, EnableInput{CatalogPath: cat, DefaultModel: "relay-auto", Efforts: []string{"none"}}); err != nil {
 		t.Fatal(err)
 	}
 	sf := readState(t, c)
@@ -106,7 +106,7 @@ func TestEnable_ProviderRemovedRecordedAsTakenOver(t *testing.T) {
 func TestEnable_Twice_KeepsOriginalAndNoTakeover(t *testing.T) {
 	orig := "a = 1\n"
 	c, cfg := newFixture(t, sample{content: orig})
-	in := EnableInput{CatalogPath: catalogPath(c), HasAutoModel: true}
+	in := EnableInput{CatalogPath: catalogPath(c), DefaultModel: "relay-auto"}
 	if _, err := Enable(c, in); err != nil {
 		t.Fatal(err)
 	}

@@ -118,15 +118,20 @@ func dispatch(ctx context.Context, svc *Service, req request) (any, error) {
 		return svc.Init(ctx, p)
 	case "status":
 		return svc.Status(), nil
-	case "save_connection":
+	case "save_relay":
+		var p SaveRelayParams
+		if err := decode(req.Params, &p); err != nil {
+			return nil, err
+		}
+		return svc.SaveRelay(ctx, p)
+	case "delete_relay":
 		var p struct {
-			BaseURL string `json:"base_url"`
-			APIKey  string `json:"api_key"`
+			ID string `json:"id"`
 		}
 		if err := decode(req.Params, &p); err != nil {
 			return nil, err
 		}
-		return svc.SaveConnection(ctx, p.BaseURL, p.APIKey)
+		return svc.DeleteRelay(ctx, p.ID)
 	case "set_forwarding":
 		var p struct {
 			Enabled bool `json:"enabled"`
@@ -136,7 +141,13 @@ func dispatch(ctx context.Context, svc *Service, req request) (any, error) {
 		}
 		return svc.SetForwarding(ctx, p.Enabled)
 	case "refresh_models":
-		return svc.RefreshModels(ctx)
+		var p struct {
+			ID *string `json:"id"`
+		}
+		if err := decode(req.Params, &p); err != nil {
+			return nil, err
+		}
+		return svc.RefreshModels(ctx, p.ID)
 	case "detect_access":
 		return svc.DetectAccess(ctx)
 	case "apply_access":

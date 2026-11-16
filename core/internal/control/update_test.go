@@ -267,7 +267,7 @@ func TestCheckUpdate_RequestCarriesNoUserData(t *testing.T) {
 	g := newGitHubStub(t, "v1.3.0")
 	svc := control.NewService(withUpdate(e.opts, g, nil))
 	t.Cleanup(func() { _ = svc.Shutdown(context.Background(), false) })
-	if _, err := svc.Init(context.Background(), control.InitParams{BaseURL: ptr(e.relay.baseURL()), APIKey: ptr(keyA)}); err != nil {
+	if _, err := svc.Init(context.Background(), initParamsOf(t, initParams(e))); err != nil {
 		t.Fatal(err)
 	}
 

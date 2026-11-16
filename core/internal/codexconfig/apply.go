@@ -28,7 +28,6 @@ const (
 	keyProviderWire = "model_providers." + ProviderID + ".wire_api"
 
 	proxyBaseURL = "http://127.0.0.1:47311/v1"
-	autoModel    = "relay-auto"
 )
 
 type Config struct {
@@ -41,7 +40,7 @@ type Config struct {
 
 type EnableInput struct {
 	CatalogPath  string
-	HasAutoModel bool
+	DefaultModel string
 	Efforts      []string
 	RelayOnly    bool
 }
@@ -149,7 +148,7 @@ func Enable(c Config, in EnableInput) ([]string, error) {
 	} else {
 		managed = append(managed, keyBaseURL)
 	}
-	if in.HasAutoModel {
+	if in.DefaultModel != "" {
 		managed = append(managed, keyModel)
 	}
 	if len(efforts) > 0 {
@@ -215,7 +214,7 @@ func Enable(c Config, in EnableInput) ([]string, error) {
 
 	eol := detectEOL(orig)
 	var taken []string
-	if modelEntry != nil && !in.HasAutoModel {
+	if modelEntry != nil && in.DefaultModel == "" {
 		switch {
 		case badSet[keyModel]:
 			taken = append(taken, keyModel)
@@ -282,16 +281,16 @@ func Enable(c Config, in EnableInput) ([]string, error) {
 		record(kv.key, origStr(it, had), raw, had, kv.val, had, nil)
 	}
 
-	if in.HasAutoModel {
+	if in.DefaultModel != "" {
 		it, had, err := get(text, keyModel)
 		if err != nil {
 			return nil, err
 		}
 		raw := rawOf(it, had)
-		if text, err = setString(text, keyModel, autoModel, eol); err != nil {
+		if text, err = setString(text, keyModel, in.DefaultModel, eol); err != nil {
 			return nil, err
 		}
-		record(keyModel, origStr(it, had), raw, had, autoModel, false, nil)
+		record(keyModel, origStr(it, had), raw, had, in.DefaultModel, false, nil)
 	}
 
 	if len(efforts) > 0 {

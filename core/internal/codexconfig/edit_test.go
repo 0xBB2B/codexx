@@ -146,7 +146,7 @@ func TestEnable_OnlyManagedLinesChange(t *testing.T) {
 	for _, s := range samples {
 		t.Run(s.name, func(t *testing.T) {
 			c, cfg := newFixture(t, s)
-			in := EnableInput{CatalogPath: catalogPath(c), HasAutoModel: true, Efforts: []string{"none", "high"}}
+			in := EnableInput{CatalogPath: catalogPath(c), DefaultModel: "relay-auto", Efforts: []string{"none", "high"}}
 			if _, err := Enable(c, in); err != nil {
 				t.Fatalf("Enable 返回错误: %v", err)
 			}
@@ -173,7 +173,7 @@ func TestEnable_OnlyManagedLinesChange(t *testing.T) {
 func TestEnable_NewRootKeysBeforeFirstTable(t *testing.T) {
 	s := sample{content: "# c\nfoo = 1\n\n[mcp_servers.x]\ncommand = \"foo\"\n"}
 	c, cfg := newFixture(t, s)
-	if _, err := Enable(c, EnableInput{CatalogPath: catalogPath(c), HasAutoModel: true}); err != nil {
+	if _, err := Enable(c, EnableInput{CatalogPath: catalogPath(c), DefaultModel: "relay-auto"}); err != nil {
 		t.Fatal(err)
 	}
 	got := readFile(t, cfg)
@@ -197,7 +197,7 @@ func TestEnable_ModelKey(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			c, cfg := newFixture(t, sample{content: "model = \"gpt-x\"\n"})
-			if _, err := Enable(c, EnableInput{CatalogPath: catalogPath(c), HasAutoModel: tt.hasAuto}); err != nil {
+			if _, err := Enable(c, EnableInput{CatalogPath: catalogPath(c), DefaultModel: defaultModelFor(tt.hasAuto)}); err != nil {
 				t.Fatal(err)
 			}
 			l, ok := findLine(readFile(t, cfg), "model")
@@ -281,7 +281,7 @@ func TestEnable_TakenOverKeys(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			c, _ := newFixture(t, sample{content: tt.content})
-			got, err := Enable(c, EnableInput{CatalogPath: catalogPath(c), HasAutoModel: true})
+			got, err := Enable(c, EnableInput{CatalogPath: catalogPath(c), DefaultModel: "relay-auto"})
 			if err != nil {
 				t.Fatal(err)
 			}

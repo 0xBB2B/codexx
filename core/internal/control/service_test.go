@@ -232,7 +232,7 @@ func newEnv(t *testing.T, forwarding bool, mods ...func(*env)) *env {
 
 func (e *env) initRelay(t *testing.T) control.Status {
 	t.Helper()
-	st, err := e.svc.Init(context.Background(), control.InitParams{BaseURL: ptr(e.relay.baseURL()), APIKey: ptr(keyA)})
+	st, err := e.svc.Init(context.Background(), initParamsOf(t, initParams(e)))
 	if err != nil {
 		t.Fatalf("Init: %v", err)
 	}
@@ -316,9 +316,48 @@ func postViaProxy(t *testing.T, addr, model string) int {
 	return resp.StatusCode
 }
 
-func TestInit(t *testing.T) {
-	ctx := context.Background()
+func relayJSON(id any, name, baseURL, key string) map[string]any {
+	return map[string]any{"id": id, "name": name, "base_url": baseURL, "api_key": key}
+}
 
+func initParamsOf(t *testing.T, m map[string]any) control.InitParams {
+	t.Helper()
+	raw, err := json.Marshal(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var p control.InitParams
+	if err := json.Unmarshal(raw, &p); err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+type relayView struct {
+	ID         string  `json:"id"`
+	Name       string  `json:"name"`
+	ModelCount int     `json:"model_count"`
+	FetchedAt  *string `json:"fetched_at"`
+	Stale      bool    `json:"stale"`
+	Error      *string `json:"error"`
+}
+
+func relaysOf(t *testing.T, st control.Status) []relayView {
+	t.Helper()
+	raw, err := json.Marshal(st)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var v struct {
+		Relays []relayView `json:"relays"`
+	}
+	if err := json.Unmarshal(raw, &v); err != nil {
+		t.Fatal(err)
+	}
+	return v.Relays
+}
+
+func TestInit(t *testing.T) {
 	t.Run("转发开着时启动转发生成目录并写入接入项", func(t *testing.T) {
 		e := newEnv(t, true)
 		st := e.initRelay(t)
@@ -331,8 +370,9 @@ func TestInit(t *testing.T) {
 		if !st.ChatGPT.Found || st.ChatGPT.Error != nil {
 			t.Errorf("ChatGPT = %+v", st.ChatGPT)
 		}
-		if st.Relay.ModelCount != 1 || st.Relay.FetchedAt == nil || st.Relay.Stale || st.Relay.Error != nil {
-			t.Errorf("Relay = %+v", st.Relay)
+		rs := relaysOf(t, st)
+		if len(rs) != 1 || rs[0].ID != "1" || rs[0].Name != "中转" || rs[0].ModelCount != 1 || rs[0].FetchedAt == nil || rs[0].Stale || rs[0].Error != nil {
+			t.Errorf("Relays = %+v", rs)
 		}
 		if st.ConfigPath != e.configPath {
 			t.Errorf("ConfigPath = %q, want %q", st.ConfigPath, e.configPath)
@@ -345,11 +385,11 @@ func TestInit(t *testing.T) {
 			t.Errorf("接入项没写入: %q", cfg)
 		}
 		if !strings.Contains(readFile(t, e.catalogPath()), "deepseek-flash") {
-			t.Error("合并目录里没有中台模型")
+			t.Error("合并目录里没有中转模型")
 		}
 	})
 
-	t.Run("转发关着时只检测 ChatGPT 不拉中台", func(t *testing.T) {
+	t.Run("转发关着时只检测 ChatGPT 不拉中转", func(t *testing.T) {
 		e := newEnv(t, false)
 		st := e.initRelay(t)
 		if st.Forwarding || st.Proxy.Running {
@@ -359,7 +399,7 @@ func TestInit(t *testing.T) {
 			t.Errorf("ChatGPT = %+v", st.ChatGPT)
 		}
 		if e.relay.hits() != 0 {
-			t.Errorf("转发关着不该拉中台, 实际 %d 次", e.relay.hits())
+			t.Errorf("转发关着不该拉中转, 实际 %d 次", e.relay.hits())
 		}
 		if e.config(t) != originalConfig || exists(e.catalogPath()) {
 			t.Error("转发关着不该改配置或生成目录")
@@ -374,20 +414,6 @@ func TestInit(t *testing.T) {
 		}
 	})
 
-	t.Run("base_url 为 null 时不拉中台", func(t *testing.T) {
-		e := newEnv(t, true)
-		st, err := e.svc.Init(ctx, control.InitParams{})
-		if err != nil {
-			t.Fatal(err)
-		}
-		if e.relay.hits() != 0 {
-			t.Errorf("未设置中台不该拉取, 实际 %d 次", e.relay.hits())
-		}
-		if !st.Proxy.Running || st.Relay.ModelCount != 0 || st.Relay.FetchedAt != nil {
-			t.Errorf("Status = %+v", st)
-		}
-	})
-
 	t.Run("转发开着但端口被占", func(t *testing.T) {
 		e := newEnv(t, true, func(e *env) { e.listenAddr = occupiedAddr(t) })
 		st := e.initRelay(t)
@@ -395,106 +421,6 @@ func TestInit(t *testing.T) {
 			t.Errorf("Proxy = %+v", st.Proxy)
 		}
 	})
-}
-
-func TestSaveConnection_InvalidBaseURL(t *testing.T) {
-	for _, base := range []string{"", "http://relay.example.com/v1", "relay.example.com/v1", "ftp://relay.example.com"} {
-		t.Run("地址="+base, func(t *testing.T) {
-			e := newEnv(t, false)
-			_, err := e.svc.SaveConnection(context.Background(), base, keyA)
-			requireCode(t, err, "invalid_base_url")
-			if e.relay.hits() != 0 {
-				t.Error("地址非法时不该访问中台")
-			}
-		})
-	}
-}
-
-func TestSaveConnection_RelayErrors(t *testing.T) {
-	tests := []struct {
-		status   int
-		wantCode string
-	}{
-		{401, "relay_401"},
-		{403, "relay_403"},
-		{404, "relay_404"},
-		{429, "relay_429"},
-		{500, "relay_5xx"},
-		{418, "relay_4xx"},
-	}
-	for _, tt := range tests {
-		t.Run(tt.wantCode, func(t *testing.T) {
-			e := newEnv(t, false)
-			e.relay.setStatus(tt.status)
-			_, err := e.svc.SaveConnection(context.Background(), e.relay.baseURL(), keyB)
-			requireCode(t, err, tt.wantCode)
-		})
-	}
-
-	t.Run("relay_unreachable", func(t *testing.T) {
-		e := newEnv(t, false)
-		base := e.relay.baseURL()
-		e.relay.Close()
-		_, err := e.svc.SaveConnection(context.Background(), base, keyB)
-		requireCode(t, err, "relay_unreachable")
-	})
-}
-
-func TestSaveConnection_FailureKeepsOldConnection(t *testing.T) {
-	e := newEnv(t, true)
-	e.initRelay(t)
-
-	_, err := e.svc.SaveConnection(context.Background(), e.relay.baseURL(), "sk-example-bad")
-	requireCode(t, err, "relay_401")
-
-	if code := postViaProxy(t, e.listenAddr, "relay-deepseek-flash"); code != http.StatusOK {
-		t.Fatalf("转发状态码 = %d", code)
-	}
-	auths := e.relay.forwardedAuths()
-	if len(auths) != 1 || auths[0] != "Bearer "+keyA {
-		t.Errorf("中台收到的 Authorization = %v, want 旧 Key", auths)
-	}
-	st, err := e.svc.RefreshModels(context.Background())
-	if err != nil || st.Relay.Error != nil {
-		t.Errorf("旧连接应仍可用: %v %+v", err, st.Relay)
-	}
-}
-
-func TestSaveConnection_ModelsChanged(t *testing.T) {
-	ctx := context.Background()
-	e := newEnv(t, true)
-	e.initRelay(t)
-
-	res, err := e.svc.SaveConnection(ctx, e.relay.baseURL(), keyA)
-	if err != nil || res.ModelsChanged || res.RelayModelCount != 1 {
-		t.Fatalf("集合没变: %+v, %v", res, err)
-	}
-
-	e.relay.setIDs("deepseek-flash", "deepseek-v4-pro")
-	res, err = e.svc.SaveConnection(ctx, e.relay.baseURL(), keyA)
-	if err != nil || !res.ModelsChanged || res.RelayModelCount != 2 {
-		t.Fatalf("多一个模型: %+v, %v", res, err)
-	}
-	if !strings.Contains(readFile(t, e.catalogPath()), "deepseek-v4-pro") {
-		t.Error("保存连接后合并目录没有重新生成")
-	}
-}
-
-func TestSaveConnection_ProxyUsesNewConfig(t *testing.T) {
-	e := newEnv(t, true)
-	e.relay.keys[keyB] = true
-	e.initRelay(t)
-
-	if _, err := e.svc.SaveConnection(context.Background(), e.relay.baseURL(), keyB); err != nil {
-		t.Fatal(err)
-	}
-	if code := postViaProxy(t, e.listenAddr, "relay-deepseek-flash"); code != http.StatusOK {
-		t.Fatalf("转发状态码 = %d", code)
-	}
-	auths := e.relay.forwardedAuths()
-	if len(auths) != 1 || auths[0] != "Bearer "+keyB {
-		t.Errorf("中台收到的 Authorization = %v, want 新 Key", auths)
-	}
 }
 
 func TestSetForwardingTrue(t *testing.T) {
@@ -615,64 +541,6 @@ func TestSetForwardingFalse(t *testing.T) {
 	})
 }
 
-func TestRefreshModels(t *testing.T) {
-	ctx := context.Background()
-
-	t.Run("中台失败时用上次记录并标记过期", func(t *testing.T) {
-		e := newEnv(t, true)
-		first := e.initRelay(t)
-
-		e.relay.setStatus(500)
-		st, err := e.svc.RefreshModels(ctx)
-		if err != nil {
-			t.Fatalf("RefreshModels: %v", err)
-		}
-		if !st.Relay.Stale || st.Relay.Error == nil || *st.Relay.Error != "relay_5xx" {
-			t.Errorf("Relay = %+v", st.Relay)
-		}
-		if st.Relay.ModelCount != first.Relay.ModelCount {
-			t.Errorf("ModelCount = %d, want %d", st.Relay.ModelCount, first.Relay.ModelCount)
-		}
-		if st.Relay.FetchedAt == nil || !st.Relay.FetchedAt.Equal(*first.Relay.FetchedAt) {
-			t.Errorf("FetchedAt = %v, want %v", st.Relay.FetchedAt, first.Relay.FetchedAt)
-		}
-	})
-
-	t.Run("中台恢复后清除过期标记", func(t *testing.T) {
-		e := newEnv(t, true)
-		e.initRelay(t)
-		e.relay.setStatus(500)
-		if _, err := e.svc.RefreshModels(ctx); err != nil {
-			t.Fatal(err)
-		}
-		e.relay.setStatus(0)
-		e.relay.setIDs("deepseek-flash", "deepseek-v4-pro")
-		st, err := e.svc.RefreshModels(ctx)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if st.Relay.Stale || st.Relay.Error != nil || st.Relay.ModelCount != 2 {
-			t.Errorf("Relay = %+v", st.Relay)
-		}
-	})
-
-	t.Run("从未成功过时模型数为 0", func(t *testing.T) {
-		e := newEnv(t, true)
-		e.relay.setStatus(401)
-		e.initRelay(t)
-		st, err := e.svc.RefreshModels(ctx)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if !st.Relay.Stale || st.Relay.Error == nil || *st.Relay.Error != "relay_401" {
-			t.Errorf("Relay = %+v", st.Relay)
-		}
-		if st.Relay.ModelCount != 0 || st.Relay.FetchedAt != nil {
-			t.Errorf("Relay = %+v", st.Relay)
-		}
-	})
-}
-
 func TestCheckUpdate(t *testing.T) {
 	for _, manual := range []bool{true, false} {
 		t.Run("manual="+strconv.FormatBool(manual), func(t *testing.T) {
@@ -690,11 +558,11 @@ func TestCheckUpdate(t *testing.T) {
 
 func TestPrepareUninstall(t *testing.T) {
 	ctx := context.Background()
-	toolFiles := []string{"model-bridge-catalog.json", "access-state.json", "relay-models.json", "relay-reasoning-ids.json", "settings.json", "model-bridge.log"}
+	toolFiles := []string{"model-bridge-catalog.json", "access-state.json", "relay-models-1.json", "relay-models-2.json", "relay-models.json", "relay-reasoning-ids.json", "settings.json", "model-bridge.log"}
 
 	plant := func(t *testing.T, e *env) {
 		t.Helper()
-		for _, name := range []string{"relay-reasoning-ids.json", "model-bridge.log"} {
+		for _, name := range []string{"relay-reasoning-ids.json", "model-bridge.log", "relay-models-2.json", "relay-models.json"} {
 			if err := os.WriteFile(filepath.Join(e.dataDir, name), []byte("{}"), 0o644); err != nil {
 				t.Fatal(err)
 			}
@@ -792,31 +660,6 @@ func TestStatusNotification(t *testing.T) {
 	}
 }
 
-func TestRefreshModels_RewritesEntriesWhenForwardingOn(t *testing.T) {
-	ctx := context.Background()
-	e := newEnv(t, true)
-	e.initRelay(t)
-	if strings.Contains(e.config(t), `model = "relay-auto"`) {
-		t.Fatalf("初始配置不该有 auto: %q", e.config(t))
-	}
-
-	e.relay.setIDs("auto", "deepseek-flash")
-	if _, err := e.svc.RefreshModels(ctx); err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(e.config(t), `model = "relay-auto"`) {
-		t.Errorf("中台出现 auto 后应写入 model: %q", e.config(t))
-	}
-
-	e.relay.setIDs("deepseek-flash")
-	if _, err := e.svc.RefreshModels(ctx); err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(e.config(t), `model = "relay-auto"`) {
-		t.Errorf("auto 消失后应还原 model: %q", e.config(t))
-	}
-}
-
 func TestInit_ActivateFailureRecordedInStatus(t *testing.T) {
 	e := newEnv(t, true, func(e *env) {
 		if err := os.WriteFile(e.configPath, []byte("not = = toml\n"), 0o644); err != nil {
@@ -843,33 +686,6 @@ func TestSetForwardingTrue_ConfigInvalidCarriesKeys(t *testing.T) {
 	}
 }
 
-func TestSaveConnection_RebuildFailureRollsBack(t *testing.T) {
-	ctx := context.Background()
-	e := newEnv(t, true)
-	e.relay.keys[keyB] = true
-	e.initRelay(t)
-
-	if err := os.Chmod(e.codexPath, 0o644); err != nil {
-		t.Fatal(err)
-	}
-	_, err := e.svc.SaveConnection(ctx, e.relay.baseURL(), keyB)
-	requireCode(t, err, "chatgpt_unsupported")
-	if err := os.Chmod(e.codexPath, 0o755); err != nil {
-		t.Fatal(err)
-	}
-
-	st, err := e.svc.RefreshModels(ctx)
-	if err != nil || st.Relay.Error != nil {
-		t.Errorf("回滚后应仍用旧 Key: %v %+v", err, st.Relay)
-	}
-	if code := postViaProxy(t, e.listenAddr, "relay-deepseek-flash"); code != http.StatusOK {
-		t.Fatalf("转发状态码 = %d", code)
-	}
-	if auths := e.relay.forwardedAuths(); len(auths) != 1 || auths[0] != "Bearer "+keyA {
-		t.Errorf("中台收到的 Authorization = %v, want 旧 Key", auths)
-	}
-}
-
 func TestSetForwardingFalse_NonBlockedErrorKeepsState(t *testing.T) {
 	e := newEnv(t, true)
 	e.initRelay(t)
@@ -891,22 +707,6 @@ func TestSetForwardingFalse_NonBlockedErrorKeepsState(t *testing.T) {
 	}
 }
 
-func TestSaveConnection_FetchesRelayOnce(t *testing.T) {
-	for _, forwarding := range []bool{true, false} {
-		t.Run("forwarding="+strconv.FormatBool(forwarding), func(t *testing.T) {
-			e := newEnv(t, forwarding)
-			e.initRelay(t)
-			before := e.relay.hits()
-			if _, err := e.svc.SaveConnection(context.Background(), e.relay.baseURL(), keyA); err != nil {
-				t.Fatal(err)
-			}
-			if got := e.relay.hits() - before; got != 1 {
-				t.Errorf("一次保存请求了 %d 次 /models, want 1", got)
-			}
-		})
-	}
-}
-
 func TestInit_RecoversTakenOverAfterRestart(t *testing.T) {
 	ctx := context.Background()
 	e := newEnv(t, true)
@@ -921,7 +721,7 @@ func TestInit_RecoversTakenOverAfterRestart(t *testing.T) {
 
 	svc := control.NewService(e.opts)
 	t.Cleanup(func() { _ = svc.Shutdown(ctx, false) })
-	st, err := svc.Init(ctx, control.InitParams{BaseURL: ptr(e.relay.baseURL()), APIKey: ptr(keyA)})
+	st, err := svc.Init(ctx, initParamsOf(t, initParams(e)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -939,7 +739,7 @@ func TestInit_RecoversRestoreBlockedAfterRestart(t *testing.T) {
 	requireCode(t, err, "restore_blocked")
 
 	svc := control.NewService(e.opts)
-	st, err := svc.Init(ctx, control.InitParams{BaseURL: ptr(e.relay.baseURL()), APIKey: ptr(keyA)})
+	st, err := svc.Init(ctx, initParamsOf(t, initParams(e)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -968,7 +768,7 @@ func TestSetForwardingTrue_SameNameModelUsesPrefixedSlugAndOriginalNameUpstream(
 	if want := []any{"gpt-a", "gpt-b", "relay-deepseek-flash", "relay-gpt-a"}; !reflect.DeepEqual(slugs, want) {
 		t.Errorf("slugs = %v, want %v（两边都没有的 unknown-model-x 不出现）", slugs, want)
 	}
-	if display["relay-gpt-a"] != "中台 · gpt-a" {
+	if display["relay-gpt-a"] != "中转 · gpt-a" {
 		t.Errorf("display_name = %v", display["relay-gpt-a"])
 	}
 
@@ -977,86 +777,7 @@ func TestSetForwardingTrue_SameNameModelUsesPrefixedSlugAndOriginalNameUpstream(
 	}
 	bodies := e.relay.forwardedBodies()
 	if len(bodies) != 1 || !strings.Contains(bodies[0], `"model":"gpt-a"`) {
-		t.Errorf("中台收到的请求体 = %v，model 应改回原名 gpt-a", bodies)
-	}
-}
-
-func TestModelCount_SameWhetherForwardingOnOrOff(t *testing.T) {
-	ctx := context.Background()
-	e := newEnv(t, true)
-	e.relay.setIDs("deepseek-flash", "gpt-a", "unknown-model-x")
-	st := e.initRelay(t)
-	if st.Relay.ModelCount != 2 {
-		t.Fatalf("转发开着: ModelCount = %d, want 2（参数表 1 个 + 官方同名 1 个）", st.Relay.ModelCount)
-	}
-
-	if _, err := e.svc.SetForwarding(ctx, false); err != nil {
-		t.Fatal(err)
-	}
-	st, err := e.svc.RefreshModels(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if st.Relay.ModelCount != 2 {
-		t.Errorf("转发关着刷新: ModelCount = %d, want 2", st.Relay.ModelCount)
-	}
-
-	res, err := e.svc.SaveConnection(ctx, e.relay.baseURL(), keyA)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if res.RelayModelCount != 2 || res.ModelsChanged {
-		t.Errorf("转发关着保存连接: %+v，want 数量 2 且不报模型有变化", res)
-	}
-}
-
-func TestModelCount_ForwardingOffWithoutCodex_CountsParamsOnly(t *testing.T) {
-	ctx := context.Background()
-	e := newEnv(t, false, func(e *env) { e.codexPath = filepath.Join(t.TempDir(), "no-such-codex") })
-	e.relay.setIDs("deepseek-flash", "gpt-a")
-	e.initRelay(t)
-
-	st, err := e.svc.RefreshModels(ctx)
-	if err != nil {
-		t.Fatalf("找不到 ChatGPT 不应报错: %v", err)
-	}
-	if st.Relay.ModelCount != 1 {
-		t.Errorf("ModelCount = %d, want 1（只按参数表计数）", st.Relay.ModelCount)
-	}
-	res, err := e.svc.SaveConnection(ctx, e.relay.baseURL(), keyA)
-	if err != nil || res.RelayModelCount != 1 || res.ModelsChanged {
-		t.Errorf("SaveConnection = %+v, %v", res, err)
-	}
-}
-
-func TestModelCount_ExcludesRelayModelsHiddenInPicker(t *testing.T) {
-	ctx := context.Background()
-	const withHidden = `{"models":[{"slug":"gpt-a","priority":3,"display_name":"A"},{"slug":"gpt-h","priority":7,"display_name":"H","visibility":"hide"}]}`
-	for _, forwarding := range []bool{true, false} {
-		name := "转发关着"
-		if forwarding {
-			name = "转发开着"
-		}
-		t.Run(name, func(t *testing.T) {
-			e := newEnv(t, forwarding, func(e *env) { e.codexPath = writeFakeCodex(t, withHidden, 0) })
-			e.relay.setIDs("deepseek-flash", "gpt-a", "gpt-h")
-			e.initRelay(t)
-
-			st, err := e.svc.RefreshModels(ctx)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if st.Relay.ModelCount != 2 {
-				t.Errorf("ModelCount = %d, want 2（和官方 hide 条目同名的 gpt-h 不计）", st.Relay.ModelCount)
-			}
-			res, err := e.svc.SaveConnection(ctx, e.relay.baseURL(), keyA)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if res.RelayModelCount != 2 || res.ModelsChanged {
-				t.Errorf("SaveConnection = %+v，want 数量 2 且不报模型有变化", res)
-			}
-		})
+		t.Errorf("中转收到的请求体 = %v，model 应改回原名 gpt-a", bodies)
 	}
 }
 
@@ -1099,32 +820,21 @@ func TestCatalog_OfficialLimitedToAccountModelsCache(t *testing.T) {
 
 	models := catalogModels(t, e)
 	if want := []any{"gpt-a", "gpt-c", "relay-deepseek-flash", "relay-gpt-b"}; !reflect.DeepEqual(catalogSlugs(models), want) {
-		t.Fatalf("slugs = %v, want %v（官方只留名单里有的，顺序同全集；账号没有的 gpt-b 仍有中台同名条目）", catalogSlugs(models), want)
+		t.Fatalf("slugs = %v, want %v（官方只留名单里有的，顺序同全集；账号没有的 gpt-b 仍有中转同名条目）", catalogSlugs(models), want)
 	}
-	if st.Relay.ModelCount != 2 {
-		t.Errorf("ModelCount = %d, want 2", st.Relay.ModelCount)
+	if rs := relaysOf(t, st); len(rs) != 1 || rs[0].ModelCount != 2 {
+		t.Errorf("Relays = %+v, want 模型数 2", rs)
 	}
 	rb := models[3]
-	if rb["display_name"] != "中台 · gpt-b" || rb["context_window"] != float64(123456) || !reflect.DeepEqual(rb["input_modalities"], []any{"text", "image"}) {
+	if rb["display_name"] != "中转 · gpt-b" || rb["context_window"] != float64(123456) || !reflect.DeepEqual(rb["input_modalities"], []any{"text", "image"}) {
 		t.Errorf("relay-gpt-b 应照搬全集里的 gpt-b 参数: %v", rb)
 	}
 	if rb["priority"] == nil || models[2]["priority"] == nil {
-		t.Fatal("中台条目缺 priority")
+		t.Fatal("中转条目缺 priority")
 	}
 	p0, p1 := models[2]["priority"].(float64), rb["priority"].(float64)
 	if p0 <= models[1]["priority"].(float64) || p1 != p0+1 {
-		t.Errorf("中台 priority = %v, %v，应在官方之后连续递增", p0, p1)
-	}
-
-	if _, err := e.svc.SetForwarding(context.Background(), false); err != nil {
-		t.Fatal(err)
-	}
-	st, err := e.svc.RefreshModels(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if st.Relay.ModelCount != 2 {
-		t.Errorf("转发关着 ModelCount = %d, want 2", st.Relay.ModelCount)
+		t.Errorf("中转 priority = %v, %v，应在官方之后连续递增", p0, p1)
 	}
 }
 
@@ -1193,7 +903,7 @@ func TestForwarding_UltraEffortChangedBackToMaxOnlyForParamsTableModels(t *testi
 		{"参数表模型 ultra 改回 max", "relay-deepseek-flash", "ultra", false, "max"},
 		{"参数表模型 ultra 改回 max（zstd）", "relay-deepseek-flash", "ultra", true, "max"},
 		{"参数表模型 high 原样", "relay-deepseek-flash", "high", false, "high"},
-		{"官方同名中台模型 ultra 原样", "relay-gpt-a", "ultra", false, "ultra"},
+		{"官方同名中转模型 ultra 原样", "relay-gpt-a", "ultra", false, "ultra"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -1203,7 +913,7 @@ func TestForwarding_UltraEffortChangedBackToMaxOnlyForParamsTableModels(t *testi
 			postBodyViaProxy(t, e.listenAddr, `{"model":"`+tt.model+`","reasoning":{"effort":"`+tt.effort+`"}}`, tt.zstd)
 			bodies := e.relay.forwardedBodies()
 			if len(bodies) != 1 {
-				t.Fatalf("中台收到 %d 次请求", len(bodies))
+				t.Fatalf("中转收到 %d 次请求", len(bodies))
 			}
 			var sent struct {
 				Reasoning struct {
@@ -1214,7 +924,7 @@ func TestForwarding_UltraEffortChangedBackToMaxOnlyForParamsTableModels(t *testi
 				t.Fatalf("请求体不是 JSON: %q", bodies[0])
 			}
 			if sent.Reasoning.Effort != tt.wantEffort {
-				t.Errorf("中台收到的 effort = %q, want %q（%s）", sent.Reasoning.Effort, tt.wantEffort, bodies[0])
+				t.Errorf("中转收到的 effort = %q, want %q（%s）", sent.Reasoning.Effort, tt.wantEffort, bodies[0])
 			}
 		})
 	}
@@ -1238,14 +948,14 @@ func TestForwarding_ParamsTableModel_NoReasoningFieldsAdded(t *testing.T) {
 			postBodyViaProxy(t, e.listenAddr, tt.body, false)
 			bodies := e.relay.forwardedBodies()
 			if len(bodies) != 1 {
-				t.Fatalf("中台收到 %d 次请求", len(bodies))
+				t.Fatalf("中转收到 %d 次请求", len(bodies))
 			}
 			var got map[string]any
 			if err := json.Unmarshal([]byte(bodies[0]), &got); err != nil {
 				t.Fatalf("请求体不是 JSON: %q", bodies[0])
 			}
 			if !reflect.DeepEqual(got, tt.want) {
-				t.Errorf("中台收到的请求体 = %s，期望字段集合 %v（只有 model 改回原名）", bodies[0], tt.want)
+				t.Errorf("中转收到的请求体 = %s，期望字段集合 %v（只有 model 改回原名）", bodies[0], tt.want)
 			}
 		})
 	}
@@ -1349,11 +1059,11 @@ func requireRelayOnlyCatalog(t *testing.T, e *env) {
 	t.Helper()
 	slugs := catalogSlugs(catalogModels(t, e))
 	if len(slugs) == 0 {
-		t.Fatal("中台方式的目录不该为空")
+		t.Fatal("中转方式的目录不该为空")
 	}
 	for _, s := range slugs {
 		if !strings.HasPrefix(s.(string), "relay-") {
-			t.Errorf("目录里出现非中台条目 %v, 全部: %v", s, slugs)
+			t.Errorf("目录里出现非中转条目 %v, 全部: %v", s, slugs)
 		}
 	}
 }
@@ -1396,7 +1106,7 @@ func TestAccess_OpenForwardingRelay(t *testing.T) {
 	}
 	requireAccess(t, st, "relay", "relay", "not_logged_in")
 	if cfg := e.config(t); !isRelayConfig(cfg) {
-		t.Errorf("配置不是中台写法: %q", cfg)
+		t.Errorf("配置不是中转写法: %q", cfg)
 	}
 	requireRelayOnlyCatalog(t, e)
 	code, body := postStatusBody(t, e.listenAddr, "gpt-a")
@@ -1426,14 +1136,14 @@ func TestAccess_OpenForwardingBoth(t *testing.T) {
 	requireAccess(t, st, "both", "both", "logged_in")
 	cfg := e.config(t)
 	if !isBothConfig(cfg) || !strings.Contains(cfg, e.catalogPath()) {
-		t.Errorf("配置不是官方加中台写法: %q", cfg)
+		t.Errorf("配置不是官方加中转写法: %q", cfg)
 	}
 	slugs := catalogSlugs(catalogModels(t, e))
 	if !slices.Contains(slugs, any("gpt-a")) || !slices.Contains(slugs, any("relay-deepseek-flash")) {
-		t.Errorf("目录应含官方和中台条目: %v", slugs)
+		t.Errorf("目录应含官方和中转条目: %v", slugs)
 	}
 	if code := postViaProxy(t, e.listenAddr, "relay-deepseek-flash"); code != http.StatusOK {
-		t.Errorf("中台模型转发状态码 = %d", code)
+		t.Errorf("中转模型转发状态码 = %d", code)
 	}
 }
 
@@ -1498,7 +1208,7 @@ func TestAccess_SuccessfulDetectIsRemembered(t *testing.T) {
 		e.detect.set(codexauth.Failed)
 		restarted := control.NewService(e.opts)
 		t.Cleanup(func() { _ = restarted.Shutdown(context.Background(), false) })
-		st, err := restarted.Init(context.Background(), control.InitParams{BaseURL: ptr(e.relay.baseURL()), APIKey: ptr(keyA)})
+		st, err := restarted.Init(context.Background(), initParamsOf(t, initParams(e)))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1545,7 +1255,7 @@ func TestAccess_InitRestoresRecordedModeThenDetects(t *testing.T) {
 			requireAccess(t, st, "relay", "relay", "not_logged_in")
 			applied := e.config(t)
 			if !isRelayConfig(applied) {
-				t.Fatalf("切换后不是中台写法: %q", applied)
+				t.Fatalf("切换后不是中转写法: %q", applied)
 			}
 			requireRelayOnlyCatalog(t, e)
 			if got := settingsJSON(t, e)["access_mode"]; got != "relay" {
@@ -1643,7 +1353,7 @@ func TestAccess_ApplyAccessKeepsHandEdit(t *testing.T) {
 		t.Errorf("手改的 openai_base_url 应保留: %q", cfg)
 	}
 	if !strings.Contains(cfg, `model_provider = "modelbridge"`) || !strings.Contains(cfg, "model_providers.modelbridge") {
-		t.Errorf("其余项应是中台写法: %q", cfg)
+		t.Errorf("其余项应是中转写法: %q", cfg)
 	}
 }
 
@@ -1717,35 +1427,6 @@ func TestAccess_CloseForwardingRestoresAndClearsMode(t *testing.T) {
 			}
 		})
 	}
-}
-
-func TestAccess_RelaySurvivesSaveConnectionAndRefreshModels(t *testing.T) {
-	ctx := context.Background()
-	e := newEnv(t, false, withDetect(codexauth.NotLoggedIn))
-	e.initRelay(t)
-	if _, err := e.svc.SetForwarding(ctx, true); err != nil {
-		t.Fatal(err)
-	}
-	other := newFakeRelay(t, []string{"deepseek-flash", "gpt-a"}, keyB)
-
-	if _, err := e.svc.SaveConnection(ctx, other.baseURL(), keyB); err != nil {
-		t.Fatalf("SaveConnection: %v", err)
-	}
-	if cfg := e.config(t); !isRelayConfig(cfg) {
-		t.Errorf("保存连接后配置不是中台写法: %q", cfg)
-	}
-	requireRelayOnlyCatalog(t, e)
-
-	other.setIDs("deepseek-flash")
-	st, err := e.svc.RefreshModels(ctx)
-	if err != nil {
-		t.Fatalf("RefreshModels: %v", err)
-	}
-	if cfg := e.config(t); !isRelayConfig(cfg) {
-		t.Errorf("重新获取模型后配置不是中台写法: %q", cfg)
-	}
-	requireRelayOnlyCatalog(t, e)
-	requireAccess(t, st, "relay", "relay", "not_logged_in")
 }
 
 func TestAccess_DefaultDetectionUsesCodexLoginStatus(t *testing.T) {
