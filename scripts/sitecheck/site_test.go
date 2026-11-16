@@ -71,8 +71,19 @@ func TestSite_RequiredText(t *testing.T) {
 		{"下载按钮", "去 Releases 页面下载"},
 		{"商标声明", "ChatGPT 和 Codex 是各自所有者的商标，本项目与它们的所有者没有隶属关系。"},
 		{"英文界面仅中文", "The app’s interface is available in Chinese only."},
-		{"英文中台标注", "Relay models are labelled “中台” (relay) in the list."},
+		{"英文中转标注", "Relay models are labelled “中转” (relay) in the list."},
 		{"英文 relay 说明", "This page calls your own model service the “relay”."},
+		{"中文首屏末句", "这个页面把你自己的模型服务叫作「中转」。"},
+		{"转发总览标题", "使用中转 · 已开启"},
+		{"转发总览说明", "官方模型在上，中转模型在下；选官方模型时仍访问官方服务。"},
+		{"已检测到登录", "· 已检测到 ChatGPT 登录"},
+		{"中转配置卡片", "中转配置"},
+		{"配置数量说明", "已有 2 个，最多 10 个。"},
+		{"首次设置大标题", "连接中转服务"},
+		{"首次设置名字栏", ">名字<"},
+		{"模型名示例", "中转 · auto"},
+		{"第二个配置模型示例", "A家 · auto"},
+		{"第二个配置示例地址", "https://relay.example.com/alt/v1"},
 		{"语言存储键", "modelbridge-site-lang"},
 		{"下载链接", "https://github.com/0xBB2B/codexx/releases"},
 		{"源码链接", "https://github.com/0xBB2B/codexx"},
@@ -84,6 +95,107 @@ func TestSite_RequiredText(t *testing.T) {
 				t.Errorf("页面缺少文字 %q", tt.text)
 			}
 		})
+	}
+}
+
+func TestSite_NoOldTerms(t *testing.T) {
+	t.Parallel()
+	html := readSite(t)
+	for _, old := range []string{"中台", "运行状态", "relay2.example.com"} {
+		if strings.Contains(html, old) {
+			t.Errorf("页面仍含旧文字 %q", old)
+		}
+	}
+}
+
+func TestReadme_NoOldTerm(t *testing.T) {
+	t.Parallel()
+	b, err := os.ReadFile("../../README.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(b), "中台") {
+		t.Error("README 仍含「中台」")
+	}
+}
+
+func pane(t *testing.T, html, index string) string {
+	t.Helper()
+	p := regexp.MustCompile(`(?s)<figure\b[^>]*data-pane="` + index + `"[^>]*>.*?</figure>`).FindString(html)
+	if p == "" {
+		t.Fatalf("找不到 data-pane=%q 的面板", index)
+	}
+	return p
+}
+
+func TestSite_PaneContent(t *testing.T) {
+	t.Parallel()
+	html := readSite(t)
+	tests := []struct {
+		name string
+		pane string
+		text string
+	}{
+		{"接入方式", "1", `class="lv-label">接入方式<`},
+		{"官方加中转", "1", "官方 + 中转"},
+		{"重新检测", "1", "重新检测"},
+		{"配置一", "1", "<span>中转</span>"},
+		{"配置二", "1", "<span>A家</span>"},
+		{"添加配置", "1", "添加配置"},
+		{"菜单栏使用中转", "2", "使用中转"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if !strings.Contains(pane(t, html, tt.pane), tt.text) {
+				t.Errorf("面板 %s 缺少文字 %q", tt.pane, tt.text)
+			}
+		})
+	}
+}
+
+func TestSite_MainWindowStatusRow(t *testing.T) {
+	t.Parallel()
+	main := pane(t, readSite(t), "1")
+	tests := []struct {
+		name string
+		re   string
+	}{
+		{"ChatGPT 标签", `class="lv-label">ChatGPT<`},
+		{"ChatGPT 取值", `class="lv-value[^"]*">已检测到<`},
+		{"中转模型标签", `class="lv-label">中转模型<`},
+		{"中转模型数量", `class="lv-value[^"]*">10 个<`},
+		{"配置数量", `（2 个配置）`},
+		{"版本号等宽", `class="[^"]*\bam-mono\b[^"]*"[^>]*>v1\.0\.0<`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if !regexp.MustCompile(tt.re).MatchString(main) {
+				t.Errorf("主窗口面板里没有匹配 %s", tt.re)
+			}
+		})
+	}
+}
+
+func TestSite_AddConfigButtonNotSmall(t *testing.T) {
+	t.Parallel()
+	m := regexp.MustCompile(`<span class="([^"]*)">添加配置</span>`).FindStringSubmatch(pane(t, readSite(t), "1"))
+	if m == nil {
+		t.Fatal("找不到「添加配置」按钮")
+	}
+	if regexp.MustCompile(`\bsm\b`).MatchString(m[1]) {
+		t.Errorf("「添加配置」按钮带 sm 类: %q", m[1])
+	}
+}
+
+func TestSite_MenubarIconSize(t *testing.T) {
+	t.Parallel()
+	rules := cssRules(readSite(t), ".am-mb-ic .ico")
+	for _, want := range []string{"width:18px", "height:18px"} {
+		if !anyRuleContains(rules, want) {
+			t.Errorf(".am-mb-ic .ico 规则里没有 %s", want)
+		}
 	}
 }
 
