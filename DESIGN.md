@@ -11,7 +11,7 @@
 
 ## 1. 风格定位
 
-给想在 Codex 里用中台模型的普通用户用的跨平台桌面小工具，要让人觉得它像系统自带的设置工具：安静、可信、不打扰。界面上一律用中性名称和抽象图形，不出现服务品牌、真实服务地址、密钥或模型名称。
+给想在 Codex 里用中转模型的普通用户用的跨平台桌面小工具，要让人觉得它像系统自带的设置工具：安静、可信、不打扰。界面上一律用中性名称和抽象图形，不出现服务品牌、真实服务地址、密钥或模型名称。
 
 能检查的特征：
 - 原生桌面外观：macOS 用交通灯按钮和菜单栏入口，Windows 用系统窗口按钮和任务栏通知区域入口；不用网页导航、面包屑或官网式横幅。
@@ -36,9 +36,9 @@
 | 禁用背景、开关关闭底色 | disabled-bg | #e9edf1 | 不适用：只有浅色主题 | — |
 | 分隔线（只用于不可交互的分组） | border | #e2e7ec | 不适用：只有浅色主题 | 装饰用，不作为识别控件或状态的唯一线索 |
 | 输入框、按钮边框 | border-strong | #7b8998 | 不适用：只有浅色主题 | 3.58:1（对 surface）；3.33:1（对 background） |
-| 选中浅底（菜单项悬停、显隐按钮按下） | selected-bg | #e7f2f0 | 不适用：只有浅色主题 | 主色文字对它 4.78:1 |
+| 选中浅底（菜单项悬停、显隐按钮按下、转发总览开着时的背景） | selected-bg | #e7f2f0 | 不适用：只有浅色主题 | 主色文字对它 4.78:1；text 对它 12.72:1；text-muted 对它 5.27:1；border-strong 对它 3.13:1 |
 | 成功 | success | #16734b | 不适用：只有浅色主题 | 5.85:1（对 surface）；5.49:1（对 success-bg #f0faf4） |
-| 警告 | warning | #8a530e | 不适用：只有浅色主题 | 6.02:1（对 warning-bg #fff9ed） |
+| 警告 | warning | #8a530e | 不适用：只有浅色主题 | 6.02:1（对 warning-bg #fff9ed）；6.32:1（对 surface） |
 | 错误 | danger | #b42318 | 不适用：只有浅色主题 | 6.06:1（对 danger-bg #fff3f1） |
 | 信息 | info | #245d9a | 不适用：只有浅色主题 | 6.22:1（对 info-bg #f1f6fc） |
 | 聚焦描边 | focus | #0f766e | 不适用：只有浅色主题 | 5.10:1（对 background） |
@@ -98,8 +98,8 @@
 | 侧边栏 | 不适用：桌面工具不设侧栏 | — | — |
 | 导航 | 不适用：没有页面导航，其他入口放在菜单栏或托盘菜单里 | — | — |
 | 页面标题区 | 只在首次设置窗口出现，位于内容区顶部 | `<div class="intro">` | 不变 |
-| 内容区 | 标题栏下方，四周 24px，分组之间 20px | `<div class="win-body">` 内放 `<section class="group">` | 不变 |
-| 底部状态区 | 窗口底部，最小高度 48px，左右 24px，显示版本、运行状态和「检查更新」 | `<div class="statusbar">` | 不变 |
+| 内容区 | 标题栏下方，四周 24px，分组之间 20px；主窗口从上到下是「转发总览」、「中转配置」卡片 | `<div class="win-body">` 内放 `<section class="hero">` 和 `<section class="group">` | 不变 |
+| 底部状态区 | 窗口底部，最小高度 48px，左右 24px，12px 字；从左到右：版本、运行状态圆点和文字、ChatGPT 检测结果、中转模型数，最右是「检查更新」；各项之间 16px。后两项用「标签 + 取值」写法，前面带 16px 的图标（正常是 success 色对勾，没有时是 text-muted 色横线） | `<div class="statusbar">` | 不变 |
 
 页面框架写法：
 
@@ -120,6 +120,8 @@
   </div>
   <div class="statusbar">
     <span class="mono">v1.2.0</span><span class="dot"></span><span>后台运行中</span>
+    <span class="st-item"><svg class="si">…</svg><span class="lv"><span class="lv-label">ChatGPT</span><strong class="lv-value">已检测到</strong></span></span>
+    <span class="st-item"><svg class="si">…</svg><span class="lv"><span class="lv-label">中转模型</span><strong class="lv-value">12 个</strong><span class="lv-note">（3 个配置）</span></span></span>
     <span class="grow"></span><button class="btn-link">检查更新</button>
   </div>
 </div>
@@ -133,7 +135,7 @@
 ```
 
 ```html
-<div class="intro"><h2>连接到中台</h2><p class="muted">说明文字</p></div>
+<div class="intro"><h2>连接中转服务</h2><p class="muted">说明文字</p></div>
 ```
 
 ## 7. 组件
@@ -171,7 +173,7 @@
 
 ### 开关
 
-- 写法：`<div class="switch-row"><button class="switch" role="switch" aria-checked="true" aria-label="转发到中台"><span class="knob"></span></button><span class="switch-text"><strong>已开启</strong></span></div>`
+- 写法：`<div class="switch-row"><button class="switch" role="switch" aria-checked="true" aria-label="使用中转"><span class="knob"></span></button><span class="switch-text"><strong>已开启</strong></span></div>`
 - 尺寸：40×24px，圆点 16×16px，整行最小高度 44px；旁边一律写「已开启 / 已关闭」，不只靠颜色区分
 
 | 状态 | 样子 |
@@ -184,7 +186,79 @@
 
 ### 表格
 
-不适用：界面上没有列表数据。键值信息用 `<dl class="kv">` 两列显示（标签列 112px，间距 12px）。
+不适用：界面上没有多列的表格数据。多个中转配置用「配置列表」；只读的一项信息用「标签 + 取值」。
+
+### 标签 + 取值
+
+- 写法：`<span class="lv"><span class="lv-label">接入方式</span><strong class="lv-value">官方 + 中转</strong><span class="lv-note">· 已检测到 ChatGPT 登录</span></span>`
+- 用在只读的一项信息上（转发总览里的「接入方式」一行、底部状态区的每一项）；要填写的表单标签仍按「输入框」一节
+- 标签：text-muted 色，字重 400；取值：text 色，字重 600；取值后面的补充说明：text-muted 色，字重 400；三者字号相同，跟所在的行（转发总览里 13px，底部状态区 12px）
+- 标签和取值之间 8px；取值和补充说明之间 4px
+- 不可点击，没有悬停、按下、禁用、聚焦状态
+
+### 转发总览
+
+- 写法：
+
+```html
+<section class="hero on">
+  <div class="hero-top">
+    <svg class="app-icon" width="48" height="48">…</svg>
+    <div class="hero-text"><div class="hero-title">使用中转 · 已开启</div><div class="hero-sub">一句说明</div></div>
+    <button class="switch" role="switch" aria-checked="true" aria-label="使用中转"><span class="knob"></span></button>
+  </div>
+  <div class="hero-mode"><span class="lv"><span class="lv-label">接入方式</span><strong class="lv-value">官方 + 中转</strong><span class="lv-note">· 已检测到 ChatGPT 登录</span></span><span class="grow"></span><button class="btn-secondary sm">重新检测</button></div>
+</section>
+```
+
+- 主窗口内容区的第一块，放转发开关和接入方式
+- 外框：圆角 12px，边框 1px，内边距上下 16px、左右 24px，上下两行间距 12px，无阴影。转发开着（`on`）时背景 selected-bg、边框 primary；关着时背景 surface、边框 border
+- 第一行：左边 48px 的应用图标，16px 之后是文字，最右边是开关。标题 16px、字重 600、text 色，写「使用中转 · 已开启」或「使用中转 · 已关闭」；标题下方 4px 是一句 12px、text-muted 色的说明
+- 说明文字：开着时写当前接入方式的一句话（「官方模型在上，中转模型在下；选官方模型时仍访问官方服务。」或「不用登录 ChatGPT。只有中转模型，默认选中「<配置名> · auto」。」，都没有 auto 时后半句写「没有默认选中的模型」）；关着时写「已关闭：Codex 配置已还原为开启前的样子。」；找不到 ChatGPT 时写「找到 ChatGPT 后才能打开。」
+- 第二行（只在转发开着时有）：最小高度 44px，左边是「标签 + 取值」写法的接入方式，右边是「重新检测」次按钮（高 44px，左右 16px）
+- 开关按「开关」一节；这里标题已经写了「已开启 / 已关闭」，开关旁边不再重复
+
+| 状态 | 样子 |
+|---|---|
+| 默认 | 如上，开着和关着两种样子 |
+| 悬停 | 外框不变（不可点击）；开关和按钮按各自一节 |
+| 按下 | 不适用：外框不可点击；开关和按钮按各自一节 |
+| 禁用 | 找不到 ChatGPT 时开关禁用，说明文字写原因；正在检测时「重新检测」禁用，显示转圈和「正在检测…」 |
+| 聚焦 | 外框不可聚焦；Tab 先到开关，再到「重新检测」，聚焦的控件显示 2px focus 描边，向外偏移 3px |
+
+### 配置列表
+
+- 写法：
+
+```html
+<ul class="cfg-list" aria-label="中转配置">
+  <li class="cfg-row">
+    <div class="cfg-main">
+      <div class="cfg-name">中转</div>
+      <div class="cfg-meta"><span class="cfg-status ok"><svg class="si">…</svg>6 个模型</span><span class="cfg-url mono">https://relay.example.com/v1</span></div>
+    </div>
+    <div class="cfg-actions"><button class="btn-secondary sm">编辑</button><button class="btn-secondary sm">删除</button></div>
+  </li>
+</ul>
+<div class="cfg-foot"><button class="btn-secondary">添加配置</button><span class="help">已有 3 个，最多 10 个。</span></div>
+```
+
+- 放在分组卡片里，卡片标题下面是列表，列表下面 20px 是底部一行（`cfg-foot`：左边「添加配置」按钮，右边 12px 处一行 12px 的 text-muted 说明文字）
+- 一行：高 64px，上下内边距 8px，内容上下居中；行与行之间 1px border 分隔线（第一行上面没有）；左边文字区和右边按钮区间距 12px
+- 文字区第一行是名字：13px，字重 600，text 色，不折行
+- 文字区第二行：12px，先是状态，8px 之后是地址。状态不折行、不截断；地址用等宽字体、text-muted 色，放不下时末尾用省略号截断
+- 状态的四种样子：正常是 success 色对勾图标加「6 个模型」；这个配置拉取模型列表失败是 warning 色警告图标加「没更新，沿用上次的 4 个」；从没拉成功过是 warning 色警告图标加「还没获取到模型」；正在拉取是 16px 转圈加 text-muted 色的「正在获取…」
+- 按钮区：每个按钮按「按钮」一节的次按钮画，高 44px、左右内边距 16px，按钮之间 8px；顺序是「重试」（只在状态是 warning 时出现）、「编辑」、「删除」
+- 列表最多显示 3 行（192px），更多时列表自己上下滚动，窗口高度不变；滚动条按平台原样
+- 状态和「重试」都画在这一行里面，行高和窗口高度不因此改变；某个配置拉取模型列表失败只在它自己那一行显示
+
+| 状态 | 样子 |
+|---|---|
+| 默认 | 如上 |
+| 悬停 | 行本身不变（行不可点击）；行里的按钮按「按钮」一节 |
+| 按下 | 不适用：行不可点击；行里的按钮按「按钮」一节 |
+| 禁用 | 只剩一个配置时「删除」禁用，底部说明文字写「至少保留一个配置。」；已有 10 个时「添加配置」禁用，底部说明文字写「已有 10 个，达到上限。」；某一行正在拉取或正在删除时，这一行的按钮都禁用 |
+| 聚焦 | 行本身不可聚焦；Tab 依次经过每一行的「重试」「编辑」「删除」，最后到「添加配置」，聚焦的按钮显示 2px focus 描边，向外偏移 3px |
 
 ### 卡片
 
@@ -223,10 +297,29 @@
 | 禁用 | 处理中时确认按钮禁用并显示转圈 |
 | 聚焦 | 打开后焦点落在「取消」上，Tab 只在弹窗内循环，Escape 等同于取消，关闭后焦点回到触发它的控件 |
 
+表单弹窗（弹窗里放要填写的字段，如添加、编辑中转配置）：
+
+```html
+<div class="modal" role="dialog" aria-modal="true" aria-labelledby="ft">
+  <div class="modal-header"><svg class="ico">…</svg><h3 id="ft">添加配置</h3></div>
+  <div class="modal-body form">
+    <div class="field"><label for="n">名字 <span class="req">必填</span></label><div class="ctl"><input id="n" class="input"><div class="help">帮助文字</div></div></div>
+  </div>
+  <div class="modal-footer"><button class="btn-secondary">取消</button><button class="btn-primary">保存</button></div>
+</div>
+```
+
+- 尺寸、圆角、阴影、头部和底部同上；正文里的字段按「输入框」一节画，标签列 112px，字段之间 20px
+- 打开后焦点落在第一个输入框上；编辑时输入框里已填好现在的值
+- 点确认按钮时一次检查所有字段，每个出错的字段按「输入框」一节在自己下方显示错误，焦点移到第一个出错的输入框；弹窗不关闭，已填的内容都留着
+- 不属于某一个字段的错误（如连不上中转、写不进系统凭据库）用错误提示条，浮在弹窗上方：距弹窗上沿 12px、左右各 24px，不改变弹窗高度
+- 处理中时：输入框和「取消」禁用，确认按钮禁用并显示转圈，文字写正在做什么
+- 成功后弹窗关闭，结果用成功提示条显示在主窗口上方
+
 ### 提示条
 
 - 写法：`<div class="alert warning" role="status"><svg class="si">…</svg><div><div class="alert-title">标题</div><div class="alert-text">说明</div><div class="alert-actions"><button class="btn-secondary sm">重试</button></div></div></div>`；错误用 `class="alert danger" role="alert"`，另有 `info`、`success`
-- 浮在窗口内容区上方，不占布局、不挤开下面的内容，窗口高度不因提示改变：距标题栏下沿 12px、左右各 24px，多条时纵向排列、间距 8px，阴影用「弹窗、菜单阴影」；内边距 16px，圆角 8px，边框 1px 状态色，背景对应的状态浅底（不透明）；标题用状态色 600 字重，说明用 text；按钮高 44px、左右 16px；右侧 44×44px 的 ✕ 关闭按钮（所有提示条都有，用负外边距抵消内边距，不撑高提示条），图标色 text-muted；由状态决定的提示条（如"中台模型列表本次没有更新"）被关掉后，状态再次变化时重新出现；由状态决定的提示条不论颜色都不自动消失，4 秒自动消失只用于操作完成后弹出的一次性提示；同一条提示不重复叠加，问题解决后（例如下一次同类操作成功）自动移除
+- 浮在窗口内容区上方，不占布局、不挤开下面的内容，窗口高度不因提示改变：距标题栏下沿 12px、左右各 24px，多条时纵向排列、间距 8px，阴影用「弹窗、菜单阴影」；内边距 16px，圆角 8px，边框 1px 状态色，背景对应的状态浅底（不透明）；标题用状态色 600 字重，说明用 text；按钮高 44px、左右 16px；右侧 44×44px 的 ✕ 关闭按钮（所有提示条都有，用负外边距抵消内边距，不撑高提示条），图标色 text-muted；由状态决定的提示条（如"没有找到 ChatGPT"）被关掉后，状态再次变化时重新出现；由状态决定的提示条不论颜色都不自动消失，4 秒自动消失只用于操作完成后弹出的一次性提示；同一条提示不重复叠加，问题解决后（例如下一次同类操作成功）自动移除
 - 成功（success）和信息（info）提示 4 秒后自动消失；警告（warning）和错误（danger）不自动消失，直到用户点 ✕ 或问题解决；需要用户处理的要给出操作
 - 长说明（如文件路径、被手改的设置项）不放进提示条，提示条只给「查看详情」，详情用弹窗
 
@@ -246,7 +339,7 @@
 <div class="menu" role="menu" aria-label="模型接入助手">
   <div class="menu-head"><svg class="ico">…</svg><div><strong>模型接入助手</strong><div class="mi-sub">转发已开启 · 后台运行中</div></div></div>
   <div class="menu-sep"></div>
-  <div class="menu-item" role="menuitemcheckbox" aria-checked="true"><span class="mi-check"><svg class="si">…</svg></span><span class="mi-label">转发到中台</span></div>
+  <div class="menu-item" role="menuitemcheckbox" aria-checked="true"><span class="mi-check"><svg class="si">…</svg></span><span class="mi-label">使用中转</span></div>
   <div class="menu-item" role="menuitem"><span class="mi-check"></span><span class="mi-label">打开配置…</span><span class="kbd">⌘,</span></div>
 </div>
 ```
@@ -267,6 +360,42 @@
 
 - 写法：`<span class="spinner" aria-hidden="true"></span>`，旁边一定有说明正在做什么的文字
 - 16×16px，2px 边框，右侧透明，800ms 转一圈；处理期间禁止重复提交，不显示假的百分比
+
+### 应用图标与菜单栏 / 托盘图标
+
+- 图形：圆圈里一左一右两个箭头，和官网顶栏的图形是同一个。画在 100×100 的画布上，线端和拐角都是圆头，不填充：
+
+```html
+<svg viewBox="0 0 100 100" fill="none" stroke="currentColor" stroke-width="6" stroke-linecap="round" stroke-linejoin="round">
+  <circle cx="50" cy="50" r="34"/>
+  <path d="M31.5 42.6H68.5l-9.6-9.6M68.5 57.4H31.5l9.6 9.6"/>
+</svg>
+```
+
+- 线条粗细按显示尺寸分三档：
+
+| 显示尺寸 | 线宽（占画布边长） | 图形 |
+|---|---|---|
+| 64px 及以上 | 6% | 外圈加两个箭头 |
+| 24px 到 48px | 9% | 外圈加两个箭头 |
+| 16px | 12% | 只留两个箭头，去掉外圈：`<path d="M22 38H78l-13-13M78 62H22l13 13"/>` |
+
+- 应用图标：底板 primary #0f766e，图形 on-primary #ffffff（图形对底板 5.47:1）
+  - macOS：1024×1024px 画布上，底板 824×824px 居中（四周各留 100px），圆角 184px，其余尺寸按比例缩小；32px 的四周留 2px，16px 的四周留 1px；图形缩到底板大小，放在底板正中
+  - Windows：底板铺满画布，256×256px 画布上圆角 48px，其余尺寸按比例缩小；图形缩到画布的 88%，放在正中
+  - 提供的尺寸：macOS 16、32、128、256、512、1024px；Windows 16、24、32、48、256px
+- 窗口里用应用图标的地方：主窗口「转发总览」左边 48px（线宽 9%）；弹窗头部标题左边 24px（线宽 9%）；Windows 标题栏标题左边 16px（线宽 12%，只留两个箭头）。底板圆角按所在平台的比例
+- 菜单栏 / 托盘单色图标：同一个图形，没有底板，线宽 9%，图形放大到 1.2 倍放在画布正中
+  - macOS 菜单栏：18×18px，只画形状不带颜色，颜色由系统按菜单栏深浅自动换成深色或白色
+  - Windows 托盘：16×16px，浅色任务栏用 text #172b3a（对 #ffffff 14.55:1），深色任务栏用 #ffffff
+
+| 状态 | 样子 |
+|---|---|
+| 默认 | 上面写的样子 |
+| 悬停 | 没有这个状态 |
+| 按下 | 没有这个状态；菜单栏和托盘图标按下时的高亮底由系统画 |
+| 禁用 | 没有这个状态 |
+| 聚焦 | 没有这个状态 |
 
 ## 8. 动效
 
@@ -377,7 +506,7 @@
 | 中圆角（按钮、页签、语言切换、导航链接） | 8px |
 | 大圆角（卡片、页签外框、图标底、流程节点） | 12px |
 | 全圆角（首屏标签、步骤编号圆） | 9999px |
-| 边框宽度 | 1px；流程图里代表本工具的节点 2px 主色；模型列表里中台模型的行左侧 4px 主色条 |
+| 边框宽度 | 1px；流程图里代表本工具的节点 2px 主色；模型列表里中转模型的行左侧 4px 主色条 |
 | 阴影 | 无 |
 
 ### 布局与断点
@@ -504,9 +633,9 @@
 
 #### 模型列表示意
 
-- 写法：`<div class="ml" aria-hidden="true"><div class="ml-t">Codex 模型列表（示意）</div><div class="ml-g">官方模型</div><div class="ml-r">官方模型 A</div><div class="ml-g">中台模型</div><div class="ml-r on">中台 · auto<em>默认</em></div></div>`
-- 外框：背景 #f5f7fa，1px #e2e7ec，圆角 8px，内边距 8px；行：白底，圆角 4px，内边距 8px 12px，14px，行间距 4px；中台模型的行左侧加 4px #0f766e 竖条；「默认」字样 12px 字重 600 #0f766e
-- 只用中性名称（官方模型 A、中台 · auto），不写真实模型名
+- 写法：`<div class="ml" aria-hidden="true"><div class="ml-t">Codex 模型列表（示意）</div><div class="ml-g">官方模型</div><div class="ml-r">官方模型 A</div><div class="ml-g">中转模型</div><div class="ml-r on">中转 · auto<em>默认</em></div></div>`
+- 外框：背景 #f5f7fa，1px #e2e7ec，圆角 8px，内边距 8px；行：白底，圆角 4px，内边距 8px 12px，14px，行间距 4px；中转模型的行左侧加 4px #0f766e 竖条；「默认」字样 12px 字重 600 #0f766e
+- 只用中性名称（官方模型 A、中转 · auto），不写真实模型名
 - 不可点击，没有交互状态
 
 #### App 界面图
@@ -535,7 +664,7 @@
 - 颜色不是唯一的信息来源：选中的页签和语言同时有 `aria-selected` / `aria-pressed`
 
 文案约定：
-- 英文页把「中台」统一叫 relay；中英文首屏都写一句"这个页面把你自己的模型服务叫作「中台」/ relay"
+- 英文页把「中转」统一叫 relay；中英文首屏都写一句"这个页面把你自己的模型服务叫作「中转」/ relay"
 - 页脚保留一句：ChatGPT 和 Codex 是各自所有者的商标，本项目与它们的所有者没有隶属关系
 - 下载按钮指向仓库的 Releases 页面，不写版本号
 
