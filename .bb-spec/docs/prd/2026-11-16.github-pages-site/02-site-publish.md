@@ -26,7 +26,8 @@ date: 2026-11-16
 - C2 发布流程在两种情况下运行：推到仓库默认分支、并且这次推送改到了官网目录里的文件；或者维护者在 Actions 页面手动运行。推送只改了官网目录以外的文件时，流程不运行。
 - C3 流程先检查、后发布；检查不通过时发布这一步不运行，线上页面保持上一次成功发布的版本。
 - C4 检查规则只列允许出现的内容，不包含任何真实地址、Key 或品牌：
-  - 官网目录里每个文本文件中，以 `http://` 或 `https://` 开头的网址，网站部分只能是 `github.com`（且路径以 `/0xBB2B/codexx` 开头）、`relay.example.com`、`127.0.0.1`。
+  - 官网目录里每个文本文件中，以 `http://` 或 `https://` 开头的网址，网站部分只能是 `github.com`（且路径以 `/0xBB2B/codexx` 开头、路径里没有 `.` 或 `..` 段）、`relay.example.com`、`127.0.0.1`（这两个路径不限）。
+  - 网址中间夹着非英文字符时，只有它是中文标点、并且后面是行尾、空白、中文或下一个网址，才算网址到此结束；否则判违规。网址末尾的英文标点不算网址的一部分。
   - 文本中出现的 `sk-` 开头的 Key 只能是 `sk-example-0000`。
   - 违反任一条，检查失败。
 - C5 检查失败时，流程日志列出每处违规所在的文件和行号，以及违规的原因（"网址不在白名单内"或"Key 不是示例 Key"）；日志里不打印违规内容本身。
@@ -37,7 +38,7 @@ date: 2026-11-16
 - [ ] C1：发布后的网站里只有官网目录里的文件；访问仓库里其他文件的路径（如 `/README.md`）返回 404。
 - [ ] C2：推一个只改官网文件的提交 → 流程运行；推一个只改 App 代码的提交 → 流程不运行；手动运行 → 流程运行。
 - [ ] C3：检查失败的那次运行里，发布这一步显示为没有运行，线上页面仍是上一版。
-- [ ] C4：官网文件分别加入 `https://other.example.org/`、`https://github.com/someone/else`、`sk-abc123` → 三次检查都失败；只含 `https://github.com/0xBB2B/codexx/releases`、`https://relay.example.com/v1`、`http://127.0.0.1:47311`、`sk-example-0000` → 检查通过。检查规则文件里搜不到 `example` 和 `github.com` 以外的域名。
+- [ ] C4：官网文件分别加入 `https://other.example.org/`、`https://github.com/someone/else`、`https://github.com/0xBB2B/codexx/../../evil`、`https://relay.example.com。evil.org/`、`sk-abc123` → 每次检查都失败；`访问 https://relay.example.com。`、`http://127.0.0.1/a/../b` → 通过；只含 `https://github.com/0xBB2B/codexx/releases`、`https://relay.example.com/v1`、`http://127.0.0.1:47311`、`sk-example-0000` → 检查通过。检查规则文件里搜不到 `example` 和 `github.com` 以外的域名。
 - [ ] C5：检查失败时，日志里有违规的文件名、行号和原因，搜不到违规的网址或 Key 原文。
 - [ ] C6：发布成功后打开 `https://0xbb2b.github.io/codexx/`，内容和这次的官网文件一致。
 
