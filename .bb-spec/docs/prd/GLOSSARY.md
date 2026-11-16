@@ -4,7 +4,7 @@
 
 | 锚点 | 定义 | 别名 |
 |---|---|---|
-| relay | 用户另外购买、通过 Base URL 和 API Key 访问的第三方模型服务，提供 Responses API；公开内容里不出现它的真实名称和地址 | 简体「中台」 |
+| relay | 用户另外购买、通过 Base URL 和 API Key 访问的第三方模型服务，提供 Responses API；公开内容里不出现它的真实名称和地址 | 简体「中台」；English「relay」 |
 | official-model | ChatGPT 当前版本自带模型清单里的模型，请求最终发往官方服务 | 简体「官方模型」 |
 | relay-model | 中台模型列表接口返回、并且在内置参数表里有参数的模型，请求最终发往中台 | 简体「中台模型」 |
 | auto-model | 中台提供的、由中台自动选择具体模型的模型，模型名为 `auto` | 简体「auto 模型」「auto 智能模型」 |
@@ -15,3 +15,4 @@
 | access-entries | 本工具在 Codex 用户配置里写入或移除的几项。「官方 + 中台」方式：`openai_base_url`、`model_catalog_json`、`model`、`[desktop]` 表里的 `enabled-reasoning-efforts`，以及被移除的 `model_provider`；「只用中台」方式：`model_provider`、`[model_providers.modelbridge]` 表、`model_catalog_json`、`model` | 简体「接入项」 |
 | access-mode | 转发开着时本工具改 Codex 配置的方式，由 Codex 是否已登录自动决定：「官方 + 中台」（已登录，官方模型和中台模型并列）或「只用中台」（没登录，Codex 只连本工具、不需要登录，只有中台模型） | 简体「接入方式」 |
 | login-start | 用户登录系统后自动启动本工具的设置，默认开启，可以在菜单里关闭 | 简体「登录时启动」 |
+| project-site | 发布在 GitHub Pages 上、介绍本工具的中英双语单页网站 | 简体「官网」 |
