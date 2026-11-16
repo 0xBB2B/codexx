@@ -191,6 +191,65 @@ func TestSite_TopbarLinks(t *testing.T) {
 	}
 }
 
+func TestSite_TopAnchorIsNotStickyHeader(t *testing.T) {
+	t.Parallel()
+	html := readSite(t)
+	tag := regexp.MustCompile(`<(\w+)\b[^>]*\bid="top"[^>]*>`).FindStringSubmatch(html)
+	if tag == nil {
+		t.Fatal("找不到 id=\"top\" 的元素")
+	}
+	if tag[1] == "header" {
+		t.Errorf("id=\"top\" 在吸顶的 header 上: %s", tag[0])
+	}
+	if top, header := strings.Index(html, `id="top"`), strings.Index(html, "<header"); top > header {
+		t.Errorf("id=\"top\" 位置 %d 应在 <header 位置 %d 之前", top, header)
+	}
+}
+
+func TestSite_StageDoesNotClipShadow(t *testing.T) {
+	t.Parallel()
+	html := readSite(t)
+	for _, rule := range regexp.MustCompile(`\.stage\s*\{[^}]*\}`).FindAllString(html, -1) {
+		if strings.Contains(strings.ReplaceAll(rule, " ", ""), "overflow:hidden") {
+			t.Errorf(".stage 规则含 overflow:hidden: %s", rule)
+		}
+	}
+}
+
+func TestSite_LangSetInHeadScript(t *testing.T) {
+	t.Parallel()
+	html := readSite(t)
+	body := strings.Index(html, "<body")
+	if body < 0 {
+		t.Fatal("找不到 <body")
+	}
+	var found bool
+	for _, script := range regexp.MustCompile(`(?s)<script\b[^>]*>.*?</script>`).FindAllString(html[:body], -1) {
+		if strings.Contains(script, "modelbridge-site-lang") && strings.Contains(script, "document.documentElement.lang") {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("<body 之前没有同时引用 modelbridge-site-lang 并设置 document.documentElement.lang 的内联 script")
+	}
+}
+
+func TestSite_NarrowScreenZoomOverridesLaterThan600(t *testing.T) {
+	t.Parallel()
+	html := strings.Join(strings.Fields(readSite(t)), "")
+	narrow := regexp.MustCompile(`@media\(max-width:356px\)\{[^@]*?\.am\{[^}]*zoom:0?\.46`).FindStringIndex(html)
+	if narrow == nil {
+		t.Fatal("找不到 max-width:356px 媒体查询里把 .am 的 zoom 设为 .46 的规则")
+	}
+	mid := regexp.MustCompile(`@media\(max-width:600px\)\{\.am\{[^}]*zoom:`).FindStringIndex(html)
+	if mid == nil {
+		t.Fatal("找不到 max-width:600px 媒体查询里 .am 的 zoom 规则")
+	}
+	if narrow[0] < mid[0] {
+		t.Errorf("356px 规则位置 %d 应在 600px 规则位置 %d 之后", narrow[0], mid[0])
+	}
+}
+
 func TestSite_PassesCheck(t *testing.T) {
 	t.Parallel()
 	got, err := Check(siteDir)
