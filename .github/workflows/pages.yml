@@ -1,0 +1,43 @@
+name: pages
+on:
+  push:
+    paths:
+      - 'site/**'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  check:
+    # push 的过滤条件写不了"默认分支"这个动态值，所以在这里比对
+    if: github.ref_name == github.event.repository.default_branch
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-go@v7.0.0
+        with:
+          go-version-file: scripts/sitecheck/go.mod
+          cache: false
+      - name: Check site
+        working-directory: scripts/sitecheck
+        run: go run . ../../site
+  deploy:
+    needs: check
+    runs-on: ubuntu-latest
+    concurrency:
+      group: pages
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/configure-pages@v6.0.0
+      - uses: actions/upload-pages-artifact@v5.0.0
+        with:
+          path: site
+      - id: deployment
+        uses: actions/deploy-pages@v5.0.1
