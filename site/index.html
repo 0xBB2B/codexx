@@ -66,7 +66,7 @@ a{color:var(--pri)}:focus-visible{outline:2px solid var(--pri);outline-offset:3p
 .nav-r{display:flex;align-items:center;gap:12px}
 .lang{display:flex;border:1px solid var(--strong);border-radius:8px}
 .lang button:first-child{border-radius:8px 0 0 8px}.lang button:last-child{border-radius:0 8px 8px 0}
-.lang button{height:44px;padding:0 12px;border:0;background:#fff;color:var(--muted);font-weight:600;font-size:14px;line-height:1;font-family:inherit;cursor:pointer}
+.lang button{white-space:nowrap;height:44px;padding:0 12px;border:0;background:#fff;color:var(--muted);font-weight:600;font-size:14px;line-height:1;font-family:inherit;cursor:pointer}
 .lang button:focus-visible{position:relative;z-index:1}
 .lang button:hover{background:var(--alt);color:var(--text)}.lang button[aria-pressed="true"]{background:var(--tint);color:var(--pri)}
 .gh{font-size:14px;font-weight:600;text-decoration:none;line-height:44px;padding:0 4px}
@@ -88,8 +88,8 @@ h2{font-size:32px;line-height:1.3;font-weight:700;margin:0 0 12px}
 h3{font-size:18px;line-height:1.4;font-weight:600;margin:0 0 8px}
 p{margin:0}
 .note{font-size:14px;color:var(--muted);text-align:center;margin-top:16px}
-.tabs{display:flex;justify-content:center;gap:4px;margin:0 auto 32px;padding:4px;background:#fff;border:1px solid var(--line);border-radius:12px;width:fit-content}
-.tabs button{height:44px;padding:0 20px;border:0;border-radius:8px;background:none;color:var(--muted);font-weight:600;font-size:14px;line-height:1;font-family:inherit;cursor:pointer}
+.tabs{display:flex;justify-content:center;gap:4px;margin:0 auto 32px;padding:4px;background:#fff;border:1px solid var(--line);border-radius:12px;width:fit-content;max-width:100%;flex-wrap:wrap}
+.tabs button{white-space:nowrap;height:44px;padding:0 20px;border:0;border-radius:8px;background:none;color:var(--muted);font-weight:600;font-size:14px;line-height:1;font-family:inherit;cursor:pointer}
 .tabs button:hover{color:var(--text)}.tabs button[aria-selected="true"]{background:var(--pri);color:#fff}
 .shot{margin:0}.stage{padding:24px 0 48px;overflow-x:clip}
 figcaption{text-align:center;color:var(--muted);font-size:16px}
@@ -128,8 +128,8 @@ details p{padding:0 0 24px}
 .foot-in{display:flex;justify-content:space-between;gap:24px;flex-wrap:wrap}.foot-r{display:flex;gap:24px}.foot-r a{line-height:44px}
 .small{font-size:12px;margin-top:4px}
 @media (max-width:900px){.links{display:none}.nav-r{margin-left:auto}h1{font-size:36px}.steps,.modes,.safe,.gets{grid-template-columns:1fr}.sec{padding:64px 0}.flow{flex-direction:column}.arrow{transform:rotate(90deg)}}
-@media (max-width:600px){.brand .sub{display:none}.nav-in{gap:12px}.nav-r{gap:8px;margin-left:auto}.wrap{padding:0 16px}.hero{padding:64px 0 48px}h1{font-size:32px}.node{min-width:0}.first{padding:24px}.first dl{grid-template-columns:1fr}}
-@media (max-width:400px){.lang button{padding:0 8px}.nav-in{gap:8px}.nav-r{gap:4px}.brand b{font-size:14px}.gh{padding:0}}
+@media (max-width:600px){.brand .sub{display:none}.nav-in{gap:12px}.nav-r{gap:8px;margin-left:auto}.wrap{padding:0 16px}.hero{padding:64px 0 48px}h1{font-size:32px}.node{min-width:0}.first{padding:24px}.first dl{grid-template-columns:1fr}.tabs button{padding:0 12px}}
+@media (max-width:400px){.lang button{padding:0 4px}.nav-in{gap:8px}.nav-r{gap:4px}.brand b{font-size:14px}.gh{padding:0}}
 </style>
 <script>
 const LANG_KEY = 'modelbridge-site-lang';
@@ -149,7 +149,7 @@ document.documentElement.lang = pickLang() === 'zh' ? 'zh-CN' : 'en';
 <nav class="links" aria-label="页内导航" data-aria-zh="页内导航" data-aria-en="On this page"><a href="#screens"><span data-l="zh">界面</span><span data-l="en">Interface</span></a><a href="#start"><span data-l="zh">上手</span><span data-l="en">Setup</span></a><a href="#modes"><span data-l="zh">接入方式</span><span data-l="en">Access modes</span></a><a href="#security"><span data-l="zh">安全</span><span data-l="en">Security</span></a><a href="#faq"><span data-l="zh">常见问题</span><span data-l="en">FAQ</span></a><a href="#download"><span data-l="zh">下载</span><span data-l="en">Download</span></a></nav><div class="nav-r"><div class="lang" role="group" aria-label="语言 / Language"><button type="button" data-lang-btn="zh" aria-pressed="true" lang="zh-CN">中文</button><button type="button" data-lang-btn="en" aria-pressed="false" lang="en">English</button></div><a class="gh" href="https://github.com/0xBB2B/codexx">GitHub</a></div></div></header>
 <main>
 <section class="hero" id="hero"><div class="wrap"><p class="eyebrow"><span data-l="zh">开源 · macOS / Windows 托盘小工具</span><span data-l="en">Open source · menu bar / tray utility for macOS and Windows</span></p><h1><span data-l="zh">让 ChatGPT 桌面版里的 Codex，用上你自己的模型服务</span><span data-l="en">Use your own model service with Codex in the ChatGPT desktop app</span></h1><p class="lead"><span data-l="zh">填好 Base URL 和 API Key，模型接入助手替你改好 Codex 配置，并在本机 127.0.0.1:47311 转发请求。这个页面把你自己的模型服务叫作「中台」。</span><span data-l="en">Enter a Base URL and an API Key. ModelBridge updates the Codex configuration for you and forwards requests locally at 127.0.0.1:47311. This page calls your own model service the “relay”.</span></p><div class="ctas"><a class="btn btn-1" href="https://github.com/0xBB2B/codexx/releases"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v11M7.500 11l4.500 4.500 4.500-4.500M5 20h14"/></svg><span data-l="zh">下载</span><span data-l="en">Download</span></a><a class="btn btn-2" href="https://github.com/0xBB2B/codexx"><span data-l="zh">查看源码</span><span data-l="en">View source</span></a></div><p class="need"><span data-l="zh">需要先装好 ChatGPT 桌面版 · macOS 13 及以上（Apple 芯片）· Windows 10 1809 及以上（64 位）</span><span data-l="en">Requires the ChatGPT desktop app · macOS 13 or later (Apple silicon) · Windows 10 1809 or later (64-bit)</span></p></div></section>
-<section class="sec alt" id="screens"><div class="wrap"><div class="sec-h"><h2><span data-l="zh">界面长什么样</span><span data-l="en">What it looks like</span></h2><p><span data-l="zh">下面是照 App 的样子画的示意图，里面的地址、Key、数字都是示例。</span><span data-l="en">These are drawn mock-ups of the app. Every address, key and number in them is an example.</span></p></div><div class="tabs" role="tablist"><button type="button" role="tab" aria-selected="false" data-tab="0"><span data-l="zh">首次设置</span><span data-l="en">First-run setup</span></button><button type="button" role="tab" aria-selected="true" data-tab="1"><span data-l="zh">主窗口</span><span data-l="en">Main window</span></button><button type="button" role="tab" aria-selected="false" data-tab="2"><span data-l="zh">菜单栏菜单</span><span data-l="en">Menu bar menu</span></button></div>
+<section class="sec alt" id="screens"><div class="wrap"><div class="sec-h"><h2><span data-l="zh">界面长什么样</span><span data-l="en">What it looks like</span></h2><p><span data-l="zh">下面是照 App 的样子画的示意图，里面的地址、Key、数字都是示例。</span><span data-l="en">These are drawn mock-ups of the app. Every address, key and number in them is an example.</span></p></div><div class="tabs" role="tablist"><button type="button" role="tab" aria-selected="false" data-tab="0"><span data-l="zh">首次设置</span><span data-l="en">Setup</span></button><button type="button" role="tab" aria-selected="true" data-tab="1"><span data-l="zh">主窗口</span><span data-l="en">Main window</span></button><button type="button" role="tab" aria-selected="false" data-tab="2"><span data-l="zh">菜单栏菜单</span><span data-l="en">Menu bar</span></button></div>
 <figure class="shot" data-pane="0" hidden><div class="stage"><div class="am" role="img" aria-label="首次设置窗口示意图" data-aria-zh="首次设置窗口示意图" data-aria-en="Mock-up of the first-run setup window"><div class="am-window" inert>
   <div class="am-titlebar"><span class="am-lights"><i class="l-close"></i><i class="l-min"></i><i class="l-max"></i></span><span>设置模型接入助手</span></div>
   <div class="am-body">

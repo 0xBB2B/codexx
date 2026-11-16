@@ -250,6 +250,92 @@ func TestSite_NarrowScreenZoomOverridesLaterThan600(t *testing.T) {
 	}
 }
 
+func cssRules(html, selector string) []string {
+	var bodies []string
+	for _, m := range regexp.MustCompile(regexp.QuoteMeta(selector)+`\s*\{([^}]*)\}`).FindAllStringSubmatch(html, -1) {
+		bodies = append(bodies, strings.Join(strings.Fields(m[1]), ""))
+	}
+	return bodies
+}
+
+func anyRuleContains(rules []string, want string) bool {
+	for _, r := range rules {
+		if strings.Contains(r, want) {
+			return true
+		}
+	}
+	return false
+}
+
+func TestSite_TabsStayOnOneLine(t *testing.T) {
+	t.Parallel()
+	html := readSite(t)
+	tests := []struct {
+		name     string
+		selector string
+		want     string
+	}{
+		{"页签条允许换行", ".tabs", "flex-wrap:wrap"},
+		{"页签条最宽等于内容区", ".tabs", "max-width:100%"},
+		{"页签文字不折行", ".tabs button", "white-space:nowrap"},
+		{"语言按钮文字不折行", ".lang button", "white-space:nowrap"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if !anyRuleContains(cssRules(html, tt.selector), tt.want) {
+				t.Errorf("%s 规则里没有 %s", tt.selector, tt.want)
+			}
+		})
+	}
+}
+
+func TestSite_TabPaddingOnNarrowScreen(t *testing.T) {
+	t.Parallel()
+	html := readSite(t)
+	var found bool
+	for _, block := range regexp.MustCompile(`@media\s*\(max-width:\s*600px\)\s*\{(?:[^{}]*\{[^{}]*\})*\s*\}`).FindAllString(html, -1) {
+		if anyRuleContains(cssRules(block, ".tabs button"), "padding:012px") {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("max-width:600px 媒体查询里没有把 .tabs button 的 padding 设为 0 12px")
+	}
+}
+
+func TestSite_LangButtonPaddingOnNarrowScreen(t *testing.T) {
+	t.Parallel()
+	html := readSite(t)
+	var found bool
+	for _, block := range regexp.MustCompile(`@media\s*\(max-width:\s*400px\)\s*\{(?:[^{}]*\{[^{}]*\})*\s*\}`).FindAllString(html, -1) {
+		if anyRuleContains(cssRules(block, ".lang button"), "padding:04px") {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("max-width:400px 媒体查询里没有把 .lang button 的 padding 设为 0 4px")
+	}
+}
+
+func TestSite_EnglishTabLabels(t *testing.T) {
+	t.Parallel()
+	html := regexp.MustCompile(`(?s)<div class="tabs".*?</div>`).FindString(readSite(t))
+	if html == "" {
+		t.Fatal("找不到页签条")
+	}
+	for _, want := range []string{`<span data-l="en">Setup</span>`, `<span data-l="en">Main window</span>`, `<span data-l="en">Menu bar</span>`} {
+		if !strings.Contains(html, want) {
+			t.Errorf("页面缺少英文页签 %s", want)
+		}
+	}
+	for _, old := range []string{"First-run setup", "Menu bar menu"} {
+		if strings.Contains(html, old) {
+			t.Errorf("页面仍含旧英文页签文字 %q", old)
+		}
+	}
+}
+
 func TestSite_PassesCheck(t *testing.T) {
 	t.Parallel()
 	got, err := Check(siteDir)
