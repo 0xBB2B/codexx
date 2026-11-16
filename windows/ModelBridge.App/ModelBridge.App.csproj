@@ -8,5 +8,11 @@
     <Nullable>enable</Nullable>
     <AssemblyName>ModelBridge</AssemblyName>
     <RootNamespace>ModelBridge</RootNamespace>
+    <ApplicationIcon>Assets\AppIcon.ico</ApplicationIcon>
   </PropertyGroup>
+  <ItemGroup>
+    <Resource Include="Assets\TrayIconLight.ico" />
+    <Resource Include="Assets\TrayIconDark.ico" />
+    <Resource Include="Assets\AppIcon.ico" />
+  </ItemGroup>
 </Project>

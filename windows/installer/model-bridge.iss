@@ -6,6 +6,7 @@
 #endif
 
 [Setup]
+SetupIconFile=..\ModelBridge.App\Assets\AppIcon.ico
 AppId={{5C1F7A2E-7B3D-4E41-9C8A-2D7E6B1F0A11}
 AppName=模型接入助手
 AppVersion={#AppVersion}

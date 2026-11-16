@@ -26,6 +26,8 @@ build_shell() {
 assemble_app() {
   mkdir -p "$APP/Contents/MacOS"
   cp "$SHELL_BIN" "$APP/Contents/MacOS/ModelBridge"
+  mkdir -p "$APP/Contents/Resources"
+  cp "$ROOT/macos/Resources/AppIcon.icns" "$ROOT/macos/Resources/MenuBarIcon.png" "$ROOT/macos/Resources/MenuBarIcon@2x.png" "$APP/Contents/Resources/"
   sed "s/__VERSION__/$VERSION/g" "$ROOT/macos/Resources/Info.plist" > "$APP/Contents/Info.plist"
 }
 

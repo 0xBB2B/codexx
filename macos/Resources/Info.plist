@@ -6,6 +6,7 @@
   <key>CFBundleName</key><string>ModelBridge</string>
   <key>CFBundleDisplayName</key><string>模型接入助手</string>
   <key>CFBundleExecutable</key><string>ModelBridge</string>
+  <key>CFBundleIconFile</key><string>AppIcon</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleShortVersionString</key><string>__VERSION__</string>
   <key>CFBundleVersion</key><string>__VERSION__</string>

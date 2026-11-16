@@ -1,6 +1,6 @@
-.PHONY: test test-core test-macos test-site build-core
+.PHONY: test test-core test-macos test-site test-icongen build-core icons
 
-test: test-core test-macos test-site
+test: test-core test-macos test-site test-icongen
 
 test-core:
 	cd core && go test ./...
@@ -10,6 +10,12 @@ test-macos:
 
 test-site:
 	cd scripts/sitecheck && go test ./...
+
+icons:
+	cd scripts/icongen && go run . ../..
+
+test-icongen:
+	cd scripts/icongen && go test ./...
 
 build-core:
 	cd core && GOOS=darwin GOARCH=arm64 go build -o ../dist/darwin-arm64/model-bridge-core ./cmd/model-bridge-core

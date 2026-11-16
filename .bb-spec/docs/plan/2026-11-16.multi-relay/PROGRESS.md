@@ -2,7 +2,7 @@
 | 序号 | Plan | 状态 | 完成时间 |
 |---|---|---|---|
 | 01 | 01-core-relay-catalog | pending | — |
-| 08 | 08-app-icon-assets | pending | — |
+| 08 | 08-app-icon-assets | done | 2026-11-16 |
 | 10 | 10-site-readme-rename | done | 2026-11-16 |
 | 02 | 02-core-proxy-routing | pending | — |
 | 03 | 03-core-control-relays | pending | — |
@@ -16,7 +16,8 @@
 ## 阻塞
 （无）
 ## 重试与自修（每次记一条）
+- 01-core-relay-catalog 自修第 1 轮：「何时联网」改为每个配置显式模式（联网/只读缓存/用传入列表）、多个配置并发获取、relay_test.go 残留「中台」、补测试（缓存不含 Key/URL、空列表、单配置刷新失败） → 结果：
 - 10-site-readme-rename 自修第 1 轮：底部状态行缺标签+取值、版本号字体、添加配置按钮样式、菜单栏图标 18px；收紧 3 条区分度弱的断言 → 结果：三处已修、断言收紧，复查 10/10 合规
-- 08-app-icon-assets 自修第 1 轮：DESIGN.md 单色图标规则与 PRD 04 C7（16px 托盘按 16px 规则）矛盾，按 PRD 改正 DESIGN.md 文字并补 64px；Scale 从公用 GlyphFor 挪到 RenderMono；补测试（单色放大、各档线宽、Win 88%、24/32/48、Mac 64） → 结果：
+- 08-app-icon-assets 自修第 1 轮：DESIGN.md 单色图标规则与 PRD 04 C7（16px 托盘按 16px 规则）矛盾，按 PRD 改正 DESIGN.md 文字并补 64px；Scale 从公用 GlyphFor 挪到 RenderMono；补测试（单色放大、各档线宽、Win 88%、24/32/48、Mac 64） → 结果：已修，复查 17/17 合规
 ## 无关发现（发现一条记一条）
 （无）
