@@ -13,12 +13,35 @@ const RelaySlugPrefix = "relay-"
 type Result struct {
 	Models          []Entry
 	ReasoningLevels []string
+	// RelayModels、RelayShown、RelayFromParams 里放的是内部名（relay-xxx）
 	RelayModels     []string
 	RelayShown      []string
 	RelayFromParams []string
-	RelayErr        error
+	Relays          []RelayResult
+	Routes          map[string]RelayRoute
+	DefaultModel    string
 	StoreErr        error
-	RelayFetchedAt  time.Time
+}
+
+type RelayResult struct {
+	ID         string
+	ModelCount int
+	FetchedAt  time.Time
+	Stale      bool
+	Err        error
+}
+
+type RelayRoute struct {
+	ID         string
+	Model      string
+	FromParams bool
+}
+
+type RelayGroup struct {
+	ID        string
+	Name      string
+	ParamOnly []Param
+	SameName  []string
 }
 
 func RelayNames(ids []string, params []Param, official []Entry) (paramOnly []Param, sameName []string) {
@@ -47,12 +70,13 @@ func RelayNames(ids []string, params []Param, official []Entry) (paramOnly []Par
 	return paramOnly, sameName
 }
 
-func MergeRelay(official []Entry, relay []Param, sameName []string) (*Result, error) {
+func MergeRelay(official []Entry, groups []RelayGroup) (*Result, error) {
 	if len(official) == 0 {
 		return nil, errors.New("没有官方模型条目，无法作为底板")
 	}
 	maxPriority, _ := toFloat(official[0]["priority"])
 	bySlug := make(map[string]Entry, len(official))
+	hidden := map[string]bool{}
 	for _, e := range official {
 		if p, ok := toFloat(e["priority"]); ok && p > maxPriority {
 			maxPriority = p
@@ -61,72 +85,97 @@ func MergeRelay(official []Entry, relay []Param, sameName []string) (*Result, er
 			if _, dup := bySlug[slug]; !dup {
 				bySlug[slug] = e
 			}
+			if v, has := e["visibility"]; has && v != "list" {
+				hidden[slug] = true
+			}
 		}
 	}
 
-	models := append([]Entry(nil), official...)
-	var levels []string
+	res := &Result{Models: append([]Entry(nil), official...), Routes: map[string]RelayRoute{}}
 	seen := map[string]bool{}
 	addLevel := func(l string) {
 		if !seen[l] {
 			seen[l] = true
-			levels = append(levels, l)
+			res.ReasoningLevels = append(res.ReasoningLevels, l)
 		}
 	}
-	for i, p := range relay {
-		e := Entry(maps.Clone(official[0]))
-		supported := make([]map[string]any, 0, len(p.ReasoningLevels))
-		for _, l := range p.ReasoningLevels {
-			if l == "max" {
-				l = "ultra"
+	next := maxPriority + 1
+	for _, g := range groups {
+		for _, p := range g.ParamOnly {
+			e := Entry(maps.Clone(official[0]))
+			supported := make([]map[string]any, 0, len(p.ReasoningLevels))
+			for _, l := range p.ReasoningLevels {
+				if l == "max" {
+					l = "ultra"
+				}
+				supported = append(supported, map[string]any{"effort": l, "description": l})
+				addLevel(l)
 			}
-			supported = append(supported, map[string]any{"effort": l, "description": l})
-			addLevel(l)
-		}
-		e["context_window"] = p.ContextWindow
-		e["max_context_window"] = p.ContextWindow
-		e["input_modalities"] = p.InputModalities
-		e["supported_reasoning_levels"] = supported
-		e["visibility"] = "list"
-		if p.DefaultReasoningLevel != nil {
-			d := *p.DefaultReasoningLevel
-			if d == "max" {
-				d = "ultra"
+			e["context_window"] = p.ContextWindow
+			e["max_context_window"] = p.ContextWindow
+			e["input_modalities"] = p.InputModalities
+			e["supported_reasoning_levels"] = supported
+			e["visibility"] = "list"
+			if p.DefaultReasoningLevel != nil {
+				d := *p.DefaultReasoningLevel
+				if d == "max" {
+					d = "ultra"
+				}
+				e["default_reasoning_level"] = d
+			} else {
+				delete(e, "default_reasoning_level")
 			}
-			e["default_reasoning_level"] = d
-		} else {
-			delete(e, "default_reasoning_level")
+			e["supports_reasoning_effort_updates"] = len(p.ReasoningLevels) > 0
+			slug := RelaySlug(g.ID, p.ID)
+			applyRelayOverrides(e, slug, g.Name, p.ID, next)
+			next++
+			res.Models = append(res.Models, e)
+			res.Routes[slug] = RelayRoute{ID: g.ID, Model: p.ID, FromParams: true}
+			res.RelayModels = append(res.RelayModels, slug)
+			res.RelayShown = append(res.RelayShown, slug)
+			res.RelayFromParams = append(res.RelayFromParams, slug)
 		}
-		e["supports_reasoning_effort_updates"] = len(p.ReasoningLevels) > 0
-		applyRelayOverrides(e, p.ID, maxPriority+1+float64(i))
-		models = append(models, e)
-	}
-	for j, name := range sameName {
-		base := bySlug[name]
-		e := Entry(maps.Clone(base))
-		if list, ok := base["supported_reasoning_levels"].([]any); ok {
-			for _, it := range list {
-				if m, ok := it.(map[string]any); ok {
-					if l, ok := m["effort"].(string); ok {
-						addLevel(l)
+		for _, name := range g.SameName {
+			base := bySlug[name]
+			e := Entry(maps.Clone(base))
+			if list, ok := base["supported_reasoning_levels"].([]any); ok {
+				for _, it := range list {
+					if m, ok := it.(map[string]any); ok {
+						if l, ok := m["effort"].(string); ok {
+							addLevel(l)
+						}
 					}
 				}
 			}
+			slug := RelaySlug(g.ID, name)
+			applyRelayOverrides(e, slug, g.Name, name, next)
+			next++
+			res.Models = append(res.Models, e)
+			res.Routes[slug] = RelayRoute{ID: g.ID, Model: name}
+			res.RelayModels = append(res.RelayModels, slug)
+			if !hidden[name] {
+				res.RelayShown = append(res.RelayShown, slug)
+			}
 		}
-		applyRelayOverrides(e, name, maxPriority+1+float64(len(relay)+j))
-		models = append(models, e)
 	}
-	return &Result{Models: models, ReasoningLevels: levels}, nil
+	return res, nil
 }
 
-func relayDisplayName(name string) string {
-	return "中台 · " + name
+func RelaySlug(id, model string) string {
+	if id == "1" {
+		return RelaySlugPrefix + model
+	}
+	return "relay" + id + "-" + model
 }
 
-func applyRelayOverrides(e Entry, name string, priority float64) {
-	e["slug"] = RelaySlugPrefix + name
-	e["display_name"] = relayDisplayName(name)
-	e["description"] = "中台模型"
+func relayDisplayName(configName, model string) string {
+	return configName + " · " + model
+}
+
+func applyRelayOverrides(e Entry, slug, configName, model string, priority float64) {
+	e["slug"] = slug
+	e["display_name"] = relayDisplayName(configName, model)
+	e["description"] = "中转模型"
 	e["supported_in_api"] = true
 	e["priority"] = priority
 	e["supports_search_tool"] = false

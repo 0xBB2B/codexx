@@ -9,150 +9,643 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"modelbridge/internal/catalog"
 )
 
-func relayServer(t *testing.T, status int, body string) *httptest.Server {
-	t.Helper()
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(status)
-		_, _ = w.Write([]byte(body))
-	}))
-	t.Cleanup(srv.Close)
-	return srv
+type relayStub struct {
+	*httptest.Server
+	status atomic.Int32
+	hits   atomic.Int32
 }
 
-func buildOpts(t *testing.T, codex, relayURL, dataDir string) catalog.BuildOptions {
+func newRelayStub(t *testing.T, status int, body string) *relayStub {
+	t.Helper()
+	s := &relayStub{}
+	s.status.Store(int32(status))
+	s.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		s.hits.Add(1)
+		w.WriteHeader(int(s.status.Load()))
+		_, _ = w.Write([]byte(body))
+	}))
+	t.Cleanup(s.Close)
+	return s
+}
+
+func source(id, name, url string, ids []string) catalog.RelaySource {
+	mode := catalog.FetchRemote
+	if ids != nil {
+		mode = catalog.UseGiven
+	}
+	return sourceMode(id, name, url, mode, ids)
+}
+
+func sourceMode(id, name, url string, mode catalog.RelayMode, ids []string) catalog.RelaySource {
+	return catalog.RelaySource{ID: id, Name: name, BaseURL: url, Key: relayKey, Mode: mode, IDs: ids}
+}
+
+const relayKey = "sk-example-0000"
+
+func buildOpts(t *testing.T, codex, dataDir string, relays ...catalog.RelaySource) catalog.BuildOptions {
 	t.Helper()
 	return catalog.BuildOptions{
 		CodexPath:    codex,
-		RelayBaseURL: relayURL,
-		RelayKey:     "sk-example-0000",
+		Relays:       relays,
 		RelayTimeout: time.Second,
 		DataDir:      dataDir,
 		Params:       mergeParams,
 	}
 }
 
+func build(t *testing.T, opts catalog.BuildOptions) *catalog.Result {
+	t.Helper()
+	res, err := catalog.Build(context.Background(), opts)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	return res
+}
+
 func slugs(t *testing.T, res *catalog.Result) []any {
 	t.Helper()
+	return slugsOf(roundtrip(t, res.Models))
+}
+
+func slugsOf(models []map[string]any) []any {
 	var out []any
-	for _, m := range roundtrip(t, res.Models) {
+	for _, m := range models {
 		out = append(out, m["slug"])
 	}
 	return out
 }
 
-func TestBuild_RelaySuccess_MergesSavesRecordAndWritesCatalog(t *testing.T) {
-	origHome := t.TempDir()
-	if err := os.WriteFile(filepath.Join(origHome, "auth.json"), []byte("x"), 0o000); err != nil {
+func readFileT(t *testing.T, path string) string {
+	t.Helper()
+	b, err := os.ReadFile(path)
+	if err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("CODEX_HOME", origHome)
+	return string(b)
+}
 
-	codex, _ := writeFakeCodex(t, officialJSON, 0)
-	srv := relayServer(t, 200, `{"data":[{"id":"auto"},{"id":"deepseek-v3.2"},{"id":"unknown-model-x"}]}`)
-	dataDir := t.TempDir()
+func catalogFileModels(t *testing.T, dataDir string) []map[string]any {
+	t.Helper()
+	var file struct {
+		Models []map[string]any `json:"models"`
+	}
+	if err := json.Unmarshal([]byte(readFileT(t, filepath.Join(dataDir, "model-bridge-catalog.json"))), &file); err != nil {
+		t.Fatal(err)
+	}
+	return file.Models
+}
 
-	res, err := catalog.Build(context.Background(), buildOpts(t, codex, srv.URL, dataDir))
-	if err != nil {
-		t.Fatalf("Build: %v", err)
+func bySlug(t *testing.T, models []map[string]any, slug string) map[string]any {
+	t.Helper()
+	for _, m := range models {
+		if m["slug"] == slug {
+			return m
+		}
 	}
-	if res.RelayErr != nil {
-		t.Errorf("RelayErr = %v", res.RelayErr)
-	}
-	want := []any{"gpt-a", "gpt-b", "relay-auto", "relay-deepseek-v3.2"}
-	if got := slugs(t, res); !reflect.DeepEqual(got, want) {
-		t.Errorf("slugs = %v, want %v", got, want)
-	}
-	m := roundtrip(t, res.Models)
-	if m[2]["priority"] != float64(8) || m[3]["priority"] != float64(9) {
-		t.Errorf("priority = %v, %v", m[2]["priority"], m[3]["priority"])
-	}
+	t.Fatalf("目录里没有 %s", slug)
+	return nil
+}
 
-	if _, err := os.Stat(filepath.Join(dataDir, "model-bridge-catalog.json")); err != nil {
-		t.Errorf("合并目录没写出: %v", err)
+func efforts(t *testing.T, e map[string]any) []any {
+	t.Helper()
+	var out []any
+	for _, l := range e["supported_reasoning_levels"].([]any) {
+		out = append(out, l.(map[string]any)["effort"])
 	}
-	ids, _, ok, err := catalog.NewStore(dataDir).LoadRelayModels()
-	if err != nil || !ok {
-		t.Fatalf("上次成功记录没写出: %v %v", ok, err)
+	return out
+}
+
+func relayResult(t *testing.T, res *catalog.Result, id string) catalog.RelayResult {
+	t.Helper()
+	for _, r := range res.Relays {
+		if r.ID == id {
+			return r
+		}
 	}
-	for _, id := range []string{"auto", "deepseek-v3.2"} {
-		found := false
-		for _, g := range ids {
-			if g == id {
-				found = true
+	t.Fatalf("Relays 里没有编号 %s: %+v", id, res.Relays)
+	return catalog.RelayResult{}
+}
+
+func twoStubs(t *testing.T) (a, b *relayStub) {
+	t.Helper()
+	return newRelayStub(t, 200, `{"data":[{"id":"auto"},{"id":"deepseek-v3.2"},{"id":"unknown-model-x"}]}`),
+		newRelayStub(t, 200, `{"data":[{"id":"auto"},{"id":"gpt-a"}]}`)
+}
+
+func TestRelaySlug(t *testing.T) {
+	t.Parallel()
+	tests := []struct{ id, model, want string }{
+		{"1", "auto", "relay-auto"},
+		{"2", "auto", "relay2-auto"},
+		{"10", "glm-5.3", "relay10-glm-5.3"},
+		{"1", "gpt-a", "relay-gpt-a"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.want, func(t *testing.T) {
+			t.Parallel()
+			if got := catalog.RelaySlug(tt.id, tt.model); got != tt.want {
+				t.Errorf("RelaySlug(%q,%q) = %q, want %q", tt.id, tt.model, got, tt.want)
 			}
+		})
+	}
+}
+
+func TestBuild_TwoRelays_SlugsDisplayNamesOrderAndDescription(t *testing.T) {
+	t.Parallel()
+	codex, _ := writeFakeCodex(t, officialJSON, 0)
+	a, b := twoStubs(t)
+	dataDir := t.TempDir()
+
+	res := build(t, buildOpts(t, codex, dataDir,
+		source("1", "主力", a.URL, nil),
+		source("2", "备用", b.URL, nil)))
+
+	models := roundtrip(t, res.Models)
+	wantSlugs := []any{"gpt-a", "gpt-b", "relay-auto", "relay-deepseek-v3.2", "relay2-auto", "relay2-gpt-a"}
+	if got := slugsOf(models); !reflect.DeepEqual(got, wantSlugs) {
+		t.Fatalf("slugs = %v, want %v", got, wantSlugs)
+	}
+	display := map[string]string{
+		"relay-auto":          "主力 · auto",
+		"relay-deepseek-v3.2": "主力 · deepseek-v3.2",
+		"relay2-auto":         "备用 · auto",
+		"relay2-gpt-a":        "备用 · gpt-a",
+	}
+	for slug, want := range display {
+		e := bySlug(t, models, slug)
+		if e["display_name"] != want {
+			t.Errorf("%s display_name = %v, want %s", slug, e["display_name"], want)
 		}
-		if !found {
-			t.Errorf("记录里缺 %s: %v", id, ids)
+		if e["description"] != "中转模型" {
+			t.Errorf("%s description = %v, want 中转模型", slug, e["description"])
+		}
+	}
+	for i, m := range models[2:] {
+		if m["priority"] != float64(8+i) {
+			t.Errorf("%v priority = %v, want %d（官方最大值 7 之后连续递增）", m["slug"], m["priority"], 8+i)
+		}
+	}
+
+	fileModels := catalogFileModels(t, dataDir)
+	if got := slugsOf(fileModels); !reflect.DeepEqual(got, wantSlugs) {
+		t.Errorf("目录文件 slugs = %v, want %v", got, wantSlugs)
+	}
+	if strings.Contains(readFileT(t, filepath.Join(dataDir, "model-bridge-catalog.json")), "中台") {
+		t.Error("目录文件里不应出现「中台」")
+	}
+}
+
+func TestBuild_TwoRelays_SameModelNameFromBothRelaysKeepsBothEntries(t *testing.T) {
+	t.Parallel()
+	codex, _ := writeFakeCodex(t, officialJSON, 0)
+	a, b := twoStubs(t)
+	res := build(t, buildOpts(t, codex, t.TempDir(), source("1", "主力", a.URL, nil), source("2", "备用", b.URL, nil)))
+	models := roundtrip(t, res.Models)
+	bySlug(t, models, "relay-auto")
+	bySlug(t, models, "relay2-auto")
+}
+
+func TestBuild_RelayEntriesFollowConfigOrderThenParamsTableThenOfficialSameName(t *testing.T) {
+	t.Parallel()
+	codex, _ := writeFakeCodex(t, officialJSON, 0)
+	res := build(t, buildOpts(t, codex, t.TempDir(),
+		source("2", "乙", "", []string{"gpt-b", "deepseek-v3.2", "gpt-a", "auto"}),
+		source("1", "甲", "", []string{"deepseek-v3.2", "auto"})))
+	want := []any{"gpt-a", "gpt-b", "relay2-auto", "relay2-deepseek-v3.2", "relay2-gpt-a", "relay2-gpt-b", "relay-auto", "relay-deepseek-v3.2"}
+	if got := slugs(t, res); !reflect.DeepEqual(got, want) {
+		t.Errorf("slugs = %v, want %v（按配置在列表里的顺序；配置内参数表模型在前、和官方同名的在后，与编号大小和 IDs 顺序无关）", got, want)
+	}
+}
+
+func TestBuild_RelayDisplayNameUsesConfigName(t *testing.T) {
+	t.Parallel()
+	params := []catalog.Param{
+		{ID: "GPT-Y", ContextWindow: 1, InputModalities: []string{"text"}, Source: "s"},
+		{ID: "glm-5.3", ContextWindow: 1, InputModalities: []string{"text"}, Source: "s"},
+		{ID: "my-gpt-1", ContextWindow: 1, InputModalities: []string{"text"}, Source: "s"},
+	}
+	codex, _ := writeFakeCodex(t, officialJSON, 0)
+	opts := buildOpts(t, codex, t.TempDir(), source("1", "公司", "", []string{"GPT-Y", "glm-5.3", "my-gpt-1"}))
+	opts.Params = params
+	models := roundtrip(t, build(t, opts).Models)
+	tests := []struct{ slug, display string }{
+		{"relay-GPT-Y", "公司 · GPT-Y"},
+		{"relay-glm-5.3", "公司 · glm-5.3"},
+		{"relay-my-gpt-1", "公司 · my-gpt-1"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.slug, func(t *testing.T) {
+			if got := bySlug(t, models, tt.slug)["display_name"]; got != tt.display {
+				t.Errorf("display_name = %v, want %s", got, tt.display)
+			}
+		})
+	}
+}
+
+func TestBuild_Relays_ResultPerRelay(t *testing.T) {
+	t.Parallel()
+	codex, _ := writeFakeCodex(t, officialJSON, 0)
+	a, b := twoStubs(t)
+	before := time.Now().Add(-time.Second)
+	res := build(t, buildOpts(t, codex, t.TempDir(), source("1", "主力", a.URL, nil), source("2", "备用", b.URL, nil)))
+
+	if len(res.Relays) != 2 {
+		t.Fatalf("Relays = %+v", res.Relays)
+	}
+	tests := []struct {
+		id    string
+		count int
+	}{
+		{"1", 2},
+		{"2", 2},
+	}
+	for _, tt := range tests {
+		t.Run(tt.id, func(t *testing.T) {
+			r := relayResult(t, res, tt.id)
+			if r.ModelCount != tt.count {
+				t.Errorf("ModelCount = %d, want %d（不在参数表也不在官方清单的模型不算）", r.ModelCount, tt.count)
+			}
+			if r.Stale || r.Err != nil {
+				t.Errorf("Stale = %v, Err = %v", r.Stale, r.Err)
+			}
+			if r.FetchedAt.Before(before) || r.FetchedAt.After(time.Now().Add(time.Second)) {
+				t.Errorf("FetchedAt = %v", r.FetchedAt)
+			}
+		})
+	}
+}
+
+func TestBuild_Routes(t *testing.T) {
+	t.Parallel()
+	codex, _ := writeFakeCodex(t, officialJSON, 0)
+	a, b := twoStubs(t)
+	res := build(t, buildOpts(t, codex, t.TempDir(), source("1", "主力", a.URL, nil), source("2", "备用", b.URL, nil)))
+
+	want := map[string]catalog.RelayRoute{
+		"relay-auto":          {ID: "1", Model: "auto", FromParams: true},
+		"relay-deepseek-v3.2": {ID: "1", Model: "deepseek-v3.2", FromParams: true},
+		"relay2-auto":         {ID: "2", Model: "auto", FromParams: true},
+		"relay2-gpt-a":        {ID: "2", Model: "gpt-a", FromParams: false},
+	}
+	if !reflect.DeepEqual(res.Routes, want) {
+		t.Errorf("Routes = %+v, want %+v", res.Routes, want)
+	}
+}
+
+func TestBuild_RelayOnly_NoOfficialModels(t *testing.T) {
+	t.Parallel()
+	codex, _ := writeFakeCodex(t, officialJSON, 0)
+	a, b := twoStubs(t)
+	dataDir := t.TempDir()
+	opts := buildOpts(t, codex, dataDir, source("1", "主力", a.URL, nil), source("2", "备用", b.URL, nil))
+	opts.RelayOnly = true
+	res := build(t, opts)
+
+	want := []any{"relay-auto", "relay-deepseek-v3.2", "relay2-auto", "relay2-gpt-a"}
+	if got := slugs(t, res); !reflect.DeepEqual(got, want) {
+		t.Errorf("Result.Models slugs = %v, want %v", got, want)
+	}
+	if got := slugsOf(catalogFileModels(t, dataDir)); !reflect.DeepEqual(got, want) {
+		t.Errorf("目录文件 slugs = %v, want %v", got, want)
+	}
+}
+
+func TestBuild_RelayOnly_RelayEntriesAndResultMatchFullCatalog(t *testing.T) {
+	t.Parallel()
+	codex, _ := writeFakeCodex(t, officialJSON, 0)
+	a, b := twoStubs(t)
+	mk := func(relayOnly bool) (*catalog.Result, []map[string]any) {
+		dataDir := t.TempDir()
+		opts := buildOpts(t, codex, dataDir, source("1", "主力", a.URL, nil), source("2", "备用", b.URL, nil))
+		opts.RelayOnly = relayOnly
+		return build(t, opts), catalogFileModels(t, dataDir)
+	}
+	only, onlyModels := mk(true)
+	full, fullModels := mk(false)
+	if !reflect.DeepEqual(onlyModels, fullModels[2:]) {
+		t.Errorf("只用中转的条目与完整目录里的中转条目不同:\n got  %v\n want %v", onlyModels, fullModels[2:])
+	}
+	tests := []struct {
+		name      string
+		got, want any
+	}{
+		{"RelayModels", only.RelayModels, full.RelayModels},
+		{"RelayShown", only.RelayShown, full.RelayShown},
+		{"RelayFromParams", only.RelayFromParams, full.RelayFromParams},
+		{"ReasoningLevels", only.ReasoningLevels, full.ReasoningLevels},
+		{"Routes", only.Routes, full.Routes},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if !reflect.DeepEqual(tt.got, tt.want) {
+				t.Errorf("RelayOnly = %v, 完整目录 = %v", tt.got, tt.want)
+			}
+		})
+	}
+	if len(full.Routes) == 0 || len(full.ReasoningLevels) == 0 {
+		t.Errorf("对照结果为空，用例无效: %v %v", full.Routes, full.ReasoningLevels)
+	}
+}
+
+func TestBuild_RelayOnly_OfficialListFails_ReturnsError(t *testing.T) {
+	t.Parallel()
+	codex, _ := writeFakeCodex(t, "", 1)
+	opts := buildOpts(t, codex, t.TempDir(), source("1", "主力", "", []string{"auto"}))
+	opts.RelayOnly = true
+	_, err := catalog.Build(context.Background(), opts)
+	if got := catalog.ErrorCode(err); got != "chatgpt_unsupported" {
+		t.Errorf("code = %q (err=%v)", got, err)
+	}
+}
+
+func TestBuild_RelayOnly_IgnoresAccountCache(t *testing.T) {
+	t.Parallel()
+	codex, _ := writeFakeCodex(t, officialJSON, 0)
+	cache := filepath.Join(t.TempDir(), "models_cache.json")
+	if err := os.WriteFile(cache, []byte(`{"models":[{"slug":"gpt-a"}]}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, relayOnly := range []bool{true, false} {
+		opts := buildOpts(t, codex, t.TempDir(), source("1", "主力", "", []string{"auto"}))
+		opts.ModelsCachePath = cache
+		opts.RelayOnly = relayOnly
+		want := []any{"gpt-a", "relay-auto"}
+		if relayOnly {
+			want = []any{"relay-auto"}
+		}
+		if got := slugs(t, build(t, opts)); !reflect.DeepEqual(got, want) {
+			t.Errorf("RelayOnly=%v slugs = %v, want %v", relayOnly, got, want)
 		}
 	}
 }
 
-func TestBuild_RelayFails_UsesLastSuccessfulRecord(t *testing.T) {
-	codex, _ := writeFakeCodex(t, officialJSON, 0)
-	dataDir := t.TempDir()
-	if err := catalog.NewStore(dataDir).SaveRelayModels([]string{"deepseek-v3.2", "unknown-model-x"}, time.Now()); err != nil {
-		t.Fatal(err)
+func seedBothCaches(t *testing.T, codex, dataDir string, a, b *relayStub) {
+	t.Helper()
+	build(t, buildOpts(t, codex, dataDir, source("1", "主力", a.URL, nil), source("2", "备用", b.URL, nil)))
+	for _, name := range []string{"relay-models-1.json", "relay-models-2.json"} {
+		if _, err := os.Stat(filepath.Join(dataDir, name)); err != nil {
+			t.Fatalf("成功获取后应写出缓存 %s: %v", name, err)
+		}
 	}
-	srv := relayServer(t, 500, secretBody)
+}
 
-	res, err := catalog.Build(context.Background(), buildOpts(t, codex, srv.URL, dataDir))
-	if err != nil {
-		t.Fatalf("Build: %v", err)
-	}
-	if got := catalog.ErrorCode(res.RelayErr); got != "relay_5xx" {
-		t.Errorf("RelayErr code = %q", got)
-	}
-	want := []any{"gpt-a", "gpt-b", "relay-deepseek-v3.2"}
+func TestBuild_SecondRelayFails_WithCache_KeepsCachedModelsMarkedStale(t *testing.T) {
+	t.Parallel()
+	codex, _ := writeFakeCodex(t, officialJSON, 0)
+	a, b := twoStubs(t)
+	dataDir := t.TempDir()
+	seedBothCaches(t, codex, dataDir, a, b)
+	seeded := relayResult(t, build(t, buildOpts(t, codex, dataDir, source("1", "主力", a.URL, nil), source("2", "备用", b.URL, nil))), "2")
+	cacheBefore := readFileT(t, filepath.Join(dataDir, "relay-models-2.json"))
+	b.status.Store(500)
+
+	res := build(t, buildOpts(t, codex, dataDir, source("1", "主力", a.URL, nil), source("2", "备用", b.URL, nil)))
+
+	want := []any{"gpt-a", "gpt-b", "relay-auto", "relay-deepseek-v3.2", "relay2-auto", "relay2-gpt-a"}
 	if got := slugs(t, res); !reflect.DeepEqual(got, want) {
 		t.Errorf("slugs = %v, want %v", got, want)
 	}
-	ids, _, _, _ := catalog.NewStore(dataDir).LoadRelayModels()
-	if !reflect.DeepEqual(ids, []string{"deepseek-v3.2", "unknown-model-x"}) {
-		t.Errorf("失败时不应覆盖上次记录: %v", ids)
+	r2 := relayResult(t, res, "2")
+	if !r2.Stale || catalog.ErrorCode(r2.Err) != "relay_5xx" {
+		t.Errorf("配置 2: Stale = %v, Err = %v", r2.Stale, r2.Err)
+	}
+	if r2.ModelCount != 2 {
+		t.Errorf("配置 2 ModelCount = %d, want 2", r2.ModelCount)
+	}
+	if !r2.FetchedAt.Equal(seeded.FetchedAt) && r2.FetchedAt.Sub(seeded.FetchedAt).Abs() > time.Second {
+		t.Errorf("没更新时 FetchedAt 应是缓存里的获取时间: %v vs %v", r2.FetchedAt, seeded.FetchedAt)
+	}
+	r1 := relayResult(t, res, "1")
+	if r1.Stale || r1.Err != nil {
+		t.Errorf("配置 1 不受影响: Stale = %v, Err = %v", r1.Stale, r1.Err)
+	}
+	if got := readFileT(t, filepath.Join(dataDir, "relay-models-2.json")); got != cacheBefore {
+		t.Errorf("获取失败时不应覆盖缓存:\n got  %s\n want %s", got, cacheBefore)
 	}
 }
 
-func TestBuild_RelayFails_NoRecord_OnlyOfficial(t *testing.T) {
+func TestBuild_SecondRelayFails_NoCache_NoModelsFirstUnaffected(t *testing.T) {
+	t.Parallel()
+	codex, _ := writeFakeCodex(t, officialJSON, 0)
+	a := newRelayStub(t, 200, `{"data":[{"id":"auto"}]}`)
+	b := newRelayStub(t, 401, "")
+	dataDir := t.TempDir()
+
+	res := build(t, buildOpts(t, codex, dataDir, source("1", "主力", a.URL, nil), source("2", "备用", b.URL, nil)))
+
+	if got, want := slugs(t, res), []any{"gpt-a", "gpt-b", "relay-auto"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("slugs = %v, want %v", got, want)
+	}
+	r2 := relayResult(t, res, "2")
+	if catalog.ErrorCode(r2.Err) != "relay_401" || r2.ModelCount != 0 || !r2.FetchedAt.IsZero() {
+		t.Errorf("配置 2 = %+v", r2)
+	}
+	r1 := relayResult(t, res, "1")
+	if r1.Err != nil || r1.Stale || r1.ModelCount != 1 {
+		t.Errorf("配置 1 = %+v", r1)
+	}
+	if _, err := os.Stat(filepath.Join(dataDir, "relay-models-2.json")); !os.IsNotExist(err) {
+		t.Errorf("从未成功过不应产生缓存文件: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dataDir, "model-bridge-catalog.json")); err != nil {
+		t.Errorf("目录文件没写出: %v", err)
+	}
+}
+
+func TestBuild_FirstRelayFails_SecondStillBuilt(t *testing.T) {
+	t.Parallel()
+	codex, _ := writeFakeCodex(t, officialJSON, 0)
+	a := newRelayStub(t, 500, secretBody)
+	b := newRelayStub(t, 200, `{"data":[{"id":"auto"}]}`)
+	res := build(t, buildOpts(t, codex, t.TempDir(), source("1", "主力", a.URL, nil), source("2", "备用", b.URL, nil)))
+	if got, want := slugs(t, res), []any{"gpt-a", "gpt-b", "relay2-auto"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("slugs = %v, want %v", got, want)
+	}
+	if err := relayResult(t, res, "1").Err; err == nil || strings.Contains(err.Error(), secretBody) {
+		t.Errorf("配置 1 Err = %v", err)
+	}
+}
+
+func TestBuild_RelayFails_CorruptCache_TreatedAsNoCache(t *testing.T) {
+	t.Parallel()
 	codex, _ := writeFakeCodex(t, officialJSON, 0)
 	dataDir := t.TempDir()
-	srv := relayServer(t, 401, "")
-
-	res, err := catalog.Build(context.Background(), buildOpts(t, codex, srv.URL, dataDir))
-	if err != nil {
-		t.Fatalf("Build: %v", err)
+	if err := os.WriteFile(filepath.Join(dataDir, "relay-models-1.json"), []byte("not json"), 0o644); err != nil {
+		t.Fatal(err)
 	}
-	if got := catalog.ErrorCode(res.RelayErr); got != "relay_401" {
-		t.Errorf("RelayErr code = %q", got)
-	}
+	srv := newRelayStub(t, 500, "")
+	res := build(t, buildOpts(t, codex, dataDir, source("1", "主力", srv.URL, nil)))
 	if got, want := slugs(t, res), []any{"gpt-a", "gpt-b"}; !reflect.DeepEqual(got, want) {
 		t.Errorf("slugs = %v, want %v", got, want)
 	}
-	if _, err := os.Stat(filepath.Join(dataDir, "relay-models.json")); !os.IsNotExist(err) {
-		t.Errorf("从未成功过不应产生记录文件: %v", err)
+	if got := catalog.ErrorCode(relayResult(t, res, "1").Err); got != "relay_5xx" {
+		t.Errorf("Err code = %q", got)
 	}
 	if _, err := os.Stat(filepath.Join(dataDir, "model-bridge-catalog.json")); err != nil {
-		t.Errorf("合并目录没写出: %v", err)
+		t.Errorf("目录文件没写出: %v", err)
+	}
+}
+
+func TestBuild_OnlySecondRelayPrefetched_NoRequestToEitherRelay(t *testing.T) {
+	t.Parallel()
+	codex, _ := writeFakeCodex(t, officialJSON, 0)
+	a, b := twoStubs(t)
+	dataDir := t.TempDir()
+	seedBothCaches(t, codex, dataDir, a, b)
+	a.hits.Store(0)
+	b.hits.Store(0)
+
+	res := build(t, buildOpts(t, codex, dataDir,
+		sourceMode("1", "主力", a.URL, catalog.CacheOnly, nil),
+		sourceMode("2", "备用", b.URL, catalog.UseGiven, []string{"deepseek-v3.2"})))
+
+	if a.hits.Load() != 0 || b.hits.Load() != 0 {
+		t.Errorf("请求次数 a=%d b=%d, want 0", a.hits.Load(), b.hits.Load())
+	}
+	want := []any{"gpt-a", "gpt-b", "relay-auto", "relay-deepseek-v3.2", "relay2-deepseek-v3.2"}
+	if got := slugs(t, res); !reflect.DeepEqual(got, want) {
+		t.Errorf("slugs = %v, want %v（配置 1 用缓存，配置 2 用传入的列表）", got, want)
+	}
+	if r := relayResult(t, res, "1"); r.Err != nil || r.Stale {
+		t.Errorf("配置 1 用缓存不应带错误: %+v", r)
+	}
+	if r := relayResult(t, res, "2"); r.Err != nil || r.Stale || r.FetchedAt.IsZero() {
+		t.Errorf("配置 2 = %+v", r)
+	}
+	if !strings.Contains(readFileT(t, filepath.Join(dataDir, "relay-models-2.json")), "deepseek-v3.2") {
+		t.Error("传入的列表应写进配置 2 的缓存")
+	}
+	if !strings.Contains(readFileT(t, filepath.Join(dataDir, "model-bridge-catalog.json")), `"relay2-deepseek-v3.2"`) {
+		t.Error("目录文件里没有传入的模型")
+	}
+}
+
+func TestBuild_LegacyRelayModelsFile_ReadAsCacheOfID1(t *testing.T) {
+	t.Parallel()
+	codex, _ := writeFakeCodex(t, officialJSON, 0)
+	dataDir := t.TempDir()
+	at := "2026-01-02T03:04:05Z"
+	legacy := `{"fetched_at":"` + at + `","ids":["deepseek-v3.2","auto"]}`
+	if err := os.WriteFile(filepath.Join(dataDir, "relay-models.json"), []byte(legacy), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	a := newRelayStub(t, 500, "")
+	b := newRelayStub(t, 500, "")
+
+	res := build(t, buildOpts(t, codex, dataDir, source("1", "主力", a.URL, nil), source("2", "备用", b.URL, nil)))
+
+	if got, want := slugs(t, res), []any{"gpt-a", "gpt-b", "relay-auto", "relay-deepseek-v3.2"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("slugs = %v, want %v（旧文件只当编号 1 的缓存）", got, want)
+	}
+	r1 := relayResult(t, res, "1")
+	wantAt, _ := time.Parse(time.RFC3339, at)
+	if !r1.Stale || !r1.FetchedAt.Equal(wantAt) || r1.ModelCount != 2 {
+		t.Errorf("配置 1 = %+v", r1)
+	}
+}
+
+func TestBuild_NewCacheOfID1_WinsOverLegacyFile(t *testing.T) {
+	t.Parallel()
+	codex, _ := writeFakeCodex(t, officialJSON, 0)
+	dataDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dataDir, "relay-models.json"), []byte(`{"fetched_at":"2026-01-02T03:04:05Z","ids":["deepseek-v3.2"]}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ok := newRelayStub(t, 200, `{"data":[{"id":"auto"}]}`)
+	build(t, buildOpts(t, codex, dataDir, source("1", "主力", ok.URL, nil)))
+	ok.status.Store(500)
+
+	res := build(t, buildOpts(t, codex, dataDir, source("1", "主力", ok.URL, nil)))
+	if got, want := slugs(t, res), []any{"gpt-a", "gpt-b", "relay-auto"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("slugs = %v, want %v", got, want)
+	}
+}
+
+func TestBuild_LegacyRelayModelsFile_NotUsedForOtherIDs(t *testing.T) {
+	t.Parallel()
+	codex, _ := writeFakeCodex(t, officialJSON, 0)
+	dataDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dataDir, "relay-models.json"), []byte(`{"fetched_at":"2026-01-02T03:04:05Z","ids":["auto"]}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	b := newRelayStub(t, 500, "")
+	res := build(t, buildOpts(t, codex, dataDir, source("2", "备用", b.URL, nil)))
+	if got, want := slugs(t, res), []any{"gpt-a", "gpt-b"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("slugs = %v, want %v", got, want)
+	}
+}
+
+func TestBuild_DefaultModel(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name string
+		ids1 []string
+		ids2 []string
+		want string
+	}{
+		{"两个配置都有 auto 取第一个", []string{"auto"}, []string{"auto"}, "relay-auto"},
+		{"第一个没有 auto 取第二个", []string{"deepseek-v3.2"}, []string{"auto"}, "relay2-auto"},
+		{"都没有 auto 为空", []string{"deepseek-v3.2"}, []string{"gpt-a"}, ""},
+		{"第一个没有模型取第二个", []string{}, []string{"deepseek-v3.2", "auto"}, "relay2-auto"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			codex, _ := writeFakeCodex(t, officialJSON, 0)
+			res := build(t, buildOpts(t, codex, t.TempDir(),
+				source("1", "甲", "", tt.ids1), source("2", "乙", "", tt.ids2)))
+			if res.DefaultModel != tt.want {
+				t.Errorf("DefaultModel = %q, want %q", res.DefaultModel, tt.want)
+			}
+		})
+	}
+}
+
+func TestBuild_DefaultModel_FirstRelayFailedWithoutCache_UsesSecond(t *testing.T) {
+	t.Parallel()
+	codex, _ := writeFakeCodex(t, officialJSON, 0)
+	a := newRelayStub(t, 500, "")
+	b := newRelayStub(t, 200, `{"data":[{"id":"auto"}]}`)
+	res := build(t, buildOpts(t, codex, t.TempDir(), source("1", "主力", a.URL, nil), source("2", "备用", b.URL, nil)))
+	if res.DefaultModel != "relay2-auto" {
+		t.Errorf("DefaultModel = %q, want relay2-auto", res.DefaultModel)
+	}
+}
+
+func TestBuild_NoRelays_OnlyOfficial(t *testing.T) {
+	t.Parallel()
+	codex, _ := writeFakeCodex(t, officialJSON, 0)
+	res := build(t, buildOpts(t, codex, t.TempDir()))
+	if got, want := slugs(t, res), []any{"gpt-a", "gpt-b"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("slugs = %v, want %v", got, want)
+	}
+	if len(res.Relays) != 0 || len(res.Routes) != 0 || res.DefaultModel != "" {
+		t.Errorf("Relays = %v, Routes = %v, DefaultModel = %q", res.Relays, res.Routes, res.DefaultModel)
 	}
 }
 
 func TestBuild_OfficialErrors(t *testing.T) {
-	srv := relayServer(t, 200, `{"data":[]}`)
+	t.Parallel()
+	srv := newRelayStub(t, 200, `{"data":[]}`)
 	t.Run("codex 不存在", func(t *testing.T) {
-		_, err := catalog.Build(context.Background(), buildOpts(t, filepath.Join(t.TempDir(), "nope"), srv.URL, t.TempDir()))
+		t.Parallel()
+		_, err := catalog.Build(context.Background(), buildOpts(t, filepath.Join(t.TempDir(), "nope"), t.TempDir(), source("1", "主力", srv.URL, nil)))
 		if got := catalog.ErrorCode(err); got != "chatgpt_not_found" {
 			t.Errorf("code = %q (err=%v)", got, err)
 		}
 	})
 	t.Run("输出非法 JSON", func(t *testing.T) {
+		t.Parallel()
 		codex, _ := writeFakeCodex(t, "not json", 0)
 		dataDir := t.TempDir()
-		_, err := catalog.Build(context.Background(), buildOpts(t, codex, srv.URL, dataDir))
+		_, err := catalog.Build(context.Background(), buildOpts(t, codex, dataDir, source("1", "主力", srv.URL, nil)))
 		if got := catalog.ErrorCode(err); got != "chatgpt_unsupported" {
 			t.Errorf("code = %q (err=%v)", got, err)
 		}
@@ -162,81 +655,15 @@ func TestBuild_OfficialErrors(t *testing.T) {
 	})
 }
 
-func TestBuild_RelaySuccess_FillsFetchedAt(t *testing.T) {
-	codex, _ := writeFakeCodex(t, officialJSON, 0)
-	srv := relayServer(t, 200, `{"data":[{"id":"auto"}]}`)
-	before := time.Now().Add(-time.Second)
-	res, err := catalog.Build(context.Background(), buildOpts(t, codex, srv.URL, t.TempDir()))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if res.RelayFetchedAt.Before(before) || res.RelayFetchedAt.After(time.Now().Add(time.Second)) {
-		t.Errorf("RelayFetchedAt = %v", res.RelayFetchedAt)
-	}
-}
-
-func TestBuild_RelayFails_FetchedAtFromRecord(t *testing.T) {
+func TestBuild_SaveCacheFails_StillWritesCatalog(t *testing.T) {
+	t.Parallel()
 	codex, _ := writeFakeCodex(t, officialJSON, 0)
 	dataDir := t.TempDir()
-	at := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
-	if err := catalog.NewStore(dataDir).SaveRelayModels([]string{"auto"}, at); err != nil {
+	if err := os.Mkdir(filepath.Join(dataDir, "relay-models-1.json"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	srv := relayServer(t, 500, "")
-	res, err := catalog.Build(context.Background(), buildOpts(t, codex, srv.URL, dataDir))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !res.RelayFetchedAt.Equal(at) {
-		t.Errorf("RelayFetchedAt = %v, want %v", res.RelayFetchedAt, at)
-	}
-}
-
-func TestBuild_RelayFails_NoRecord_FetchedAtZero(t *testing.T) {
-	codex, _ := writeFakeCodex(t, officialJSON, 0)
-	srv := relayServer(t, 500, "")
-	res, err := catalog.Build(context.Background(), buildOpts(t, codex, srv.URL, t.TempDir()))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !res.RelayFetchedAt.IsZero() {
-		t.Errorf("RelayFetchedAt = %v", res.RelayFetchedAt)
-	}
-}
-
-func TestBuild_RelayFails_CorruptRecord_TreatedAsNoRecord(t *testing.T) {
-	codex, _ := writeFakeCodex(t, officialJSON, 0)
-	dataDir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dataDir, "relay-models.json"), []byte("not json"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	srv := relayServer(t, 500, "")
-	res, err := catalog.Build(context.Background(), buildOpts(t, codex, srv.URL, dataDir))
-	if err != nil {
-		t.Fatalf("Build: %v", err)
-	}
-	if got := catalog.ErrorCode(res.RelayErr); got != "relay_5xx" {
-		t.Errorf("RelayErr code = %q", got)
-	}
-	if got, want := slugs(t, res), []any{"gpt-a", "gpt-b"}; !reflect.DeepEqual(got, want) {
-		t.Errorf("slugs = %v, want %v", got, want)
-	}
-	if _, err := os.Stat(filepath.Join(dataDir, "model-bridge-catalog.json")); err != nil {
-		t.Errorf("合并目录没写出: %v", err)
-	}
-}
-
-func TestBuild_RelaySuccess_SaveFails_StillWritesCatalog(t *testing.T) {
-	codex, _ := writeFakeCodex(t, officialJSON, 0)
-	dataDir := t.TempDir()
-	if err := os.Mkdir(filepath.Join(dataDir, "relay-models.json"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	srv := relayServer(t, 200, `{"data":[{"id":"auto"}]}`)
-	res, err := catalog.Build(context.Background(), buildOpts(t, codex, srv.URL, dataDir))
-	if err != nil {
-		t.Fatalf("Build: %v", err)
-	}
+	srv := newRelayStub(t, 200, `{"data":[{"id":"auto"}]}`)
+	res := build(t, buildOpts(t, codex, dataDir, source("1", "主力", srv.URL, nil)))
 	if res.StoreErr == nil {
 		t.Error("StoreErr 应不为空")
 	}
@@ -248,47 +675,18 @@ func TestBuild_RelaySuccess_SaveFails_StillWritesCatalog(t *testing.T) {
 	}
 }
 
-func TestBuild_PrefetchedRelayIDs_SkipsRequest(t *testing.T) {
+func TestBuild_DoesNotReadCodexAuth(t *testing.T) {
+	origHome := t.TempDir()
+	if err := os.WriteFile(filepath.Join(origHome, "auth.json"), []byte("x"), 0o000); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("CODEX_HOME", origHome)
 	codex, _ := writeFakeCodex(t, officialJSON, 0)
-	var hits int
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		hits++
-		w.WriteHeader(500)
-	}))
-	t.Cleanup(srv.Close)
-	dataDir := t.TempDir()
-	opts := buildOpts(t, codex, srv.URL, dataDir)
-	opts.RelayIDs = []string{"auto"}
-
-	before := time.Now().Add(-time.Second)
-	res, err := catalog.Build(context.Background(), opts)
-	if err != nil {
-		t.Fatal(err)
+	srv := newRelayStub(t, 200, `{"data":[{"id":"auto"}]}`)
+	res := build(t, buildOpts(t, codex, t.TempDir(), source("1", "主力", srv.URL, nil)))
+	if got, want := slugs(t, res), []any{"gpt-a", "gpt-b", "relay-auto"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("slugs = %v, want %v", got, want)
 	}
-	if hits != 0 || res.RelayErr != nil {
-		t.Errorf("hits = %d, RelayErr = %v", hits, res.RelayErr)
-	}
-	if res.RelayFetchedAt.Before(before) {
-		t.Errorf("RelayFetchedAt = %v", res.RelayFetchedAt)
-	}
-	if !reflect.DeepEqual(slugs(t, res)[len(slugs(t, res))-1], "relay-auto") {
-		t.Errorf("slugs = %v", slugs(t, res))
-	}
-	if !strings.Contains(readFileT(t, filepath.Join(dataDir, "model-bridge-catalog.json")), `"relay-auto"`) {
-		t.Error("合并目录里没有传入的模型")
-	}
-	if !strings.Contains(readFileT(t, filepath.Join(dataDir, "relay-models.json")), `"auto"`) {
-		t.Error("没有保存 relay-models.json")
-	}
-}
-
-func readFileT(t *testing.T, path string) string {
-	t.Helper()
-	b, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return string(b)
 }
 
 const sameNameOfficialJSON = `{"models":[
@@ -313,76 +711,31 @@ func sameNameParams() []catalog.Param {
 	}
 }
 
-func buildSameName(t *testing.T, ids []string) (*catalog.Result, []map[string]any) {
+func buildWithParams(t *testing.T, officialStdout string, params []catalog.Param, ids []string) (*catalog.Result, []map[string]any) {
 	t.Helper()
-	codex, _ := writeFakeCodex(t, sameNameOfficialJSON, 0)
-	opts := buildOpts(t, codex, "", t.TempDir())
-	opts.Params = sameNameParams()
-	opts.RelayIDs = ids
-	res, err := catalog.Build(context.Background(), opts)
-	if err != nil {
-		t.Fatalf("Build: %v", err)
-	}
+	codex, _ := writeFakeCodex(t, officialStdout, 0)
+	opts := buildOpts(t, codex, t.TempDir(), source("1", "主力", "", ids))
+	opts.Params = params
+	res := build(t, opts)
 	return res, roundtrip(t, res.Models)
 }
 
-func bySlug(t *testing.T, models []map[string]any, slug string) map[string]any {
+func buildSameName(t *testing.T, ids []string) (*catalog.Result, []map[string]any) {
 	t.Helper()
-	for _, m := range models {
-		if m["slug"] == slug {
-			return m
-		}
-	}
-	t.Fatalf("目录里没有 %s", slug)
-	return nil
-}
-
-func TestBuild_RelayEntriesUsePrefixedSlugAndSuffixedDisplayName(t *testing.T) {
-	_, models := buildSameName(t, []string{"glm-5.3", "auto", "gpt-x"})
-	tests := []struct{ slug, display string }{
-		{"relay-glm-5.3", "中台 · glm-5.3"},
-		{"relay-auto", "中台 · auto"},
-		{"relay-gpt-x", "中台 · gpt-x"},
-	}
-	for _, tt := range tests {
-		t.Run(tt.slug, func(t *testing.T) {
-			if got := bySlug(t, models, tt.slug)["display_name"]; got != tt.display {
-				t.Errorf("display_name = %v, want %s", got, tt.display)
-			}
-		})
-	}
+	return buildWithParams(t, sameNameOfficialJSON, sameNameParams(), ids)
 }
 
 func TestBuild_SameNameRelayModels_OnlyOfficialOrParamsListed(t *testing.T) {
+	t.Parallel()
 	_, models := buildSameName(t, []string{"gpt-h", "unknown-model-x", "gpt-x"})
-	var got []any
-	for _, m := range models {
-		got = append(got, m["slug"])
-	}
 	want := []any{"gpt-x", "gpt-h", "gpt-y", "relay-gpt-x", "relay-gpt-h"}
-	if !reflect.DeepEqual(got, want) {
-		t.Errorf("slugs = %v, want %v（两边都没有的不出现；中台没有的官方名 gpt-y 不加中台条目）", got, want)
-	}
-}
-
-func TestBuild_RelayOrder_ParamsTableThenOfficialSameName(t *testing.T) {
-	_, models := buildSameName(t, []string{"gpt-h", "glm-5.3", "gpt-x", "auto"})
-	var got []any
-	for _, m := range models[3:] {
-		got = append(got, m["slug"])
-	}
-	want := []any{"relay-auto", "relay-glm-5.3", "relay-gpt-x", "relay-gpt-h"}
-	if !reflect.DeepEqual(got, want) {
-		t.Errorf("中台条目顺序 = %v, want %v", got, want)
-	}
-	for i, m := range models[3:] {
-		if m["priority"] != float64(10+i) {
-			t.Errorf("%v priority = %v, want %d（官方最大值 9 之后连续递增）", m["slug"], m["priority"], 10+i)
-		}
+	if got := slugsOf(models); !reflect.DeepEqual(got, want) {
+		t.Errorf("slugs = %v, want %v（两边都没有的不出现；中转没有的官方名 gpt-y 不加中转条目）", got, want)
 	}
 }
 
 func TestBuild_OfficialEntriesUnchangedWithSameNameRelay(t *testing.T) {
+	t.Parallel()
 	_, models := buildSameName(t, []string{"gpt-x", "gpt-h", "auto"})
 	var file struct {
 		Models []map[string]any `json:"models"`
@@ -396,6 +749,7 @@ func TestBuild_OfficialEntriesUnchangedWithSameNameRelay(t *testing.T) {
 }
 
 func TestBuild_SameNameRelayEntry_CopiesOfficialParamsAndOverridesRelayFields(t *testing.T) {
+	t.Parallel()
 	_, models := buildSameName(t, []string{"gpt-x"})
 	official := bySlug(t, models, "gpt-x")
 	e := bySlug(t, models, "relay-gpt-x")
@@ -411,7 +765,8 @@ func TestBuild_SameNameRelayEntry_CopiesOfficialParamsAndOverridesRelayFields(t 
 		"additional_speed_tiers":       []any{},
 		"experimental_supported_tools": []any{},
 		"supported_in_api":             true,
-		"description":                  "中台模型",
+		"description":                  "中转模型",
+		"display_name":                 "主力 · gpt-x",
 	}
 	for k, want := range exact {
 		if !reflect.DeepEqual(e[k], want) {
@@ -426,13 +781,15 @@ func TestBuild_SameNameRelayEntry_CopiesOfficialParamsAndOverridesRelayFields(t 
 }
 
 func TestBuild_SameNameRelayEntry_HiddenOfficialStaysHidden(t *testing.T) {
+	t.Parallel()
 	_, models := buildSameName(t, []string{"gpt-h"})
 	if got := bySlug(t, models, "relay-gpt-h")["visibility"]; got != "hide" {
-		t.Errorf("visibility = %v，官方是 hide 时中台同名条目也应 hide", got)
+		t.Errorf("visibility = %v，官方是 hide 时中转同名条目也应 hide", got)
 	}
 }
 
 func TestBuild_NameInBothParamsAndOfficial_OfficialParamsWin(t *testing.T) {
+	t.Parallel()
 	_, models := buildSameName(t, []string{"gpt-x"})
 	e := bySlug(t, models, "relay-gpt-x")
 	if e["context_window"] != float64(400000) || !reflect.DeepEqual(e["input_modalities"], []any{"text", "image"}) || e["default_reasoning_level"] != "medium" {
@@ -441,51 +798,44 @@ func TestBuild_NameInBothParamsAndOfficial_OfficialParamsWin(t *testing.T) {
 }
 
 func TestBuild_ParamsOnlyRelayEntry_KeepsParamsTableValues(t *testing.T) {
+	t.Parallel()
 	_, models := buildSameName(t, []string{"glm-5.3"})
 	e := bySlug(t, models, "relay-glm-5.3")
-	if e["context_window"] != float64(128000) || e["default_reasoning_level"] != "high" || e["description"] != "中台模型" {
+	if e["context_window"] != float64(128000) || e["default_reasoning_level"] != "high" || e["description"] != "中转模型" {
 		t.Errorf("参数表模型的参数不对: %v", e)
 	}
 }
 
 func TestBuild_ReasoningLevelsIncludeSameNameOfficialLevels(t *testing.T) {
+	t.Parallel()
 	res, _ := buildSameName(t, []string{"gpt-h", "gpt-x", "glm-5.3"})
-	want := []string{"high", "low", "medium", "xhigh"}
-	if !reflect.DeepEqual(res.ReasoningLevels, want) {
-		t.Errorf("ReasoningLevels = %v, want %v（参数表 glm-5.3 的 high，再是同名 gpt-x 官方的 low/medium/xhigh，gpt-h 的 high 去重）", res.ReasoningLevels, want)
+	got := append([]string(nil), res.ReasoningLevels...)
+	for _, l := range []string{"high", "low", "medium", "xhigh"} {
+		n := 0
+		for _, g := range got {
+			if g == l {
+				n++
+			}
+		}
+		if n != 1 {
+			t.Errorf("ReasoningLevels = %v，%s 应出现且只出现一次", got, l)
+		}
+	}
+	if len(got) != 4 {
+		t.Errorf("ReasoningLevels = %v, want 4 个等级", got)
 	}
 }
 
 func TestBuild_RelayHasOnlyUnknownModels_OnlyOfficial(t *testing.T) {
+	t.Parallel()
 	res, models := buildSameName(t, []string{"unknown-model-x"})
-	if len(models) != 3 || len(res.ReasoningLevels) != 0 {
-		t.Errorf("models = %d, levels = %v", len(models), res.ReasoningLevels)
+	if len(models) != 3 || len(res.ReasoningLevels) != 0 || len(res.Routes) != 0 {
+		t.Errorf("models = %d, levels = %v, routes = %v", len(models), res.ReasoningLevels, res.Routes)
 	}
-}
-
-func buildWithParams(t *testing.T, officialJSON string, params []catalog.Param, ids []string) (*catalog.Result, []map[string]any) {
-	t.Helper()
-	codex, _ := writeFakeCodex(t, officialJSON, 0)
-	opts := buildOpts(t, codex, "", t.TempDir())
-	opts.Params = params
-	opts.RelayIDs = ids
-	res, err := catalog.Build(context.Background(), opts)
-	if err != nil {
-		t.Fatalf("Build: %v", err)
-	}
-	return res, roundtrip(t, res.Models)
-}
-
-func efforts(t *testing.T, e map[string]any) []any {
-	t.Helper()
-	var out []any
-	for _, l := range e["supported_reasoning_levels"].([]any) {
-		out = append(out, l.(map[string]any)["effort"])
-	}
-	return out
 }
 
 func TestBuild_ParamsTableMaxLevelWrittenAsUltra(t *testing.T) {
+	t.Parallel()
 	params := []catalog.Param{
 		{ID: "m-max", ContextWindow: 1, InputModalities: []string{"text"}, ReasoningLevels: []string{"low", "high", "max"}, DefaultReasoningLevel: strp("max"), Source: "s"},
 		{ID: "m-high", ContextWindow: 1, InputModalities: []string{"text"}, ReasoningLevels: []string{"none", "high", "max"}, DefaultReasoningLevel: strp("high"), Source: "s"},
@@ -512,6 +862,7 @@ func TestBuild_ParamsTableMaxLevelWrittenAsUltra(t *testing.T) {
 }
 
 func TestBuild_SameNameRelayKeepsOfficialMaxAndUltra(t *testing.T) {
+	t.Parallel()
 	const official = `{"models":[{"slug":"gpt-x","priority":3,"supported_reasoning_levels":[{"effort":"high","description":"h"},{"effort":"max","description":"m"},{"effort":"ultra","description":"u"}],"default_reasoning_level":"max"}]}`
 	res, models := buildWithParams(t, official, nil, []string{"gpt-x"})
 	e := bySlug(t, models, "relay-gpt-x")
@@ -526,164 +877,147 @@ func TestBuild_SameNameRelayKeepsOfficialMaxAndUltra(t *testing.T) {
 	}
 }
 
-func TestBuild_DisplayName_GptPrefixedNamesUseLeadingLabel(t *testing.T) {
-	params := []catalog.Param{
-		{ID: "GPT-Y", ContextWindow: 1, InputModalities: []string{"text"}, Source: "s"},
-		{ID: "glm-5.3", ContextWindow: 1, InputModalities: []string{"text"}, Source: "s"},
-		{ID: "my-gpt-1", ContextWindow: 1, InputModalities: []string{"text"}, Source: "s"},
-	}
-	_, models := buildWithParams(t, officialJSON, params, []string{"GPT-Y", "glm-5.3", "my-gpt-1"})
-	tests := []struct{ slug, display string }{
-		{"relay-GPT-Y", "中台 · GPT-Y"},
-		{"relay-glm-5.3", "中台 · glm-5.3"},
-		{"relay-my-gpt-1", "中台 · my-gpt-1"},
-	}
-	for _, tt := range tests {
-		t.Run(tt.slug, func(t *testing.T) {
-			if got := bySlug(t, models, tt.slug)["display_name"]; got != tt.display {
-				t.Errorf("display_name = %v, want %s", got, tt.display)
-			}
-		})
-	}
-}
-
-func relayOnlyParams() []catalog.Param {
-	return []catalog.Param{
-		{ID: "glm-5.3", ContextWindow: 128000, InputModalities: []string{"text", "image"}, ReasoningLevels: []string{"low", "max"}, DefaultReasoningLevel: strp("max"), Source: "s"},
-	}
-}
-
-func buildRelayOnly(t *testing.T, relayOnly bool, cachePath, officialStdout string, exitCode int) (*catalog.Result, []map[string]any, error) {
-	t.Helper()
-	codex, _ := writeFakeCodex(t, officialStdout, exitCode)
+func TestBuild_RefreshOneRelay_TargetFails_OnlyTargetContacted(t *testing.T) {
+	t.Parallel()
+	codex, _ := writeFakeCodex(t, officialJSON, 0)
+	a, b := twoStubs(t)
 	dataDir := t.TempDir()
-	opts := buildOpts(t, codex, "", dataDir)
-	opts.Params = relayOnlyParams()
-	opts.RelayIDs = []string{"glm-5.3", "gpt-a", "unknown-x"}
-	opts.ModelsCachePath = cachePath
-	opts.RelayOnly = relayOnly
-	res, err := catalog.Build(context.Background(), opts)
-	if err != nil {
-		return nil, nil, err
+	seedBothCaches(t, codex, dataDir, a, b)
+	a.status.Store(500)
+	a.hits.Store(0)
+	b.hits.Store(0)
+
+	res := build(t, buildOpts(t, codex, dataDir,
+		sourceMode("1", "主力", a.URL, catalog.FetchRemote, nil),
+		sourceMode("2", "备用", b.URL, catalog.CacheOnly, nil)))
+
+	if a.hits.Load() == 0 || b.hits.Load() != 0 {
+		t.Errorf("请求次数 a=%d b=%d，只应请求配置 1", a.hits.Load(), b.hits.Load())
 	}
-	var file struct {
-		Models []map[string]any `json:"models"`
+	r1 := relayResult(t, res, "1")
+	if !r1.Stale || catalog.ErrorCode(r1.Err) != "relay_5xx" || r1.ModelCount != 2 {
+		t.Errorf("配置 1 = %+v", r1)
 	}
-	if err := json.Unmarshal([]byte(readFileT(t, filepath.Join(dataDir, "model-bridge-catalog.json"))), &file); err != nil {
-		t.Fatal(err)
+	r2 := relayResult(t, res, "2")
+	if r2.Stale || r2.Err != nil || r2.ModelCount != 2 {
+		t.Errorf("配置 2 = %+v", r2)
 	}
-	return res, file.Models, nil
+	want := []any{"gpt-a", "gpt-b", "relay-auto", "relay-deepseek-v3.2", "relay2-auto", "relay2-gpt-a"}
+	if got := slugs(t, res); !reflect.DeepEqual(got, want) {
+		t.Errorf("slugs = %v, want %v", got, want)
+	}
 }
 
-func accountCache(t *testing.T) string {
-	t.Helper()
-	p := filepath.Join(t.TempDir(), "models_cache.json")
-	if err := os.WriteFile(p, []byte(`{"models":[{"slug":"gpt-a"}]}`), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	return p
-}
+func TestBuild_AllCacheOnly_NoRequests(t *testing.T) {
+	t.Parallel()
+	codex, _ := writeFakeCodex(t, officialJSON, 0)
+	a, b := twoStubs(t)
+	dataDir := t.TempDir()
+	seedBothCaches(t, codex, dataDir, a, b)
+	a.hits.Store(0)
+	b.hits.Store(0)
 
-func slugsOf(models []map[string]any) []any {
-	var out []any
-	for _, m := range models {
-		out = append(out, m["slug"])
-	}
-	return out
-}
+	res := build(t, buildOpts(t, codex, dataDir,
+		sourceMode("1", "主力", a.URL, catalog.CacheOnly, nil),
+		sourceMode("2", "备用", b.URL, catalog.CacheOnly, nil)))
 
-func relayPrefixed(models []map[string]any) []map[string]any {
-	var out []map[string]any
-	for _, m := range models {
-		if s, _ := m["slug"].(string); strings.HasPrefix(s, "relay-") {
-			out = append(out, m)
+	if a.hits.Load() != 0 || b.hits.Load() != 0 {
+		t.Errorf("请求次数 a=%d b=%d, want 0", a.hits.Load(), b.hits.Load())
+	}
+	for _, id := range []string{"1", "2"} {
+		r := relayResult(t, res, id)
+		if r.Stale || r.Err != nil || r.FetchedAt.IsZero() || r.ModelCount != 2 {
+			t.Errorf("配置 %s = %+v", id, r)
 		}
 	}
-	return out
 }
 
-func TestBuild_RelayOnly(t *testing.T) {
-	missingCache := filepath.Join(t.TempDir(), "missing", "models_cache.json")
-	tests := []struct {
-		name  string
-		cache func(t *testing.T) string
-	}{
-		{"账号缓存只含 gpt-a", accountCache},
-		{"账号缓存文件不存在", func(*testing.T) string { return missingCache }},
+func TestBuild_CacheOnly_NoCache_NoModelsNoError(t *testing.T) {
+	t.Parallel()
+	codex, _ := writeFakeCodex(t, officialJSON, 0)
+	a, _ := twoStubs(t)
+	res := build(t, buildOpts(t, codex, t.TempDir(), sourceMode("1", "主力", a.URL, catalog.CacheOnly, nil)))
+	if a.hits.Load() != 0 {
+		t.Errorf("请求次数 = %d, want 0", a.hits.Load())
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			res, fileModels, err := buildRelayOnly(t, true, tt.cache(t), officialJSON, 0)
-			if err != nil {
-				t.Fatalf("Build: %v", err)
-			}
-			want := []any{"relay-glm-5.3", "relay-gpt-a"}
-			if got := slugsOf(fileModels); !reflect.DeepEqual(got, want) {
-				t.Errorf("目录文件 slugs = %v, want %v", got, want)
-			}
-			if got := slugs(t, res); !reflect.DeepEqual(got, want) {
-				t.Errorf("Result.Models slugs = %v, want %v", got, want)
-			}
-		})
+	r := relayResult(t, res, "1")
+	if r.Err != nil || r.ModelCount != 0 || !r.FetchedAt.IsZero() {
+		t.Errorf("配置 1 = %+v", r)
+	}
+	if got, want := slugs(t, res), []any{"gpt-a", "gpt-b"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("slugs = %v, want %v", got, want)
 	}
 }
 
-func TestBuild_RelayOnly_RelayEntriesMatchFullCatalog(t *testing.T) {
-	cache := accountCache(t)
-	_, onlyModels, err := buildRelayOnly(t, true, cache, officialJSON, 0)
-	if err != nil {
-		t.Fatal(err)
+func TestBuild_UseGivenEmptySlice_NoRequestWritesCacheZeroModels(t *testing.T) {
+	t.Parallel()
+	codex, _ := writeFakeCodex(t, officialJSON, 0)
+	a, _ := twoStubs(t)
+	dataDir := t.TempDir()
+
+	res := build(t, buildOpts(t, codex, dataDir, sourceMode("1", "主力", a.URL, catalog.UseGiven, []string{})))
+
+	if a.hits.Load() != 0 {
+		t.Errorf("请求次数 = %d, want 0", a.hits.Load())
 	}
-	_, fullModels, err := buildRelayOnly(t, false, cache, officialJSON, 0)
-	if err != nil {
-		t.Fatal(err)
+	if _, err := os.Stat(filepath.Join(dataDir, "relay-models-1.json")); err != nil {
+		t.Errorf("空列表也应写缓存: %v", err)
 	}
-	wantRelay := relayPrefixed(fullModels)
-	if len(wantRelay) != 2 {
-		t.Fatalf("对照目录里的中台条目 = %d, want 2", len(wantRelay))
+	r := relayResult(t, res, "1")
+	if r.ModelCount != 0 || r.Err != nil || r.FetchedAt.IsZero() {
+		t.Errorf("配置 1 = %+v", r)
 	}
-	if !reflect.DeepEqual(onlyModels, wantRelay) {
-		t.Errorf("RelayOnly 条目与完整目录中 relay- 条目不同:\n got  %v\n want %v", onlyModels, wantRelay)
+	if got, want := slugs(t, res), []any{"gpt-a", "gpt-b"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("slugs = %v, want %v", got, want)
 	}
 }
 
-func TestBuild_RelayOnly_ResultFieldsMatchFullCatalog(t *testing.T) {
-	cache := accountCache(t)
-	only, _, err := buildRelayOnly(t, true, cache, officialJSON, 0)
-	if err != nil {
-		t.Fatal(err)
+func TestBuild_CacheAndCatalogFilesDoNotContainKeyOrHost(t *testing.T) {
+	t.Parallel()
+	codex, _ := writeFakeCodex(t, officialJSON, 0)
+	a, b := twoStubs(t)
+	dataDir := t.TempDir()
+	build(t, buildOpts(t, codex, dataDir,
+		sourceMode("1", "主力", a.URL, catalog.FetchRemote, nil),
+		sourceMode("2", "备用", b.URL, catalog.UseGiven, []string{"auto"})))
+
+	files, err := filepath.Glob(filepath.Join(dataDir, "*.json"))
+	if err != nil || len(files) != 3 {
+		t.Fatalf("数据目录里的 json = %v, err=%v, want 两个缓存加一个目录文件", files, err)
 	}
-	full, _, err := buildRelayOnly(t, false, cache, officialJSON, 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	tests := []struct {
-		name      string
-		got, want any
-	}{
-		{"RelayModels", only.RelayModels, full.RelayModels},
-		{"RelayShown", only.RelayShown, full.RelayShown},
-		{"RelayFromParams", only.RelayFromParams, full.RelayFromParams},
-		{"ReasoningLevels", only.ReasoningLevels, full.ReasoningLevels},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if !reflect.DeepEqual(tt.got, tt.want) {
-				t.Errorf("RelayOnly = %v, 完整目录 = %v", tt.got, tt.want)
+	hosts := []string{strings.TrimPrefix(a.URL, "http://"), strings.TrimPrefix(b.URL, "http://"), "127.0.0.1"}
+	for _, f := range files {
+		content := readFileT(t, f)
+		for _, secret := range append([]string{relayKey}, hosts...) {
+			if strings.Contains(content, secret) {
+				t.Errorf("%s 里出现了 %q", filepath.Base(f), secret)
 			}
-		})
-	}
-	if len(full.RelayModels) == 0 || len(full.ReasoningLevels) == 0 {
-		t.Errorf("对照结果为空，用例无效: %v %v", full.RelayModels, full.ReasoningLevels)
+		}
 	}
 }
 
-func TestBuild_RelayOnly_OfficialListFails_ReturnsError(t *testing.T) {
-	_, _, err := buildRelayOnly(t, true, accountCache(t), "", 1)
-	if err == nil {
-		t.Fatal("假 codex 失败时 Build 应返回错误")
+func TestBuild_FetchRemoteRelaysAreFetchedConcurrently(t *testing.T) {
+	t.Parallel()
+	codex, _ := writeFakeCodex(t, officialJSON, 0)
+	var relays []catalog.RelaySource
+	for _, id := range []string{"1", "2", "3"} {
+		srv := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+			<-r.Context().Done()
+		}))
+		t.Cleanup(srv.Close)
+		relays = append(relays, sourceMode(id, "配置"+id, srv.URL, catalog.FetchRemote, nil))
 	}
-	if got := catalog.ErrorCode(err); got != "chatgpt_unsupported" {
-		t.Errorf("code = %q (err=%v)", got, err)
+	opts := buildOpts(t, codex, t.TempDir(), relays...)
+	opts.RelayTimeout = time.Second
+
+	start := time.Now()
+	res := build(t, opts)
+	if elapsed := time.Since(start); elapsed >= 2500*time.Millisecond {
+		t.Errorf("Build 耗时 %v，3 个配置应并发获取（约一个超时），不是相加", elapsed)
+	}
+	for _, id := range []string{"1", "2", "3"} {
+		if relayResult(t, res, id).Err == nil {
+			t.Errorf("配置 %s 应因超时带错误", id)
+		}
 	}
 }

@@ -14,7 +14,7 @@ description: 官网和 README 里的「中台」改成「中转」，官网的 A
   - 「首次设置」图：大标题「连接中转服务」，加「名字」栏（「中转」）。
   - 「菜单栏菜单」图：「使用中转」，菜单栏图标换成新单色图标。
   - 图下说明文字、三步上手、两种接入方式、安全说明、常见问题里的「中台」都换成「中转」；「中台 · auto」等模型名改成「中转 · auto」；接入方式卡片的模型列表示意加上第二个配置（如「A家 · auto」）。
-- 页面仍只许出现白名单网址和示例 Key（`https://relay.example.com/v1`、`sk-example-0000`，第二个配置示例用 `https://relay2.example.com/v1`），发布前检查程序要通过。
+- 页面仍只许出现白名单网址和示例 Key（`https://relay.example.com/v1`、`sk-example-0000`，第二个配置示例用 `https://relay.example.com/alt/v1`（检查程序白名单只有 relay.example.com）），发布前检查程序要通过。
 - README 里的「中台」换成「中转」。
 
 ## 涉及文件

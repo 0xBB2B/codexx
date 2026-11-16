@@ -9,23 +9,27 @@ import (
 )
 
 const (
-	relayModelsFile = "relay-models.json"
-	catalogFile     = "model-bridge-catalog.json"
+	legacyRelayModelsFile = "relay-models.json"
+	catalogFile           = "model-bridge-catalog.json"
 )
 
 type Store struct{ dir string }
 
 func NewStore(dir string) *Store { return &Store{dir: dir} }
 
-func (s *Store) SaveRelayModels(ids []string, at time.Time) error {
-	return s.writeJSON(relayModelsFile, map[string]any{
+func (s *Store) SaveRelayModels(id string, ids []string, at time.Time) error {
+	return s.writeJSON(relayModelsFileName(id), map[string]any{
 		"fetched_at": at.UTC().Format(time.RFC3339),
 		"ids":        ids,
 	})
 }
 
-func (s *Store) LoadRelayModels() ([]string, time.Time, bool, error) {
-	raw, err := os.ReadFile(filepath.Join(s.dir, relayModelsFile))
+// 编号 1 的新缓存不存在时退回旧版单文件缓存
+func (s *Store) LoadRelayModels(id string) ([]string, time.Time, bool, error) {
+	raw, err := os.ReadFile(filepath.Join(s.dir, relayModelsFileName(id)))
+	if errors.Is(err, os.ErrNotExist) && id == "1" {
+		raw, err = os.ReadFile(filepath.Join(s.dir, legacyRelayModelsFile))
+	}
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, time.Time{}, false, nil
 	}
@@ -41,6 +45,8 @@ func (s *Store) LoadRelayModels() ([]string, time.Time, bool, error) {
 	}
 	return file.IDs, file.FetchedAt, true, nil
 }
+
+func relayModelsFileName(id string) string { return "relay-models-" + id + ".json" }
 
 func (s *Store) WriteCatalog(models []Entry) error {
 	return s.writeJSON(catalogFile, map[string]any{"models": models})

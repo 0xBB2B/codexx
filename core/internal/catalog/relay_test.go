@@ -64,7 +64,7 @@ func TestFetchRelayIDs_StatusCodes(t *testing.T) {
 				t.Fatalf("code = %q (err=%v), want %q", got, err, tt.code)
 			}
 			if strings.Contains(err.Error(), secretBody) {
-				t.Errorf("错误值里出现了中台返回正文")
+				t.Errorf("错误值里出现了中转返回正文")
 			}
 		})
 	}
