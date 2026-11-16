@@ -36,7 +36,6 @@ description: 把确认过的原型移植成 site/index.html：中英双语单页
 
 ## 涉及文件
 - 新建 `site/index.html`
-- 新建 `scripts/sitecheck/site.go`
 - 新建 `scripts/sitecheck/site_test.go`
 
 ## 成品定义
@@ -57,12 +56,7 @@ description: 把确认过的原型移植成 site/index.html：中英双语单页
 
 常见问题的展开和收起用原生 `<details>`/`<summary>`，不写脚本。
 
-### scripts/sitecheck/site.go
-| 函数名 | 职责 |
-|---|---|
-| `defaultSiteDir` | 常量：从本模块目录到官网目录的相对路径 `../../site`；`main` 没有收到参数时用它 |
-
-`main.go` 改为：没有命令行参数时检查 `defaultSiteDir`。
+`scripts/sitecheck/site_test.go` 测的是 `site/index.html`，不是 Go 符号，没有同名实现文件（例外）；检查程序的入口照旧要求传官网目录参数。
 
 ## 协作关系
 `DOMContentLoaded` → `applyLang(pickLang())`；语言按钮 → `setLang`；页签 → `selectTab`。不访问网络。
