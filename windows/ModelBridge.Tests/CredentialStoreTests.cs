@@ -102,6 +102,45 @@ public class CredentialStoreTests
         }
     }
 
+    [TestMethod]
+    public void TargetPrefix_IsDefaultTargetName()
+    {
+        Assert.AreEqual("ModelBridge/relay-api-key", CredentialStore.TargetPrefix);
+    }
+
+    [TestMethod]
+    public void DeleteByPrefix_RemovesEveryEntryUnderPrefixOnly()
+    {
+        var prefix = "ModelBridge.Tests/" + Guid.NewGuid().ToString("N");
+        var others = new CredentialStore(prefix + "x");
+        var stores = new[] { new CredentialStore(prefix), new CredentialStore(prefix + "-2"), new CredentialStore(prefix + "-10") };
+        var unrelated = new CredentialStore("ModelBridge.Tests/" + Guid.NewGuid().ToString("N"));
+        foreach (var s in stores) s.Save("sk-example-0000");
+        unrelated.Save("sk-example-0000");
+        try
+        {
+            Assert.IsTrue(CredentialStore.ExistsByPrefix(prefix));
+
+            CredentialStore.DeleteByPrefix(prefix);
+
+            Assert.IsFalse(CredentialStore.ExistsByPrefix(prefix));
+            Assert.IsTrue(stores.All(s => s.Read() == null));
+            Assert.AreEqual("sk-example-0000", unrelated.Read());
+        }
+        finally
+        {
+            unrelated.Delete();
+            others.Delete();
+            foreach (var s in stores) s.Delete();
+        }
+    }
+
+    [TestMethod]
+    public void ExistsByPrefix_NothingStored_False()
+    {
+        Assert.IsFalse(CredentialStore.ExistsByPrefix("ModelBridge.Tests/" + Guid.NewGuid().ToString("N")));
+    }
+
     [StructLayout(LayoutKind.Sequential)]
     struct NativeCredential
     {

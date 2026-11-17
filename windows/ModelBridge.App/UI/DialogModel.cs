@@ -4,7 +4,7 @@ namespace ModelBridge.UI;
 
 public enum DialogButtonRole { Primary, Secondary }
 
-public sealed record DialogButton(string Text, DialogButtonRole Role, bool IsDefault = false);
+public sealed record DialogButton(string Text, DialogButtonRole Role, bool IsDefault = false, bool IsEnabled = true, bool IsBusy = false);
 
 public enum DialogAlertSeverity { Danger }
 
@@ -25,6 +25,19 @@ public sealed record DialogModel(
         [
             new(request.CancelText, DialogButtonRole.Secondary, IsDefault: true),
             new(request.ConfirmText, DialogButtonRole.Primary),
+        ],
+        0);
+
+    public static string DeleteRelayMessage(string name, int modelCount) =>
+        $"删除后：\n· Codex 的模型列表里不再有「{name}」的 {modelCount} 个模型\n· 它的 API Key 会从系统凭据管理器里删除\n重启 ChatGPT 后生效。";
+
+    public static DialogModel ForDeleteRelay(string name, int modelCount, bool isDeleting) => new(
+        520,
+        $"删除配置「{name}」？",
+        DeleteRelayMessage(name, modelCount),
+        [
+            new("取消", DialogButtonRole.Secondary, IsDefault: true, IsEnabled: !isDeleting),
+            new(isDeleting ? "正在删除…" : "删除", DialogButtonRole.Primary, IsEnabled: !isDeleting, IsBusy: isDeleting),
         ],
         0);
 

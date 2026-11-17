@@ -4,9 +4,21 @@ using System.Windows.Controls;
 
 namespace ModelBridge.UI;
 
+public interface IRelayFields : INotifyPropertyChanged
+{
+    string NameInput { get; set; }
+    string BaseUrlInput { get; set; }
+    string ApiKeyInput { get; set; }
+    string? NameError { get; }
+    string? BaseUrlError { get; }
+    string? ApiKeyError { get; }
+    string ApiKeyHelp { get; }
+    bool FieldsEnabled { get; }
+}
+
 public partial class ConnectionForm : UserControl
 {
-    AppModel? model;
+    IRelayFields? model;
     PropertyChangedEventHandler? handler;
 
     public ConnectionForm()
@@ -16,10 +28,10 @@ public partial class ConnectionForm : UserControl
         Unloaded += (_, _) => Unsubscribe();
     }
 
-    public void Bind(AppModel appModel)
+    public void Bind(IRelayFields fields)
     {
         Unsubscribe();
-        model = appModel;
+        model = fields;
         if (IsLoaded) Subscribe();
         Refresh();
     }
@@ -42,25 +54,36 @@ public partial class ConnectionForm : UserControl
     {
         if (model == null) return;
 
+        if (NameBox.Text != model.NameInput) NameBox.Text = model.NameInput;
+        KeyHelp.Text = model.ApiKeyHelp;
         if (UrlBox.Text != model.BaseUrlInput) UrlBox.Text = model.BaseUrlInput;
         if (KeyBox.Password != model.ApiKeyInput) KeyBox.Password = model.ApiKeyInput;
         if (KeyText.Text != model.ApiKeyInput) KeyText.Text = model.ApiKeyInput;
         UrlHint.Visibility = UrlBox.Text == "" ? Visibility.Visible : Visibility.Collapsed;
 
+        ShowError(NameBox, NameHelp, NameError, NameErrorText, model.NameError);
         ShowError(UrlBox, UrlHelp, UrlError, UrlErrorText, model.BaseUrlError);
         ShowError(KeyBox, KeyHelp, KeyError, KeyErrorText, model.ApiKeyError);
         ShowError(KeyText, KeyHelp, KeyError, KeyErrorText, model.ApiKeyError);
-        IsEnabled = !model.IsConnecting && !model.IsBusy;
+        IsEnabled = model.FieldsEnabled;
     }
 
     static void ShowError(Control box, UIElement help, UIElement error, TextBlock errorText, string? message)
     {
         errorText.Text = message ?? "";
+        errorText.ToolTip = message;
         System.Windows.Automation.AutomationProperties.SetHelpText(box, message ?? "");
         error.Visibility = message == null ? Visibility.Collapsed : Visibility.Visible;
         help.Visibility = message == null ? Visibility.Visible : Visibility.Collapsed;
         FieldState.SetHasError(box, message != null);
     }
+
+    void NameChanged(object sender, TextChangedEventArgs e)
+    {
+        if (model != null) model.NameInput = NameBox.Text;
+    }
+
+    public void FocusFirst() => NameBox.Focus();
 
     void UrlChanged(object sender, TextChangedEventArgs e)
     {

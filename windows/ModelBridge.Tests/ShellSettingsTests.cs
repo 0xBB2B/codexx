@@ -1,4 +1,3 @@
-using System.Text.Json;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using ModelBridge.Services;
 
@@ -30,54 +29,24 @@ public class ShellSettingsTests
     }
 
     [TestMethod]
-    public void ReadBaseUrl_NoFile_ReturnsNull()
-    {
-        Assert.IsNull(new ShellSettings(dir).ReadBaseUrl());
-    }
-
-    [TestMethod]
-    public void SaveBaseUrl_DirectoryMissing_CreatesItAndRoundTrips()
+    public void SaveRelays_DirectoryMissing_CreatesItAndRoundTrips()
     {
         var settings = new ShellSettings(dir);
 
-        settings.SaveBaseUrl("https://relay.example.com");
+        settings.SaveRelays([new("1", "中转", "https://relay.example.com")]);
 
-        Assert.AreEqual("https://relay.example.com", settings.ReadBaseUrl());
+        Assert.AreEqual("https://relay.example.com", settings.ReadRelays().Single().BaseUrl);
     }
 
     [TestMethod]
-    public void SaveBaseUrl_FileContainsOnlyBaseUrlProperty()
+    public void SaveRelays_Twice_KeepsLatestOnly()
     {
         var settings = new ShellSettings(dir);
 
-        settings.SaveBaseUrl("https://relay.example.com");
+        settings.SaveRelays([new("1", "中转", "https://relay.example.com")]);
+        settings.SaveRelays([new("1", "中转", "https://relay2.example.com")]);
 
-        using var doc = JsonDocument.Parse(File.ReadAllText(settings.FilePath));
-        var names = doc.RootElement.EnumerateObject().Select(p => p.Name).ToArray();
-        CollectionAssert.AreEqual(new[] { "base_url" }, names);
-    }
-
-    [TestMethod]
-    public void SaveBaseUrl_Twice_KeepsLatestOnly()
-    {
-        var settings = new ShellSettings(dir);
-
-        settings.SaveBaseUrl("https://relay.example.com");
-        settings.SaveBaseUrl("https://relay2.example.com");
-
-        Assert.AreEqual("https://relay2.example.com", settings.ReadBaseUrl());
-    }
-
-    [TestMethod]
-    public void DeleteAll_RemovesFile_ReadReturnsNull()
-    {
-        var settings = new ShellSettings(dir);
-        settings.SaveBaseUrl("https://relay.example.com");
-
-        settings.DeleteAll();
-
-        Assert.IsFalse(File.Exists(settings.FilePath));
-        Assert.IsNull(settings.ReadBaseUrl());
+        Assert.AreEqual("https://relay2.example.com", settings.ReadRelays().Single().BaseUrl);
     }
 
     [TestMethod]

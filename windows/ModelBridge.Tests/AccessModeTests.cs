@@ -11,9 +11,9 @@ public class AccessModeTests
     const string DetectFailedDetail = "沿用上次的方式。可以稍后点「重新检测」再试。";
     const string NoChangeTitle = "接入方式没有变化";
     const string RecheckFailedTitle = "没能重新检测";
-    const string ToBothTitle = "已切换到「官方 + 中台」";
+    const string ToBothTitle = "已切换到「官方 + 中转」";
     const string ToBothDetail = "已检测到 ChatGPT 登录。重启 ChatGPT 后生效。";
-    const string ToRelayTitle = "已切换到「只用中台」";
+    const string ToRelayTitle = "已切换到「只用中转」";
     const string ToRelayDetail = "没有检测到 ChatGPT 登录。重启 ChatGPT 后生效。";
     const string SwitchFailedTitle = "没能切换接入方式";
     const string RestoreBlockedTitle = "没能自动还原 Codex 配置";
@@ -61,13 +61,13 @@ public class AccessModeTests
     [TestMethod]
     public void AccessModeName_Relay_IsRelayOnly()
     {
-        Assert.AreEqual("只用中台", Pushed("relay", "relay", "not_logged_in").Model.AccessModeName);
+        Assert.AreEqual("只用中转", Pushed("relay", "relay", "not_logged_in").Model.AccessModeName);
     }
 
     [TestMethod]
     public void AccessModeName_Both_IsOfficialPlusRelay()
     {
-        Assert.AreEqual("官方 + 中台", Pushed("both", "both", "logged_in").Model.AccessModeName);
+        Assert.AreEqual("官方 + 中转", Pushed("both", "both", "logged_in").Model.AccessModeName);
     }
 
     [TestMethod]
@@ -89,7 +89,6 @@ public class AccessModeTests
         h.Push(s => s["forwarding"] = true);
 
         Assert.IsNull(h.Model.AccessModeName);
-        Assert.IsNull(h.Model.AccessHelpText);
     }
 
     [TestMethod]
@@ -111,26 +110,28 @@ public class AccessModeTests
     }
 
     [TestMethod]
-    public void AccessHelpText_Both()
+    public void OverviewText_Both()
     {
         Assert.AreEqual(
-            "模型列表里官方模型在上，中台模型在下；选官方模型时仍然访问官方服务。",
-            Pushed("both", "both", "logged_in").Model.AccessHelpText);
+            "官方模型在上，中转模型在下；选官方模型时仍访问官方服务。",
+            Pushed("both", "both", "logged_in").Model.OverviewText);
     }
 
     [TestMethod]
-    public void AccessHelpText_Relay()
+    public void OverviewText_Relay()
     {
         Assert.AreEqual(
-            "不需要登录 ChatGPT。模型列表里只有中台模型，默认选中「中台 · auto」。登录 ChatGPT 后点「重新检测」，就能同时用官方模型。",
-            Pushed("relay", "relay", "not_logged_in").Model.AccessHelpText);
+            "不用登录 ChatGPT。只有中转模型，默认选中「中转 · auto」。",
+            Pushed("relay", "relay", "not_logged_in").Model.OverviewText);
     }
 
     [TestMethod]
-    public void AccessHelpText_ForwardingOffOrModeNull_IsNull()
+    public void OverviewText_ForwardingOff_IsClosedText()
     {
-        Assert.IsNull(Pushed("relay", "relay", "not_logged_in", forwarding: false).Model.AccessHelpText);
-        Assert.IsNull(Pushed(null, null, null).Model.AccessHelpText);
+        Assert.AreEqual(
+            "已关闭：Codex 配置已还原为开启前的样子。",
+            Pushed("relay", "relay", "not_logged_in", forwarding: false).Model.OverviewText);
+        Assert.IsNull(Pushed("relay", "relay", "not_logged_in", forwarding: false).Model.AccessModeName);
     }
 
     [TestMethod]
@@ -205,7 +206,7 @@ public class AccessModeTests
 
         var notice = h.Model.Notices.Single();
         Assert.AreEqual(NoChangeTitle, notice.Title);
-        Assert.AreEqual("仍然没有检测到 ChatGPT 登录，继续只用中台模型。", notice.Detail);
+        Assert.AreEqual("仍然没有检测到 ChatGPT 登录，继续只用中转模型。", notice.Detail);
         Assert.AreEqual(AppSeverity.Info, notice.Severity);
     }
 
@@ -219,7 +220,7 @@ public class AccessModeTests
 
         var notice = h.Model.Notices.Single();
         Assert.AreEqual(NoChangeTitle, notice.Title);
-        Assert.AreEqual("仍然检测到 ChatGPT 登录，继续同时使用官方模型和中台模型。", notice.Detail);
+        Assert.AreEqual("仍然检测到 ChatGPT 登录，继续同时使用官方模型和中转模型。", notice.Detail);
         Assert.AreEqual(AppSeverity.Info, notice.Severity);
     }
 
@@ -283,7 +284,7 @@ public class AccessModeTests
         CollectionAssert.AreEqual(new[] { "call:detect_access", "call:apply_access" }, h.Log);
         Assert.AreEqual(0, h.Confirmer.Requests.Count);
         Assert.AreEqual(0, h.Model.Notices.Count);
-        Assert.AreEqual("官方 + 中台", h.Model.AccessModeName);
+        Assert.AreEqual("官方 + 中转", h.Model.AccessModeName);
     }
 
     [TestMethod]
@@ -459,7 +460,7 @@ public class AccessModeTests
         await h.Model.RecheckAccessAsync();
 
         Assert.IsFalse(Titles(h).Contains(SwitchFailedTitle));
-        Assert.AreEqual("官方 + 中台", h.Model.AccessModeName);
+        Assert.AreEqual("官方 + 中转", h.Model.AccessModeName);
     }
 
     [TestMethod]
@@ -678,7 +679,7 @@ public class AccessModeTests
         var text = await SetupSuccessTextAsync(Access("relay", "relay", "not_logged_in"));
 
         Assert.AreEqual(
-            "已获取 6 个中台模型。没有检测到 ChatGPT 登录，接入方式为「只用中台」：Codex 不需要登录，模型列表里只有中台模型。" + SuccessTail,
+            "已获取 6 个中转模型。没有检测到 ChatGPT 登录，接入方式为「只用中转」：Codex 不需要登录，模型列表里只有中转模型。" + SuccessTail,
             text);
     }
 
@@ -687,7 +688,7 @@ public class AccessModeTests
     {
         var text = await SetupSuccessTextAsync(Access("both", "both", "logged_in"));
 
-        Assert.AreEqual("已获取 6 个中台模型。已检测到 ChatGPT 登录，接入方式为「官方 + 中台」。" + SuccessTail, text);
+        Assert.AreEqual("已获取 6 个中转模型。已检测到 ChatGPT 登录，接入方式为「官方 + 中转」。" + SuccessTail, text);
     }
 
     [TestMethod]
@@ -695,7 +696,7 @@ public class AccessModeTests
     {
         var text = await SetupSuccessTextAsync(Access(null, null, null));
 
-        Assert.AreEqual("已获取 6 个中台模型。" + SuccessTail, text);
+        Assert.AreEqual("已获取 6 个中转模型。" + SuccessTail, text);
     }
 
     [TestMethod]
@@ -703,7 +704,7 @@ public class AccessModeTests
     {
         var text = await SetupSuccessTextAsync(s => s["forwarding"] = true);
 
-        Assert.AreEqual("已获取 6 个中台模型。" + SuccessTail, text);
+        Assert.AreEqual("已获取 6 个中转模型。" + SuccessTail, text);
     }
 
     #endregion

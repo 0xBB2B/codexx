@@ -1,0 +1,40 @@
+<Window x:Class="ModelBridge.UI.RelayFormWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:ui="clr-namespace:ModelBridge.UI"
+        WindowStyle="None" AllowsTransparency="True" Background="Transparent" ResizeMode="NoResize"
+        SizeToContent="Height" Width="616" WindowStartupLocation="CenterScreen" ShowInTaskbar="False"
+        FontSize="13" Foreground="{StaticResource TextBrush}" UseLayoutRounding="True"
+        KeyboardNavigation.TabNavigation="Cycle" KeyboardNavigation.DirectionalNavigation="Cycle">
+    <Grid Margin="48,32,48,64">
+        <Border Background="{StaticResource SurfaceBrush}" CornerRadius="12" Effect="{StaticResource FloatShadow}">
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+
+                <StackPanel Orientation="Horizontal" Margin="24,24,24,0">
+                    <ui:AppIcon Width="24" Height="24" Margin="0,0,12,0" VerticalAlignment="Center" />
+                    <TextBlock x:Name="TitleText" Style="{StaticResource CardTitle}" VerticalAlignment="Center" />
+                </StackPanel>
+
+                <ui:ConnectionForm x:Name="Form" Grid.Row="1" Margin="24,12,24,24" />
+
+                <Border Grid.Row="2" BorderBrush="{StaticResource DividerBrush}" BorderThickness="0,1,0,0" Padding="24,16"
+                        CornerRadius="0,0,12,12">
+                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                        <Button x:Name="CancelButton" Content="取消" Click="CancelClick" />
+                        <Button x:Name="SaveButton" Style="{StaticResource PrimaryButton}" Margin="12,0,0,0" IsDefault="True"
+                                Click="SaveClick" />
+                    </StackPanel>
+                </Border>
+
+                <Canvas Grid.RowSpan="3" SizeChanged="OverlaySizeChanged" x:Name="Overlay">
+                    <StackPanel x:Name="AlertHost" Canvas.Left="24" Canvas.Top="12" />
+                </Canvas>
+            </Grid>
+        </Border>
+    </Grid>
+</Window>

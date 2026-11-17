@@ -83,7 +83,7 @@ public class TrayPanelModelTests
         var h = await StartedAsync();
         var panel = TrayPanelModel.From(h.Model);
 
-        Assert.AreEqual("转发到中台", Item(panel, TrayMenuCommand.ToggleForwarding).Label);
+        Assert.AreEqual("使用中转", Item(panel, TrayMenuCommand.ToggleForwarding).Label);
         Assert.AreEqual("打开配置…", Item(panel, TrayMenuCommand.OpenConfig).Label);
         Assert.AreEqual("登录时启动", Item(panel, TrayMenuCommand.ToggleLoginStart).Label);
         Assert.AreEqual("检查更新", Item(panel, TrayMenuCommand.CheckUpdate).Label);

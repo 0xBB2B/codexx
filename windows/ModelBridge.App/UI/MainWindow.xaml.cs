@@ -2,7 +2,10 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.ComponentModel;
+using System.Runtime.InteropServices;
 using System.Windows;
+using System.Windows.Interop;
+using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 
 namespace ModelBridge.UI;
@@ -19,9 +22,19 @@ public partial class MainWindow : Window
     {
         model = appModel;
         InitializeComponent();
-        Form.Bind(model);
         model.PropertyChanged += (_, _) => Refresh();
         Refresh();
+    }
+
+    [DllImport("dwmapi.dll")]
+    static extern int DwmSetWindowAttribute(IntPtr hwnd, int attribute, ref int value, int size);
+
+    protected override void OnSourceInitialized(EventArgs e)
+    {
+        base.OnSourceInitialized(e);
+        var round = 2;
+        try { DwmSetWindowAttribute(new WindowInteropHelper(this).Handle, 33, ref round, sizeof(int)); }
+        catch (Exception ex) when (ex is DllNotFoundException or EntryPointNotFoundException) { }
     }
 
     public bool AllowClose { get; set; }
@@ -32,23 +45,34 @@ public partial class MainWindow : Window
     {
         ForwardToggle.SetCurrentValue(ToggleButton.IsCheckedProperty, model.ForwardingEnabled);
         ForwardToggle.IsEnabled = model.ToggleEnabled;
-        ForwardHelp.Text = model.ForwardingHelpText;
-        var accessVisible = model.AccessModeName != null ? Visibility.Visible : Visibility.Collapsed;
-        AccessLabel.Visibility = accessVisible;
-        AccessPanel.Visibility = accessVisible;
+        Hero.Background = AlertView.Brush(model.ForwardingEnabled ? "SelectedBgBrush" : "SurfaceBrush");
+        Hero.BorderBrush = AlertView.Brush(model.ForwardingEnabled ? "PrimaryBrush" : "DividerBrush");
+        HeroTitle.Text = model.OverviewTitle;
+        HeroSub.Text = model.ChatGptFound ? model.OverviewText ?? model.ForwardingHelpText : model.ForwardingHelpText;
+        ModeRow.Visibility = model.AccessModeName != null ? Visibility.Visible : Visibility.Collapsed;
         AccessName.Text = model.AccessModeName ?? "";
         AccessReason.Text = model.AccessReasonText ?? "";
-        AccessHelp.Text = model.AccessHelpText ?? "";
         RecheckAccessButton.IsEnabled = !model.IsDetectingAccess;
         AccessSpinner.Visibility = model.IsDetectingAccess ? Visibility.Visible : Visibility.Collapsed;
         RecheckAccessText.Text = model.IsDetectingAccess ? "正在检测…" : "重新检测";
-        SaveButton.IsEnabled = !model.IsBusy;
-        ChatGptValue.Text = model.ChatGptText;
-        RelayValue.Text = model.RelayStatusText;
+
+        if (!ReferenceEquals(RelayList.ItemsSource, model.Relays)) RelayList.ItemsSource = model.Relays;
+        AddRelayButton.IsEnabled = model.CanAddRelay;
+        RelayFootText.Text = model.RelayMinimumText ?? model.RelayCountText;
 
         VersionText.Text = model.Version;
         StatusDot.Fill = AlertView.Brush(model.CoreRunning ? "SuccessBrush" : "DangerBrush");
         CoreText.Text = model.CoreStatusText + (model.ForwardingEnabled || !model.CoreRunning ? "" : " · 转发已关闭");
+        SetStatusGlyph(ChatGptGlyph, model.ChatGptFound);
+        ChatGptValue.Text = model.ChatGptText;
+        SetStatusGlyph(RelayGlyph, model.ForwardingEnabled);
+        var summary = model.RelayModelSummary;
+        var space = summary.IndexOf(' ');
+        RelayLabel.Text = summary[..space];
+        var rest = summary[(space + 1)..];
+        var note = rest.IndexOf('（');
+        RelayValue.Text = note < 0 ? rest : rest[..note];
+        RelayNote.Text = note < 0 ? "" : rest[note..];
         UpdateText.Text = model.UpdateVersion == null ? "" : $"发现新版本 {model.UpdateVersion}";
         UpdateButton.Content = model.UpdateVersion == null ? "检查更新" : "打开下载页";
 
@@ -56,6 +80,12 @@ public partial class MainWindow : Window
         if (ReferenceEquals(shownBanners, model.Banners) && ReferenceEquals(shownNotices, model.Notices) && shownProgress == model.ProgressText)
             return;
         Rebuild();
+    }
+
+    static void SetStatusGlyph(TextBlock glyph, bool ok)
+    {
+        glyph.Text = ok ? "\uE73E" : "\uE738";
+        glyph.Foreground = AlertView.Brush(ok ? "SuccessBrush" : "TextMutedBrush");
     }
 
     void Rebuild()
@@ -105,6 +135,34 @@ public partial class MainWindow : Window
         }
     }
 
+    void MinimizeClick(object sender, RoutedEventArgs e) => WindowState = WindowState.Minimized;
+
+    void MaximizeClick(object sender, RoutedEventArgs e) => WindowState = WindowState == WindowState.Maximized ? WindowState.Normal : WindowState.Maximized;
+
+    void CloseClick(object sender, RoutedEventArgs e) => Close();
+
+    void AddRelayClick(object sender, RoutedEventArgs e)
+    {
+        if (model.BeginAddRelay() is { } editor) new RelayFormWindow(editor).ShowForm(this);
+    }
+
+    void EditClick(object sender, RoutedEventArgs e)
+    {
+        if (RowOf(sender) is { } row && model.BeginEditRelay(row.Id) is { } editor) new RelayFormWindow(editor).ShowForm(this);
+    }
+
+    void DeleteClick(object sender, RoutedEventArgs e)
+    {
+        if (RowOf(sender) is { } row) Dialogs.ShowDeleteRelay(model, row, this);
+    }
+
+    async void RetryClick(object sender, RoutedEventArgs e)
+    {
+        if (RowOf(sender) is { } row) await model.RetryRelayAsync(row.Id);
+    }
+
+    static RelayRow? RowOf(object sender) => (sender as FrameworkElement)?.DataContext as RelayRow;
+
     async void ForwardClick(object sender, RoutedEventArgs e)
     {
         ForwardToggle.SetCurrentValue(ToggleButton.IsCheckedProperty, model.ForwardingEnabled);
@@ -113,8 +171,6 @@ public partial class MainWindow : Window
     }
 
     async void RecheckAccessClick(object sender, RoutedEventArgs e) => await model.RecheckAccessAsync();
-
-    async void SaveClick(object sender, RoutedEventArgs e) => await model.SaveConnectionAsync();
 
     async void UpdateClick(object sender, RoutedEventArgs e)
     {

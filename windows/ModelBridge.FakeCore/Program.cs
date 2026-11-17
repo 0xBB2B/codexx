@@ -14,6 +14,7 @@ var stdout = Console.OpenStandardOutput();
 var gate = new object();
 string? lastKey = null;
 string? lastBaseUrl = null;
+var relays = new Dictionary<string, (string Name, string BaseUrl, string Key)>();
 
 void Send(string line)
 {
@@ -48,16 +49,37 @@ async Task Handle(JsonNode request)
                 Fail(id, "internal_error");
                 return;
             }
-            lastBaseUrl = p?["base_url"]?.GetValue<string>();
-            lastKey = p?["api_key"]?.GetValue<string>();
+            relays.Clear();
+            foreach (var r in p?["relays"]?.AsArray() ?? [])
+                relays[r!["id"]!.GetValue<string>()] = (r["name"]!.GetValue<string>(), r["base_url"]!.GetValue<string>(), r["api_key"]!.GetValue<string>());
+            AppendShared(Path.Combine(stateDir, "relays.log"),
+                $"count={relays.Count};" + string.Join(";", relays.Select(x => $"{x.Key}|{x.Value.Name}|{x.Value.BaseUrl}|{x.Value.Key}")) + "\n");
+            lastBaseUrl = relays.Values.FirstOrDefault().BaseUrl;
+            lastKey = relays.Values.FirstOrDefault().Key;
             AppendShared(Path.Combine(stateDir, "init.log"),
                 $"{lastBaseUrl}|{p?["chatgpt_dir"]?.GetValue<string>()}|{lastKey != null}\n");
             Reply(id, new JsonObject { ["version"] = "1.0.0" });
             break;
-        case "save_connection":
+        case "save_relay":
+            var relayId = p?["id"]?.GetValue<string>() ?? (relays.Count + 1).ToString();
             lastBaseUrl = p?["base_url"]?.GetValue<string>();
             lastKey = p?["api_key"]?.GetValue<string>();
-            Reply(id, new JsonObject { ["models_changed"] = false, ["relay_model_count"] = 0 });
+            relays[relayId] = (p!["name"]!.GetValue<string>(), lastBaseUrl!, lastKey!);
+            Reply(id, new JsonObject
+            {
+                ["id"] = relayId,
+                ["name"] = p?["name"]?.GetValue<string>(),
+                ["model_count"] = 0,
+                ["models_changed"] = false,
+            });
+            break;
+        case "delete_relay":
+            relays.Remove(p?["id"]?.GetValue<string>() ?? "");
+            Reply(id, new JsonObject { ["version"] = "1.0.0" });
+            break;
+        case "refresh_models":
+            AppendShared(Path.Combine(stateDir, "refresh.log"), $"{p?["id"]?.GetValue<string>() ?? "*"}\n");
+            Reply(id, new JsonObject { ["version"] = "1.0.0" });
             break;
         case "status":
             Reply(id, new JsonObject

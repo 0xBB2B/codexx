@@ -44,7 +44,7 @@ public partial class App : Application
         var chatGptApp = new ChatGptApp();
         model = new AppModel(
             new CoreClient(CoreProcessOptions.ForInstall(installDir, localAppData), Dispatcher),
-            new VaultAdapter(new CredentialStore()),
+            new VaultAdapter(),
             new SettingsAdapter(new ShellSettings(Path.Combine(localAppData, "ModelBridge"))),
             new LoginAdapter(new LoginItem(installDir)),
             new ChatGptAdapter(chatGptApp),

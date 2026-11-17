@@ -7,9 +7,9 @@
 | 02 | 02-core-proxy-routing | done | 2026-11-16 |
 | 03 | 03-core-control-relays | done | 2026-11-16 |
 | 04 | 04-macos-relay-model | done | 2026-11-16 |
-| 06 | 06-windows-relay-model | in-progress | — |
+| 06 | 06-windows-relay-model | done | 2026-11-17 |
 | 05 | 05-macos-main-window | done | 2026-11-17 |
-| 07 | 07-windows-main-window | in-progress | — |
+| 07 | 07-windows-main-window | done | 2026-11-17 |
 | 09 | 09-menubar-tray-icons | pending | — |
 ## 当前
 2026-11-16 用户要求暂停。05、06、07 的代码都在工作区里（未提交），状态：
@@ -28,6 +28,9 @@
 - 01-core-relay-catalog 自修第 1 轮：「何时联网」改为每个配置显式模式（联网/只读缓存/用传入列表）、多个配置并发获取、relay_test.go 残留「中台」、补测试（缓存不含 Key/URL、空列表、单配置刷新失败） → 结果：
 - 10-site-readme-rename 自修第 1 轮：底部状态行缺标签+取值、版本号字体、添加配置按钮样式、菜单栏图标 18px；收紧 3 条区分度弱的断言 → 结果：三处已修、断言收紧，复查 10/10 合规
 - 08-app-icon-assets 自修第 1 轮：DESIGN.md 单色图标规则与 PRD 04 C7（16px 托盘按 16px 规则）矛盾，按 PRD 改正 DESIGN.md 文字并补 64px；Scale 从公用 GlyphFor 挪到 RenderMono；补测试（单色放大、各档线宽、Win 88%、24/32/48、Mac 64） → 结果：已修，复查 17/17 合规
+- 07-windows-main-window 自修第 1 轮：长的名字错误被裁掉（同根因：macOS 表单错误会换行撑高）；窗口圆角 8px 未设置；旧方法不存在的测试、ApiKeyHelp 双来源；配置行第二行 12px、状态区图标 16px、卡片间距 20px；表单弹窗未登记 Dialogs.Current、保存不设 busy、行按钮不看 busy、忙碌时 Alt+F4 可关弹窗；补 5 条测试遗漏 → 结果：通过，CI run 44001912479 全部通过，复查关闭 8/9；截断那条用户 2026-11-17 定为缩短重名提示文字，另行修改
+
 ## 无关发现（发现一条记一条）
+- windows/ModelBridge.App/UI/MainWindow.xaml:42 版本号到状态圆点间距 12px，DESIGN.md 规定状态行各项之间 16px（旧代码）；不处理：间距略紧；约 5 分钟。
 - core/internal/control/update_test.go 没有对应的 update.go（测试与实现一一对应规则），原有问题
 （无）

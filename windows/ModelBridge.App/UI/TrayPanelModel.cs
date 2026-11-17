@@ -31,7 +31,7 @@ public sealed record TrayPanelModel(
             model.TrayStatusText,
             [
                 [
-                    new(TrayMenuCommand.ToggleForwarding, "转发到中台", IsCheckable: true, IsChecked: model.ForwardingEnabled, IsEnabled: model.ToggleEnabled),
+                    new(TrayMenuCommand.ToggleForwarding, "使用中转", IsCheckable: true, IsChecked: model.ForwardingEnabled, IsEnabled: model.ToggleEnabled),
                     new(TrayMenuCommand.OpenConfig, "打开配置…"),
                 ],
                 [

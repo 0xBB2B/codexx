@@ -50,7 +50,13 @@ sealed class FakeCore(List<string> log) : ICoreClient
         return Task.FromResult(method switch
         {
             "status" => Json.Status(),
-            "save_connection" => Json.Parse("""{"models_changed":false,"relay_model_count":6}"""),
+            "save_relay" => Json.Parse(new JsonObject
+            {
+                ["id"] = p["id"] as string ?? "1",
+                ["name"] = p["name"] as string,
+                ["model_count"] = 6,
+                ["models_changed"] = false,
+            }.ToJsonString()),
             "set_forwarding" => Json.Status(s => s["forwarding"] = Convert.ToBoolean(p["enabled"])),
             "check_update" => Json.Parse("""{"latest_version":null,"url":null,"is_newer":false}"""),
             _ => Json.Parse("{}"),
@@ -75,13 +81,16 @@ static class Json
             ["forwarding"] = false,
             ["proxy"] = new JsonObject { ["running"] = true, ["error"] = null },
             ["chatgpt"] = new JsonObject { ["found"] = true, ["error"] = null },
-            ["relay"] = new JsonObject
+            ["relays"] = new JsonArray(new JsonObject
             {
+                ["id"] = "1",
+                ["name"] = "中转",
                 ["model_count"] = 6,
                 ["fetched_at"] = "2026-11-11T00:12:00Z",
                 ["stale"] = false,
                 ["error"] = null,
-            },
+            }),
+            ["default_relay"] = "中转",
             ["taken_over"] = new JsonArray(),
             ["restore_blocked"] = new JsonArray(),
             ["config_path"] = "/home/example/.codex/config.toml",
@@ -94,53 +103,80 @@ static class Json
 
 sealed class FakeVault(List<string> log) : ICredentialVault
 {
-    public string? Stored { get; set; }
+    public Dictionary<string, string> Keys { get; } = [];
     public Exception? SaveException { get; set; }
     public Exception? ReadException { get; set; }
     public Exception? DeleteException { get; set; }
     public List<string> Saved { get; } = [];
-    public int DeleteCount { get; private set; }
+    public List<string> DeletedIds { get; } = [];
+    public int DeleteCount => DeletedIds.Count;
+    public int DeleteAllCount { get; private set; }
 
-    public void Save(string key)
+    public string? Stored
+    {
+        get => Keys.GetValueOrDefault("1");
+        set
+        {
+            if (value == null) Keys.Remove("1");
+            else Keys["1"] = value;
+        }
+    }
+
+    public void Save(string id, string key)
     {
         log.Add("vault:save");
         if (SaveException != null) throw SaveException;
-        Stored = key;
+        Keys[id] = key;
         Saved.Add(key);
     }
 
-    public string? Read() => ReadException != null ? throw ReadException : Stored;
+    public string? Read(string id) => ReadException != null ? throw ReadException : Keys.GetValueOrDefault(id);
 
-    public void Delete()
+    public void Delete(string id)
     {
-        DeleteCount++;
+        DeletedIds.Add(id);
         if (DeleteException != null) throw DeleteException;
-        Stored = null;
+        Keys.Remove(id);
     }
+
+    public void DeleteAll()
+    {
+        DeleteAllCount++;
+        if (DeleteException != null) throw DeleteException;
+        Keys.Clear();
+    }
+
+    public bool Any() => ReadException != null ? throw ReadException : Keys.Count > 0;
 }
 
 sealed class FakeSettings(List<string> log) : IShellSettingsStore
 {
-    public string? BaseUrl { get; set; }
+    public List<RelayConfig> Relays { get; set; } = [];
     public Exception? ReadException { get; set; }
     public Exception? SaveException { get; set; }
     public Exception? DeleteException { get; set; }
     public int DeleteCount { get; private set; }
 
-    public string? ReadBaseUrl() => ReadException != null ? throw ReadException : BaseUrl;
+    public string? BaseUrl
+    {
+        get => Relays.FirstOrDefault()?.BaseUrl;
+        set => Relays = value == null ? [] : [new RelayConfig("1", "中转", value)];
+    }
 
-    public void SaveBaseUrl(string baseUrl)
+    public IReadOnlyList<RelayConfig> ReadRelays() => ReadException != null ? throw ReadException : Relays.ToList();
+
+    public void SaveRelays(IReadOnlyList<RelayConfig> relays)
     {
         log.Add("settings:save");
         if (SaveException != null) throw SaveException;
-        BaseUrl = baseUrl;
+        Relays = relays.ToList();
     }
 
     public void DeleteAll()
     {
         DeleteCount++;
         if (DeleteException != null) throw DeleteException;
-        BaseUrl = null;
+        Relays = [];
     }
 }
 
@@ -220,6 +256,12 @@ sealed class Harness
         Model.ExitRequested += () => ExitCount++;
     }
 
+    public void Seed(string id, string name, string url, string key)
+    {
+        Settings.Relays.Add(new RelayConfig(id, name, url));
+        Vault.Keys[id] = key;
+    }
+
     public void FillInputs(string baseUrl = "https://relay.example.com", string apiKey = "sk-example-0000")
     {
         Model.BaseUrlInput = baseUrl;
@@ -270,7 +312,7 @@ public class AppModelTests
 
         Assert.IsFalse(string.IsNullOrEmpty(h.Model.BaseUrlError));
         Assert.IsFalse(string.IsNullOrEmpty(h.Model.ApiKeyError));
-        Assert.AreEqual(0, h.Core.Count("save_connection"));
+        Assert.AreEqual(0, h.Core.Count("save_relay"));
     }
 
     [TestMethod]
@@ -282,7 +324,7 @@ public class AppModelTests
 
         Assert.IsNull(h.Model.BaseUrlError);
         Assert.IsFalse(string.IsNullOrEmpty(h.Model.ApiKeyError));
-        Assert.AreEqual(0, h.Core.Count("save_connection"));
+        Assert.AreEqual(0, h.Core.Count("save_relay"));
     }
 
     [TestMethod]
@@ -294,7 +336,7 @@ public class AppModelTests
 
         Assert.IsFalse(string.IsNullOrEmpty(h.Model.BaseUrlError));
         Assert.IsNull(h.Model.ApiKeyError);
-        Assert.AreEqual(0, h.Core.Count("save_connection"));
+        Assert.AreEqual(0, h.Core.Count("save_relay"));
     }
 
     [TestMethod]
@@ -305,7 +347,7 @@ public class AppModelTests
         await h.Model.CompleteSetupAsync();
 
         Assert.AreEqual("Base URL 要以 https:// 开头。", h.Model.BaseUrlError);
-        Assert.AreEqual(0, h.Core.Count("save_connection"));
+        Assert.AreEqual(0, h.Core.Count("save_relay"));
     }
 
     [TestMethod]
@@ -314,10 +356,10 @@ public class AppModelTests
         var h = new Harness();
         h.FillInputs();
         var connectingDuringCall = false;
-        h.Core.On("save_connection", _ =>
+        h.Core.On("save_relay", _ =>
         {
             connectingDuringCall = h.Model.IsConnecting;
-            return Json.Parse("""{"models_changed":false,"relay_model_count":6}""");
+            return Json.Parse("""{"id":"1","name":"中转","model_count":6,"models_changed":false}""");
         });
 
         await h.Model.CompleteSetupAsync();
@@ -332,14 +374,14 @@ public class AppModelTests
         var h = new Harness();
         h.FillInputs();
         var gate = new TaskCompletionSource<JsonElement>();
-        h.Core.OnAsync("save_connection", _ => gate.Task);
+        h.Core.OnAsync("save_relay", _ => gate.Task);
 
         var first = h.Model.CompleteSetupAsync();
         var second = h.Model.CompleteSetupAsync();
-        gate.SetResult(Json.Parse("""{"models_changed":false,"relay_model_count":6}"""));
+        gate.SetResult(Json.Parse("""{"id":"1","name":"中转","model_count":6,"models_changed":false}"""));
         await Task.WhenAll(first, second);
 
-        Assert.AreEqual(1, h.Core.Count("save_connection"));
+        Assert.AreEqual(1, h.Core.Count("save_relay"));
     }
 
     [TestMethod]
@@ -349,7 +391,7 @@ public class AppModelTests
         h.FillInputs();
         await h.Model.CompleteSetupAsync();
 
-        var p = h.Core.ParamsOf("save_connection");
+        var p = h.Core.ParamsOf("save_relay");
         Assert.AreEqual("https://relay.example.com", p["base_url"]);
         Assert.AreEqual("sk-example-0000", p["api_key"]);
     }
@@ -359,11 +401,11 @@ public class AppModelTests
     {
         var h = new Harness();
         h.FillInputs();
-        h.Core.Fail("save_connection", "relay_401");
+        h.Core.Fail("save_relay", "relay_401");
 
         await h.Model.CompleteSetupAsync();
 
-        Assert.AreEqual("没能连上中台", h.Model.TaskError?.Title);
+        Assert.AreEqual("没能连上中转服务", h.Model.TaskError?.Title);
         Assert.AreEqual(Msg("relay_401"), h.Model.TaskError?.Detail);
         Assert.AreEqual(0, h.Vault.Saved.Count);
         Assert.AreEqual(AppPage.Setup, h.Model.Page);
@@ -376,7 +418,7 @@ public class AppModelTests
     {
         var h = new Harness();
         h.FillInputs();
-        h.Core.Fail("save_connection", "relay_unreachable");
+        h.Core.Fail("save_relay", "relay_unreachable");
 
         await h.Model.CompleteSetupAsync();
 
@@ -418,12 +460,12 @@ public class AppModelTests
         await h.Model.CompleteSetupAsync();
 
         CollectionAssert.AreEqual(
-            new[] { "call:save_connection", "vault:save", "settings:save", "call:set_forwarding", "login:enable" },
+            new[] { "call:save_relay", "vault:save", "settings:save", "call:set_forwarding", "login:enable" },
             h.Log);
         Assert.AreEqual(true, h.Core.ParamsOf("set_forwarding")["enabled"]);
         Assert.AreEqual(AppPage.Success, h.Model.Page);
         Assert.AreEqual("设置完成，转发已开启", h.Model.SuccessTitle);
-        Assert.AreEqual("已获取 6 个", h.Model.ModelCountText);
+        Assert.AreEqual("中转模型 6 个（1 个配置）", h.Model.RelayModelSummary);
         Assert.AreEqual(0, h.Model.Notices.Count);
     }
 
@@ -460,7 +502,7 @@ public class AppModelTests
         h.FillInputs();
         await h.Model.CompleteSetupAsync();
 
-        StringAssert.Contains(h.Model.SuccessText, "已获取 6 个中台模型");
+        StringAssert.Contains(h.Model.SuccessText, "已获取 6 个中转模型");
         Assert.IsTrue(
             h.Model.SuccessText.EndsWith(
                 "\n请重启 ChatGPT 后使用。助手会在你登录电脑时自动启动，在任务栏通知区域里常驻。",
@@ -656,132 +698,6 @@ public class AppModelTests
 
     #endregion
 
-    #region 保存修改
-
-    [TestMethod]
-    public async Task Save_CoreFails_NoSaveNoticeWithReason_InputKept()
-    {
-        var h = new Harness();
-        h.FillInputs();
-        h.Core.Fail("save_connection", "relay_403");
-
-        await h.Model.SaveConnectionAsync();
-
-        Assert.AreEqual(NoSave, Find(h, NoSave)?.Title);
-        Assert.AreEqual(Msg("relay_403"), Find(h, NoSave)?.Detail);
-        Assert.AreEqual(0, h.Vault.Saved.Count);
-        Assert.AreEqual("https://relay.example.com", h.Model.BaseUrlInput);
-        Assert.AreEqual("sk-example-0000", h.Model.ApiKeyInput);
-    }
-
-    [TestMethod]
-    public async Task Save_Success_WritesCredentialAndSettings()
-    {
-        var h = new Harness();
-        h.FillInputs();
-        await h.Model.SaveConnectionAsync();
-
-        CollectionAssert.AreEqual(new[] { "sk-example-0000" }, h.Vault.Saved);
-        Assert.AreEqual("https://relay.example.com", h.Settings.BaseUrl);
-    }
-
-    [TestMethod]
-    public async Task Save_CredentialWriteFails_RollsBackCoreWithOldValues()
-    {
-        var h = new Harness();
-        h.Settings.BaseUrl = OldUrl;
-        h.Vault.Stored = OldKey;
-        h.FillInputs();
-        h.Vault.SaveException = new IOException();
-
-        await h.Model.SaveConnectionAsync();
-
-        Assert.AreEqual(2, h.Core.Count("save_connection"));
-        var rollback = h.Core.Calls.Last(c => c.Method == "save_connection").Params;
-        Assert.AreEqual(OldUrl, rollback["base_url"]);
-        Assert.AreEqual(OldKey, rollback["api_key"]);
-        Assert.AreEqual(NoSave, Find(h, NoSave)?.Title);
-        Assert.AreEqual(CredentialWriteFailed, Find(h, NoSave)?.Detail);
-    }
-
-    [TestMethod]
-    public async Task Save_SettingsWriteFails_RollsBackCoreWithOldValues()
-    {
-        var h = new Harness();
-        h.Settings.BaseUrl = OldUrl;
-        h.Vault.Stored = OldKey;
-        h.FillInputs();
-        h.Settings.SaveException = new IOException();
-
-        await h.Model.SaveConnectionAsync();
-
-        var rollback = h.Core.Calls.Last(c => c.Method == "save_connection").Params;
-        Assert.AreEqual(2, h.Core.Count("save_connection"));
-        Assert.AreEqual(OldUrl, rollback["base_url"]);
-        Assert.AreEqual(OldKey, rollback["api_key"]);
-        Assert.AreEqual(OldKey, h.Vault.Stored);
-        Assert.AreEqual(NoSave, Find(h, NoSave)?.Title);
-    }
-
-    const string SavedNeedsRestartTitle = "已保存";
-    const string SavedNoRestartTitle = "已保存，不需要重启 ChatGPT";
-    const string SavedNoRestartDetail = "已重新获取中台模型，不需要重启 ChatGPT。";
-
-    [TestMethod]
-    public async Task Save_ModelsChangedAndChatGptRunning_SuccessNoticeWithCountAndRestartHint_NoConfirm()
-    {
-        var h = new Harness();
-        h.FillInputs();
-        h.ChatGpt.Running = true;
-        h.Core.On("save_connection", _ => Json.Parse("""{"models_changed":true,"relay_model_count":7}"""));
-
-        await h.Model.SaveConnectionAsync();
-
-        var notice = h.Model.Notices.Last();
-        Assert.AreEqual(SavedNeedsRestartTitle, notice.Title);
-        Assert.AreEqual("现在可用 7 个中台模型。重启 ChatGPT 后，Codex 里会显示新的列表。", notice.Detail);
-        Assert.AreEqual(AppSeverity.Success, notice.Severity);
-        Assert.AreEqual(0, h.Confirmer.Requests.Count);
-    }
-
-    [TestMethod]
-    public async Task Save_ModelsChangedButChatGptNotRunning_NoRestartNeededNotice()
-    {
-        var h = new Harness();
-        h.FillInputs();
-        h.ChatGpt.Running = false;
-        h.Core.On("save_connection", _ => Json.Parse("""{"models_changed":true,"relay_model_count":7}"""));
-
-        await h.Model.SaveConnectionAsync();
-
-        var notice = h.Model.Notices.Last();
-        Assert.AreEqual(SavedNoRestartTitle, notice.Title);
-        Assert.AreEqual(SavedNoRestartDetail, notice.Detail);
-        Assert.AreEqual(AppSeverity.Success, notice.Severity);
-        Assert.AreEqual(0, h.Confirmer.Requests.Count);
-    }
-
-    [TestMethod]
-    public async Task Save_ModelsUnchanged_NoRestartNeededNotice()
-    {
-        foreach (var running in new[] { true, false })
-        {
-            var h = new Harness();
-            h.FillInputs();
-            h.ChatGpt.Running = running;
-
-            await h.Model.SaveConnectionAsync();
-
-            var notice = h.Model.Notices.Last();
-            Assert.AreEqual(SavedNoRestartTitle, notice.Title, "running=" + running);
-            Assert.AreEqual(SavedNoRestartDetail, notice.Detail, "running=" + running);
-            Assert.AreEqual(AppSeverity.Success, notice.Severity, "running=" + running);
-            Assert.AreEqual(0, h.Confirmer.Requests.Count, "running=" + running);
-        }
-    }
-
-    #endregion
-
     #region 登录时启动
 
     [TestMethod]
@@ -796,7 +712,7 @@ public class AppModelTests
         var ask = h.Confirmer.Requests.Single();
         Assert.AreEqual("关闭「登录时启动」？", ask.Title);
         Assert.AreEqual(
-            "关闭后，下次登录电脑时助手不会自动运行。在你手动打开助手之前，Codex 里的官方模型和中台模型都无法使用，因为转发仍然开着。如果以后不打算常驻，建议先关闭转发。",
+            "关闭后，下次登录电脑时助手不会自动运行。在你手动打开助手之前，Codex 里的官方模型和中转模型都无法使用，因为转发仍然开着。如果以后不打算常驻，建议先关闭转发。",
             ask.Message);
     }
 
@@ -956,7 +872,7 @@ public class AppModelTests
         await h.Model.UninstallAsync();
 
         Assert.AreEqual(0, h.Core.Count("prepare_uninstall"));
-        Assert.AreEqual(0, h.Vault.DeleteCount);
+        Assert.AreEqual(0, h.Vault.DeleteAllCount);
         Assert.AreEqual(0, h.Settings.DeleteCount);
         Assert.AreEqual(0, h.Login.DisableCount);
     }
@@ -974,7 +890,7 @@ public class AppModelTests
         CollectionAssert.AreEqual(
             new[] { "model_provider", "openai_base_url" }, h.Model.UninstallPause?.Keys.ToArray());
         Assert.AreEqual("/home/example/.codex/config.toml", h.Model.UninstallPause?.ConfigPath);
-        Assert.AreEqual(0, h.Vault.DeleteCount);
+        Assert.AreEqual(0, h.Vault.DeleteAllCount);
         Assert.AreEqual(0, h.Settings.DeleteCount);
         Assert.AreEqual(0, h.Login.DisableCount);
         Assert.IsNull(h.Model.Uninstalled);
@@ -984,11 +900,14 @@ public class AppModelTests
     public async Task Uninstall_Success_CleansEverythingInOrder_ExitCode0()
     {
         var h = new Harness();
+        h.Seed("1", "中转", "https://relay.example.com", "sk-example-0001");
+        h.Seed("2", "A家", "https://relay2.example.com", "sk-example-0002");
 
         var code = await h.Model.UninstallAsync();
 
         Assert.AreEqual(0, code);
-        Assert.AreEqual(1, h.Vault.DeleteCount);
+        Assert.AreEqual(1, h.Vault.DeleteAllCount);
+        Assert.AreEqual(0, h.Vault.Keys.Count);
         Assert.AreEqual(1, h.Settings.DeleteCount);
         Assert.AreEqual(1, h.Login.DisableCount);
         Assert.IsNotNull(h.Model.Uninstalled);
@@ -1000,6 +919,7 @@ public class AppModelTests
     public async Task Uninstall_CredentialDeleteFails_RecordedAndOthersStillCleaned_ExitCode0()
     {
         var h = new Harness();
+        h.Seed("1", "中转", "https://relay.example.com", "sk-example-0001");
         h.Vault.DeleteException = new IOException();
 
         var code = await h.Model.UninstallAsync();
@@ -1124,42 +1044,6 @@ public class AppModelTests
     }
 
     [TestMethod]
-    public void Banners_RelayStale()
-    {
-        var h = new Harness();
-        h.Push(s => s["relay"]!["stale"] = true);
-        Assert.IsTrue(Has(h, "中台模型列表本次没有更新"));
-    }
-
-    [TestMethod]
-    public void Banners_NeverSucceeded_ZeroModelsAndError()
-    {
-        var h = new Harness();
-        h.Push(s =>
-        {
-            s["relay"]!["model_count"] = 0;
-            s["relay"]!["error"] = "relay_unreachable";
-        });
-        Assert.IsTrue(Has(h, "还没有获取到中台模型"));
-    }
-
-    [TestMethod]
-    public void Banners_ZeroModelsWithoutError_NoNeverSucceeded()
-    {
-        var h = new Harness();
-        h.Push(s => s["relay"]!["model_count"] = 0);
-        Assert.IsFalse(Has(h, "还没有获取到中台模型"));
-    }
-
-    [TestMethod]
-    public void Banners_ModelsPresentWithError_NoNeverSucceeded()
-    {
-        var h = new Harness();
-        h.Push(s => s["relay"]!["error"] = "relay_unreachable");
-        Assert.IsFalse(Has(h, "还没有获取到中台模型"));
-    }
-
-    [TestMethod]
     public void Banners_RestoreBlocked_ShortDetailAndOnlyShowDetailAction()
     {
         var h = new Harness();
@@ -1213,7 +1097,8 @@ public class AppModelTests
     public void Banners_FollowLatestStatus_ClearedWhenProblemGone()
     {
         var h = new Harness();
-        h.Push(s => s["relay"]!["stale"] = true);
+        h.Push(s => s["taken_over"] = new JsonArray("openai_base_url"));
+        Assert.AreEqual(1, h.Model.Banners.Count);
         h.Push();
         Assert.AreEqual(0, h.Model.Banners.Count);
     }
@@ -1290,7 +1175,8 @@ public class AppModelTests
 
         await h.Model.StartAsync();
 
-        Assert.AreEqual(new CoreInitParams(OldUrl, OldKey, @"C:\Apps\ChatGPT"), h.Core.StartedWith);
+        CollectionAssert.AreEqual(new[] { new RelayInit("1", "中转", OldUrl, OldKey) }, h.Core.StartedWith!.Relays.ToArray());
+        Assert.AreEqual(@"C:\Apps\ChatGPT", h.Core.StartedWith.ChatGptDir);
     }
 
     #endregion
@@ -1301,6 +1187,7 @@ public class AppModelTests
     public async Task Start_CredentialReadFails_NoticeAndAsksToShowMainWindow()
     {
         var h = new Harness();
+        h.Settings.BaseUrl = OldUrl;
         h.Vault.ReadException = new System.ComponentModel.Win32Exception(5);
 
         await h.Model.StartAsync();
@@ -1330,39 +1217,10 @@ public class AppModelTests
 
     #endregion
 
-    #region 模型数量
-
-    [TestMethod]
-    public void ModelCountText_FromStatus()
-    {
-        var h = new Harness();
-        h.Push(s => s["relay"]!["model_count"] = 12);
-        Assert.AreEqual("已获取 12 个", h.Model.ModelCountText);
-    }
-
-    [TestMethod]
-    public void ModelCountText_DoesNotExposeModelNames()
-    {
-        var h = new Harness();
-        h.Push(s => s["relay"]!["models"] = new JsonArray("gpt-example-1"));
-
-        var shown = h.Model.ModelCountText + string.Join("", h.Model.Banners.Select(b => b.Title + b.Detail));
-        Assert.IsFalse(shown.Contains("gpt-example-1"));
-    }
-
-    #endregion
-
     #region 复核补充
 
-    static void AssertCoreReset(Harness h)
-    {
-        var init = h.Core.ParamsOf("init");
-        Assert.IsNull(init["base_url"]);
-        Assert.IsNull(init["api_key"]);
-    }
-
     [TestMethod]
-    public async Task Setup_SettingsWriteFails_DeletesKeyAndResetsCoreToNoConnection()
+    public async Task Setup_SettingsWriteFails_DeletesKey()
     {
         var h = new Harness();
         h.FillInputs();
@@ -1372,13 +1230,12 @@ public class AppModelTests
 
         Assert.AreEqual(1, h.Vault.DeleteCount);
         Assert.IsNull(h.Vault.Stored);
-        AssertCoreReset(h);
         Assert.IsNotNull(Find(h, NoSave));
         Assert.AreEqual(AppPage.Setup, h.Model.Page);
     }
 
     [TestMethod]
-    public async Task Setup_CredentialWriteFails_ResetsCoreToNoConnection()
+    public async Task Setup_CredentialWriteFails_SettingsNotWritten()
     {
         var h = new Harness();
         h.FillInputs();
@@ -1386,23 +1243,8 @@ public class AppModelTests
 
         await h.Model.CompleteSetupAsync();
 
-        AssertCoreReset(h);
-    }
+        Assert.AreEqual(0, h.Settings.Relays.Count);
 
-    [TestMethod]
-    public async Task Save_SettingsWriteFails_NoOldKey_DeletesNewKeyAndResetsCore()
-    {
-        var h = new Harness();
-        h.Settings.BaseUrl = OldUrl;
-        h.FillInputs();
-        h.Settings.SaveException = new IOException();
-
-        await h.Model.SaveConnectionAsync();
-
-        Assert.AreEqual(1, h.Core.Count("save_connection"));
-        Assert.AreEqual(1, h.Vault.DeleteCount);
-        Assert.IsNull(h.Vault.Stored);
-        AssertCoreReset(h);
     }
 
     [TestMethod]
@@ -1536,12 +1378,12 @@ public class AppModelTests
     {
         var withUrl = new Harness();
         withUrl.Settings.BaseUrl = OldUrl;
-        var withKey = new Harness();
-        withKey.Vault.Stored = OldKey;
         var withLogin = new Harness();
         withLogin.Login.Enabled = true;
+        var withKey = new Harness();
+        withKey.Vault.Stored = OldKey;
         var unreadable = new Harness();
-        unreadable.Vault.ReadException = new IOException();
+        unreadable.Settings.ReadException = new IOException();
 
         Assert.IsFalse(withUrl.Model.IsAlreadyCleaned());
         Assert.IsFalse(withKey.Model.IsAlreadyCleaned());
@@ -1560,7 +1402,7 @@ public class AppModelTests
             await h.Model.StartAsync();
 
             Assert.AreEqual(AppPage.Setup, h.Model.Page, ex.GetType().Name);
-            Assert.IsNull(h.Core.StartedWith?.BaseUrl, ex.GetType().Name);
+            Assert.AreEqual(0, h.Core.StartedWith!.Relays.Count, ex.GetType().Name);
         }
     }
 
@@ -1609,39 +1451,6 @@ public class AppModelTests
         await h.Model.CheckUpdateAsync();
 
         CollectionAssert.AreEqual(new[] { UpdateUnavailable }, Titles(h));
-    }
-
-    [TestMethod]
-    public async Task Notices_RepeatedSaveFailure_KeepsSingleNotice_ThenSuccessRemovesIt()
-    {
-        var h = new Harness();
-        h.FillInputs();
-        h.Core.Fail("save_connection", "relay_403");
-
-        await h.Model.SaveConnectionAsync();
-        await h.Model.SaveConnectionAsync();
-        CollectionAssert.AreEqual(new[] { NoSave }, Titles(h));
-
-        h.Core.On("save_connection", _ => Json.Parse("""{"models_changed":false,"relay_model_count":6}"""));
-        await h.Model.SaveConnectionAsync();
-
-        CollectionAssert.AreEqual(new[] { SavedNoRestartTitle }, Titles(h));
-    }
-
-    [TestMethod]
-    public async Task Notices_PersistFailure_RemovedByLaterSuccessfulSave()
-    {
-        var h = new Harness();
-        h.FillInputs();
-        h.Vault.SaveException = new IOException();
-        await h.Model.SaveConnectionAsync();
-        Assert.IsNotNull(Find(h, NoSave));
-
-        h.Vault.SaveException = null;
-        await h.Model.SaveConnectionAsync();
-
-        Assert.IsNull(Find(h, NoSave));
-        Assert.IsNotNull(Find(h, SavedNoRestartTitle));
     }
 
     [TestMethod]
@@ -1760,16 +1569,19 @@ public class AppModelTests
     public async Task Notice_EachSuccessDismissesOnItsOwnTimer()
     {
         var h = new Harness();
-        h.FillInputs();
+        h.Seed("1", "中转", "https://relay.example.com", "sk-example-0001");
+        h.Seed("2", "A家", "https://relay2.example.com", "sk-example-0002");
+        await h.Model.StartAsync();
+        h.Core.On("delete_relay", _ => Json.Status());
         h.Model.NoticeAutoDismissDelay = TimeSpan.FromMilliseconds(600);
 
         await h.Model.CheckUpdateAsync();
         await Task.Delay(400);
-        await h.Model.SaveConnectionAsync();
-        CollectionAssert.AreEqual(new[] { UpToDate, SavedNoRestartTitle }, Titles(h));
+        await h.Model.PerformDeleteRelayAsync("2");
+        CollectionAssert.AreEqual(new[] { UpToDate, "已删除「A家」" }, Titles(h));
 
         await Task.Delay(400);
-        CollectionAssert.AreEqual(new[] { SavedNoRestartTitle }, Titles(h));
+        CollectionAssert.AreEqual(new[] { "已删除「A家」" }, Titles(h));
         await WaitUntilAsync(() => h.Model.Notices.Count == 0);
         Assert.AreEqual(0, h.Model.Notices.Count);
     }
@@ -1795,12 +1607,6 @@ public class AppModelTests
     static readonly (string Name, Action<JsonObject> Tweak)[] StatusProblems =
     [
         ("taken_over", s => s["taken_over"] = new JsonArray("openai_base_url")),
-        ("stale", s => s["relay"]!["stale"] = true),
-        ("never_succeeded", s =>
-        {
-            s["relay"]!["model_count"] = 0;
-            s["relay"]!["error"] = "relay_unreachable";
-        }),
         ("restore_blocked", s => s["restore_blocked"] = new JsonArray("openai_base_url")),
         ("proxy_error", s => s["proxy"] = new JsonObject { ["running"] = false, ["error"] = "proxy_port_in_use" }),
         ("chatgpt_missing", s => s["chatgpt"] = new JsonObject { ["found"] = false, ["error"] = null }),
@@ -1866,23 +1672,6 @@ public class AppModelTests
         h.Push(taken);
         CollectionAssert.AreEqual(
             new[] { "已接管 Codex 原有的接入设置" }, h.Model.Banners.Select(b => b.Title).ToArray());
-    }
-
-    [TestMethod]
-    public void DismissBanner_RelayStale_StaysHiddenUntilStaleAgain()
-    {
-        var h = new Harness();
-        Action<JsonObject> stale = s => s["relay"]!["stale"] = true;
-        h.Push(stale);
-        h.Model.DismissBanner(h.Model.Banners.Single());
-
-        h.Push(stale);
-        Assert.AreEqual(0, h.Model.Banners.Count);
-
-        h.Push();
-        h.Push(stale);
-        CollectionAssert.AreEqual(
-            new[] { "中台模型列表本次没有更新" }, h.Model.Banners.Select(b => b.Title).ToArray());
     }
 
     [TestMethod]

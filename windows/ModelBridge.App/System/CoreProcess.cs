@@ -23,7 +23,9 @@ public sealed class CoreProcessOptions(string executablePath, IReadOnlyList<stri
             ["--data-dir", Path.Combine(localAppData, "ModelBridge")]);
 }
 
-public sealed record CoreInitParams(string? BaseUrl, string? ApiKey, string? ChatGptDir);
+public sealed record RelayInit(string Id, string Name, string BaseUrl, string ApiKey);
+
+public sealed record CoreInitParams(IReadOnlyList<RelayInit> Relays, string? ChatGptDir);
 
 public sealed class CoreCallException(string code, IReadOnlyList<string> keys) : Exception($"核心返回错误：{code}")
 {
@@ -125,8 +127,13 @@ public sealed class CoreProcess(CoreProcessOptions options, Func<CoreInitParams>
         var init = initParams();
         return CallAsync("init", new Dictionary<string, object?>
         {
-            ["base_url"] = init.BaseUrl,
-            ["api_key"] = init.ApiKey,
+            ["relays"] = init.Relays.Select(r => new Dictionary<string, object?>
+            {
+                ["id"] = r.Id,
+                ["name"] = r.Name,
+                ["base_url"] = r.BaseUrl,
+                ["api_key"] = r.ApiKey,
+            }).ToList(),
             ["chatgpt_dir"] = init.ChatGptDir,
         });
     }

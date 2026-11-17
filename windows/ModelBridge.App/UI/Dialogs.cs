@@ -21,13 +21,37 @@ public sealed class WindowConfirmer : IConfirmer
 
 static class Dialogs
 {
-    public static DialogWindow? Current { get; private set; }
+    public static Window? Current { get; internal set; }
 
-    public static int Show(DialogModel model)
+    public static int Show(DialogModel model) => Show(new DialogWindow(model));
+
+    public static void ShowDeleteRelay(AppModel model, RelayRow row, Window? owner = null)
     {
-        var dialog = new DialogWindow(model);
+        var count = model.ModelCountOf(row.Id);
+        var dialog = new DialogWindow(DialogModel.ForDeleteRelay(row.Name, count, isDeleting: false));
+        var deleting = false;
+        dialog.ButtonHandler = async index =>
+        {
+            if (index == 0)
+            {
+                if (!deleting) dialog.Close();
+                return;
+            }
+            if (deleting) return;
+            deleting = true;
+            dialog.Apply(DialogModel.ForDeleteRelay(row.Name, count, isDeleting: true));
+            try { await model.PerformDeleteRelayAsync(row.Id); }
+            finally { dialog.ForceClose(); }
+        };
+        dialog.Owner = owner ?? Application.Current.Windows.OfType<MainWindow>().FirstOrDefault();
+        dialog.WindowStartupLocation = WindowStartupLocation.CenterOwner;
+        Show(dialog);
+    }
+
+    static int Show(DialogWindow dialog)
+    {
         Current = dialog;
-        var owner = Application.Current.Windows.OfType<Window>().FirstOrDefault(w => w.IsVisible && w.IsActive && w is not TrayPanelWindow);
+        var owner = dialog.Owner ?? Application.Current.Windows.OfType<Window>().FirstOrDefault(w => w.IsVisible && w.IsActive && w is not TrayPanelWindow);
         if (owner != null)
         {
             dialog.Owner = owner;
@@ -48,6 +72,28 @@ static class RestoreHelp
         while ((choice = Dialogs.Show(DialogModel.ForRestoreHelp(banner.Code, banner.Keys, banner.ConfigPath))) == 1)
             ExternalOpen.FolderOf(banner.ConfigPath);
         if (choice == 2) _ = model.RecheckAsync();
+    }
+}
+
+public sealed class AppIcon : FrameworkElement
+{
+    protected override void OnRender(DrawingContext dc)
+    {
+        var size = Math.Min(ActualWidth, ActualHeight);
+        var corner = size * 48 / 256;
+        dc.DrawRoundedRectangle(AlertView.Brush("PrimaryBrush"), null, new Rect(0, 0, size, size), corner, corner);
+
+        var arrowsOnly = size < 24;
+        var graphic = size * 0.88;
+        var strokeUnits = arrowsOnly ? 12 : size >= 64 ? 6 : 9;
+        var pen = new Pen(Brushes.White, strokeUnits) { StartLineCap = PenLineCap.Round, EndLineCap = PenLineCap.Round, LineJoin = PenLineJoin.Round };
+        var geometry = (Geometry)FindResource(arrowsOnly ? "AppIconArrowsGeometry" : "AppIconGeometry");
+        var scale = graphic / 100;
+        dc.PushTransform(new TranslateTransform((size - graphic) / 2, (size - graphic) / 2));
+        dc.PushTransform(new ScaleTransform(scale, scale));
+        dc.DrawGeometry(null, pen, geometry);
+        dc.Pop();
+        dc.Pop();
     }
 }
 

@@ -51,6 +51,31 @@ public class CoreProtocolTests
     }
 
     [TestMethod]
+    public void ErrorMessages_IncludeMultiRelayCodes()
+    {
+        string[] codes = ["name_empty", "name_too_long", "name_has_dot", "name_duplicate", "relay_limit", "relay_last", "relay_not_found"];
+        var protocol = ReadProtocolErrorTable();
+
+        foreach (var code in codes)
+        {
+            Assert.IsTrue(protocol.ContainsKey(code), $"PROTOCOL.md 缺 {code}");
+            Assert.IsTrue(CoreErrorMessages.Messages.ContainsKey(code), $"Messages 缺 {code}");
+        }
+    }
+
+    [TestMethod]
+    public void ErrorMessages_RelayCodesSayZhongzhuan_NotLegacyWord()
+    {
+        var legacy = "中" + "台";
+        foreach (var (code, text) in CoreErrorMessages.Messages.Where(m => m.Key.StartsWith("relay_")))
+        {
+            Assert.IsFalse(text.Contains(legacy), code);
+        }
+        Assert.IsTrue(CoreErrorMessages.Messages["relay_401"].StartsWith("中转服务返回 401"));
+        Assert.IsTrue(CoreErrorMessages.Messages["relay_unreachable"].Contains("中转"));
+    }
+
+    [TestMethod]
     public void ErrorMessages_NoCodeOutsideProtocol()
     {
         var extra = CoreErrorMessages.Messages.Keys.Except(ReadProtocolErrorTable().Keys).ToArray();

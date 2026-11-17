@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
 using System.Windows.Threading;
@@ -10,7 +11,7 @@ namespace ModelBridge.UI;
 public sealed class CoreClient : ICoreClient
 {
     readonly CoreProcess process;
-    CoreInitParams init = new(null, null, null);
+    CoreInitParams init = new([], null);
 
     public CoreClient(CoreProcessOptions options, Dispatcher ui)
     {
@@ -33,26 +34,38 @@ public sealed class CoreClient : ICoreClient
     public async Task<JsonElement> CallAsync(string method, IReadOnlyDictionary<string, object?>? parameters = null)
     {
         var result = await process.CallAsync(method, parameters);
-        if (method == "save_connection" && parameters != null)
-            init = init with { BaseUrl = parameters["base_url"] as string, ApiKey = parameters["api_key"] as string };
-        else if (method == "init" && parameters != null)
-            init = new CoreInitParams(
-                parameters["base_url"] as string, parameters["api_key"] as string, parameters["chatgpt_dir"] as string);
+        if (parameters == null) return result;
+
+        if (method == "save_relay" && result.TryGetProperty("id", out var id) && id.GetString() is { } relayId)
+        {
+            var relay = new RelayInit(
+                relayId, (string)parameters["name"]!, (string)parameters["base_url"]!, (string)parameters["api_key"]!);
+            var relays = init.Relays.ToList();
+            var index = relays.FindIndex(r => r.Id == relayId);
+            if (index >= 0) relays[index] = relay; else relays.Add(relay);
+            init = init with { Relays = relays };
+        }
+        else if (method == "delete_relay")
+            init = init with { Relays = init.Relays.Where(r => r.Id != (string?)parameters["id"]).ToList() };
+        else if (method == "init")
+            init = init with { Relays = [], ChatGptDir = parameters["chatgpt_dir"] as string };
         return result;
     }
 }
 
-public sealed class VaultAdapter(CredentialStore store) : ICredentialVault
+public sealed class VaultAdapter : ICredentialVault
 {
-    public void Save(string key) => store.Save(key);
-    public string? Read() => store.Read();
-    public void Delete() => store.Delete();
+    public void Save(string id, string key) => new CredentialStore(CredentialStore.TargetNameFor(id)).Save(key);
+    public string? Read(string id) => new CredentialStore(CredentialStore.TargetNameFor(id)).Read();
+    public void Delete(string id) => new CredentialStore(CredentialStore.TargetNameFor(id)).Delete();
+    public void DeleteAll() => CredentialStore.DeleteByPrefix(CredentialStore.TargetPrefix);
+    public bool Any() => CredentialStore.ExistsByPrefix(CredentialStore.TargetPrefix);
 }
 
 public sealed class SettingsAdapter(ShellSettings settings) : IShellSettingsStore
 {
-    public string? ReadBaseUrl() => settings.ReadBaseUrl();
-    public void SaveBaseUrl(string baseUrl) => settings.SaveBaseUrl(baseUrl);
+    public IReadOnlyList<RelayConfig> ReadRelays() => settings.ReadRelays();
+    public void SaveRelays(IReadOnlyList<RelayConfig> relays) => settings.SaveRelays(relays);
     public void DeleteAll() => settings.DeleteAll();
 }
 

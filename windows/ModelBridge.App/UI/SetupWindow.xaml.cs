@@ -38,7 +38,7 @@ public partial class SetupWindow : Window
         FormPanel.Visibility = done ? Visibility.Collapsed : Visibility.Visible;
         DonePanel.Visibility = done ? Visibility.Visible : Visibility.Collapsed;
         SubmitButton.IsEnabled = !model.IsConnecting;
-        SubmitButton.Content = model.IsConnecting ? "正在连接中台…" : "完成设置";
+        SubmitButton.Content = model.IsConnecting ? AppModel.ConnectingText : "完成设置";
 
         DoneTitle.Text = model.SuccessTitle;
         DoneText.Text = model.SuccessText;

@@ -37,6 +37,20 @@ public sealed record UninstallPause(IReadOnlyList<string> Keys, string ConfigPat
 
 public sealed record UninstallOutcome(IReadOnlyList<string> Leftovers, bool ChatGptRunning);
 
+public enum RelayRowState { Normal, Stale, NeverFetched, Fetching, ForwardingOff }
+
+public sealed record RelayRow(
+    string Id,
+    string Name,
+    string BaseUrl,
+    RelayRowState State,
+    string StatusText,
+    bool CanRetry,
+    bool CanEdit,
+    bool CanDelete);
+
+sealed record RelayStatus(int ModelCount, string? FetchedAt, bool Stale);
+
 public interface ICoreClient
 {
     event Action<JsonElement>? StatusReceived;
@@ -48,15 +62,17 @@ public interface ICoreClient
 
 public interface ICredentialVault
 {
-    void Save(string key);
-    string? Read();
-    void Delete();
+    void Save(string id, string key);
+    string? Read(string id);
+    void Delete(string id);
+    void DeleteAll();
+    bool Any();
 }
 
 public interface IShellSettingsStore
 {
-    string? ReadBaseUrl();
-    void SaveBaseUrl(string baseUrl);
+    IReadOnlyList<RelayConfig> ReadRelays();
+    void SaveRelays(IReadOnlyList<RelayConfig> relays);
     void DeleteAll();
 }
 
@@ -78,11 +94,10 @@ public interface IConfirmer
     Task<bool> ConfirmAsync(ConfirmRequest request);
 }
 
-public sealed class AppModel : INotifyPropertyChanged
+public sealed class AppModel : IRelayFields
 {
     public const string ActivationFailedMessage = "模型接入助手已在运行，但无法切换到它，请从任务栏通知区域打开";
 
-    const string Required = "必填";
     const string NoSave = "没有保存";
     const string CredentialWriteFailed = "无法写入系统凭据管理器";
     const string SettingsWriteFailed = "无法保存设置";
@@ -97,9 +112,12 @@ public sealed class AppModel : INotifyPropertyChanged
     const string AccessSwitchFailed = "没能切换接入方式";
     const string KeyUnreadable = "无法读取已保存的 API Key，请重新输入";
     const string RestartHint = "重启 ChatGPT 后生效。";
-    const string SavedNoRestart = "已保存，不需要重启 ChatGPT";
+    public const int MaxRelays = 10;
+    public const int MaxNameLength = 16;
     const string QuitBase = "退出前会关闭转发，并把 Codex 配置还原成开启前的样子。";
     const string QuitRunningTail = "ChatGPT 正在运行，请在退出后重启 ChatGPT。";
+
+    const string DefaultRelayName = "中转";
 
     readonly ICoreClient core;
     readonly ICredentialVault vault;
@@ -107,9 +125,12 @@ public sealed class AppModel : INotifyPropertyChanged
     readonly ILoginStart login;
     readonly IChatGptControl chatGpt;
     readonly IConfirmer confirmer;
+    RelayEditorModel? activeEditor;
 
+    string nameInput = DefaultRelayName;
     string baseUrlInput = "";
     string apiKeyInput = "";
+    string? nameError;
     string? baseUrlError;
     string? apiKeyError;
     bool isConnecting;
@@ -130,8 +151,12 @@ public sealed class AppModel : INotifyPropertyChanged
     string? accessDetect;
     bool isDetectingAccess;
     bool startupAligned;
-    int modelCount;
-    string? fetchedAt;
+    IReadOnlyList<RelayConfig> configs = [];
+    Dictionary<string, RelayStatus> relayStatus = [];
+    readonly HashSet<string> fetching = [];
+    string? defaultRelay;
+    string? deletingRelayId;
+    IReadOnlyList<RelayRow> relays = [];
     string version = "";
     string configPath = "";
     string? updateVersion;
@@ -165,6 +190,19 @@ public sealed class AppModel : INotifyPropertyChanged
     public event Action? ShowMainWindowRequested;
     public event Action? ExitRequested;
 
+    public static string SetupHeading => "连接中转服务";
+    public static string SetupDescription => "填写中转服务提供的 Base URL 和 API Key。设置完成后，Codex 的模型列表里会多出中转模型。";
+    public static string ConnectingText => "正在连接中转…";
+
+    public string NameInput
+    {
+        get => nameInput;
+        set
+        {
+            if (Set(ref nameInput, value)) NameError = null;
+        }
+    }
+
     public string BaseUrlInput
     {
         get => baseUrlInput;
@@ -183,6 +221,7 @@ public sealed class AppModel : INotifyPropertyChanged
         }
     }
 
+    public string? NameError { get => nameError; private set => Set(ref nameError, value); }
     public string? BaseUrlError { get => baseUrlError; private set => Set(ref baseUrlError, value); }
     public string? ApiKeyError { get => apiKeyError; private set => Set(ref apiKeyError, value); }
     public bool IsConnecting { get => isConnecting; private set => Set(ref isConnecting, value); }
@@ -216,11 +255,12 @@ public sealed class AppModel : INotifyPropertyChanged
         private set
         {
             if (!Set(ref forwardingEnabled, value)) return;
-            Raise(nameof(RelayStatusText));
             Raise(nameof(CoreStatusText));
             Raise(nameof(AccessModeName));
-            Raise(nameof(AccessHelpText));
+            Raise(nameof(OverviewTitle));
+            Raise(nameof(OverviewText));
             Raise(nameof(ForwardingHelpText));
+            RebuildRelays();
         }
     }
 
@@ -254,6 +294,7 @@ public sealed class AppModel : INotifyPropertyChanged
         {
             if (!Set(ref busy, value)) return;
             Raise(nameof(ToggleEnabled));
+            RebuildRelays();
         }
     }
 
@@ -279,12 +320,18 @@ public sealed class AppModel : INotifyPropertyChanged
         _ => null,
     };
 
-    public string? AccessHelpText => !forwardingEnabled ? null : accessMode switch
-    {
-        "relay" => "不需要登录 ChatGPT。模型列表里只有中台模型，默认选中「中台 · auto」。登录 ChatGPT 后点「重新检测」，就能同时用官方模型。",
-        "both" => "模型列表里官方模型在上，中台模型在下；选官方模型时仍然访问官方服务。",
-        _ => null,
-    };
+    public string OverviewTitle => "使用中转 · " + (forwardingEnabled ? "已开启" : "已关闭");
+
+    public string? OverviewText => !forwardingEnabled
+        ? "已关闭：Codex 配置已还原为开启前的样子。"
+        : accessMode switch
+        {
+            "both" => "官方模型在上，中转模型在下；选官方模型时仍访问官方服务。",
+            "relay" => defaultRelay is { } name
+                ? $"不用登录 ChatGPT。只有中转模型，默认选中「{name} · auto」。"
+                : "不用登录 ChatGPT。只有中转模型，没有默认选中的模型。",
+            _ => null,
+        };
 
     public string ForwardingHelpText => !chatGptFound
         ? "找到 ChatGPT 后才能打开。"
@@ -298,18 +345,27 @@ public sealed class AppModel : INotifyPropertyChanged
 
     public string ChatGptText => chatGptFound ? "已检测到" : "未找到";
 
-    public string ModelCountText => $"已获取 {modelCount} 个";
+    public int ModelCountOf(string id) => relayStatus.GetValueOrDefault(id)?.ModelCount ?? 0;
 
-    public string RelayStatusText
-    {
-        get
-        {
-            if (!forwardingEnabled) return "转发关闭时不获取";
-            if (modelCount == 0) return "暂无，Codex 里只显示官方模型";
-            var time = FormatTime(fetchedAt);
-            return time == null ? ModelCountText : $"{ModelCountText}，{time} 更新";
-        }
-    }
+    public string ApiKeyHelp => RelayEditorModel.ApiKeyHelpText;
+
+    public bool FieldsEnabled => !isConnecting && !busy;
+
+    public string? DeletingRelayId { get => deletingRelayId; private set => Set(ref deletingRelayId, value); }
+
+    public IReadOnlyList<RelayRow> Relays { get => relays; private set => Set(ref relays, value); }
+
+    public string RelayCountText => configs.Count >= MaxRelays
+        ? $"已有 {configs.Count} 个，达到上限。"
+        : $"已有 {configs.Count} 个，最多 {MaxRelays} 个。";
+
+    public bool CanAddRelay => configs.Count < MaxRelays && !busy;
+
+    public string? RelayMinimumText => configs.Count <= 1 ? "至少保留一个配置。" : null;
+
+    public string RelayModelSummary => !forwardingEnabled
+        ? "中转模型 转发关闭时不获取"
+        : $"中转模型 {configs.Sum(c => relayStatus.GetValueOrDefault(c.Id)?.ModelCount ?? 0)} 个（{configs.Count} 个配置）";
 
     public void DismissNotice(Guid id) => RemoveNotice(id);
 
@@ -323,21 +379,25 @@ public sealed class AppModel : INotifyPropertyChanged
 
     public async Task StartAsync()
     {
-        var url = TryReadBaseUrl();
-        string? key = null;
+        configs = TryReadRelays();
+        var inits = new List<RelayInit>();
         var keyUnreadable = false;
-        try
+        foreach (var config in configs)
         {
-            key = vault.Read();
-        }
-        catch (Exception ex) when (IsSystemFault(ex))
-        {
-            keyUnreadable = true;
+            var key = "";
+            try
+            {
+                key = vault.Read(config.Id) ?? "";
+            }
+            catch (Exception ex) when (IsSystemFault(ex))
+            {
+                keyUnreadable = true;
+            }
+            inits.Add(new RelayInit(config.Id, config.Name, config.BaseUrl, key));
         }
 
-        if (url != null) BaseUrlInput = url;
-        if (key != null) ApiKeyInput = key;
-        Page = url == null ? AppPage.Setup : AppPage.Main;
+        RebuildRelays();
+        Page = configs.Count == 0 ? AppPage.Setup : AppPage.Main;
         LoginStartEnabled = login.IsEnabled();
         if (keyUnreadable)
         {
@@ -347,7 +407,7 @@ public sealed class AppModel : INotifyPropertyChanged
 
         try
         {
-            await core.StartAsync(new CoreInitParams(url, key, chatGpt.Locate()));
+            await core.StartAsync(new CoreInitParams(inits, chatGpt.Locate()));
             CoreRunning = true;
         }
         catch (Exception ex) when (ex is CoreCallException or CoreProcessExitedException or IOException or System.ComponentModel.Win32Exception)
@@ -369,23 +429,41 @@ public sealed class AppModel : INotifyPropertyChanged
     public async Task CompleteSetupAsync()
     {
         if (IsConnecting) return;
-        if (!Validate()) return;
+        if (!ValidateSetup()) return;
 
         IsConnecting = true;
         TaskError = null;
         try
         {
+            var name = NameInput.Trim();
             var url = BaseUrlInput.Trim();
             var key = ApiKeyInput.Trim();
-            if (!await SaveToCoreAsync(url, key)) return;
-
-            var persistError = await PersistAsync(url, key, null, null);
-            if (persistError != null)
+            JsonElement saved;
+            try
             {
-                AddNotice(new AppNotice(NoSave, persistError));
+                saved = await core.CallAsync("save_relay", RelayParams(null, name, url, key));
+            }
+            catch (Exception ex) when (ex is CoreCallException or CoreProcessExitedException)
+            {
+                TaskError = new AppNotice("没能连上中转服务", Describe(ex));
                 return;
             }
 
+            var id = Str(saved, "id") ?? "1";
+            var modelCount = Int(saved, "model_count");
+            var config = new RelayConfig(id, Str(saved, "name") ?? name, url);
+            var persistError = Persist(config, key, null, [config]);
+            if (persistError != null)
+            {
+                var reverted = await RollbackAddAsync(id);
+                AddNotice(new AppNotice(
+                    NoSave,
+                    persistError + (reverted ? "" : "\n已在本次运行中生效，但没能保存到本机，重启助手后会恢复成原来的样子。")));
+                return;
+            }
+
+            configs = [config];
+            RebuildRelays();
             RemoveNotices(NoSave);
             var problems = new List<string>();
             try
@@ -408,7 +486,7 @@ public sealed class AppModel : INotifyPropertyChanged
             }
 
             SuccessTitle = forwardingEnabled ? "设置完成，转发已开启" : "设置已保存";
-            SuccessText = $"已获取 {modelCount} 个中台模型。{SetupAccessText()}\n请重启 ChatGPT 后使用。助手会在你登录电脑时自动启动，在任务栏通知区域里常驻。";
+            SuccessText = $"已获取 {modelCount} 个中转模型。{SetupAccessText()}\n请重启 ChatGPT 后使用。助手会在你登录电脑时自动启动，在任务栏通知区域里常驻。";
             if (problems.Count > 0)
                 AddNotice(new AppNotice("设置已保存，但有一项没完成", string.Join("\n", problems), AppSeverity.Warning));
             Page = AppPage.Success;
@@ -486,8 +564,8 @@ public sealed class AppModel : INotifyPropertyChanged
             {
                 var detail = mode switch
                 {
-                    "relay" => "仍然没有检测到 ChatGPT 登录，继续只用中台模型。",
-                    "both" => "仍然检测到 ChatGPT 登录，继续同时使用官方模型和中台模型。",
+                    "relay" => "仍然没有检测到 ChatGPT 登录，继续只用中转模型。",
+                    "both" => "仍然检测到 ChatGPT 登录，继续同时使用官方模型和中转模型。",
                     _ => null,
                 };
                 if (detail != null) AddNotice(new AppNotice(NoChangeTitle, detail, AppSeverity.Info));
@@ -538,8 +616,8 @@ public sealed class AppModel : INotifyPropertyChanged
 
         if (!chatGpt.IsRunning()) return;
         AddNotice(target == "both"
-            ? new AppNotice("已切换到「官方 + 中台」", "已检测到 ChatGPT 登录。重启 ChatGPT 后生效。", AppSeverity.Success)
-            : new AppNotice("已切换到「只用中台」", "没有检测到 ChatGPT 登录。重启 ChatGPT 后生效。", AppSeverity.Success));
+            ? new AppNotice("已切换到「官方 + 中转」", "已检测到 ChatGPT 登录。重启 ChatGPT 后生效。", AppSeverity.Success)
+            : new AppNotice("已切换到「只用中转」", "没有检测到 ChatGPT 登录。重启 ChatGPT 后生效。", AppSeverity.Success));
     }
 
     static AppNotice DetectFailedNotice() =>
@@ -547,68 +625,200 @@ public sealed class AppModel : INotifyPropertyChanged
 
     static string? ModeName(string? mode) => mode switch
     {
-        "relay" => "只用中台",
-        "both" => "官方 + 中台",
+        "relay" => "只用中转",
+        "both" => "官方 + 中转",
         _ => null,
     };
 
     string SetupAccessText() => accessMode switch
     {
-        "relay" => "没有检测到 ChatGPT 登录，接入方式为「只用中台」：Codex 不需要登录，模型列表里只有中台模型。",
-        "both" => "已检测到 ChatGPT 登录，接入方式为「官方 + 中台」。",
+        "relay" => "没有检测到 ChatGPT 登录，接入方式为「只用中转」：Codex 不需要登录，模型列表里只有中转模型。",
+        "both" => "已检测到 ChatGPT 登录，接入方式为「官方 + 中转」。",
         _ => "",
     };
 
-    public async Task SaveConnectionAsync()
+    public RelayEditorModel? BeginAddRelay()
     {
-        if (busy || !Validate()) return;
+        if (busy || activeEditor is { IsSaving: true }) return null;
+        return activeEditor = new RelayEditorModel(this, null, "");
+    }
 
-        IsBusy = true;
-        ProgressText = "正在保存并重新获取模型…";
+    public RelayEditorModel? BeginEditRelay(string id)
+    {
+        if (busy || activeEditor is { IsSaving: true }) return null;
+        var config = configs.First(c => c.Id == id);
+        var key = "";
         try
         {
-            var url = BaseUrlInput.Trim();
-            var key = ApiKeyInput.Trim();
-            var oldUrl = TryReadBaseUrl();
-            string? oldKey = null;
-            try { oldKey = vault.Read(); }
-            catch (Exception ex) when (IsSystemFault(ex)) { }
+            key = vault.Read(id) ?? "";
+        }
+        catch (Exception ex) when (IsSystemFault(ex))
+        {
+        }
+        return activeEditor = new RelayEditorModel(this, config, key);
+    }
 
-            JsonElement result;
+    internal async Task<bool> SaveRelayAsync(RelayEditorModel editor)
+    {
+        if (editor.IsSaving || busy) return false;
+
+        var name = editor.NameInput.Trim();
+        var url = editor.BaseUrlInput.Trim();
+        var key = editor.ApiKeyInput.Trim();
+        var (nameError, urlError, keyError) = ValidateRelay(name, url, key, configs.Where(c => c.Id != editor.Id));
+        editor.NameError = nameError;
+        editor.BaseUrlError = urlError;
+        editor.ApiKeyError = keyError;
+        if (nameError != null || urlError != null || keyError != null) return false;
+
+        editor.SaveAlert = null;
+        editor.IsSaving = true;
+        IsBusy = true;
+        try
+        {
+            var existing = editor.Id == null ? null : configs.FirstOrDefault(c => c.Id == editor.Id);
+            string? oldKey = null;
+            if (existing != null)
+            {
+                try { oldKey = vault.Read(existing.Id); }
+                catch (Exception ex) when (IsSystemFault(ex)) { }
+            }
+
+            JsonElement saved;
             try
             {
-                result = await core.CallAsync("save_connection", ConnectionParams(url, key));
+                saved = await core.CallAsync("save_relay", RelayParams(editor.Id, name, url, key));
+            }
+            catch (CoreCallException ex) when (ex.Code is "name_empty" or "name_too_long" or "name_has_dot" or "name_duplicate")
+            {
+                editor.NameError = Reason(ex.Code, ex.Keys);
+                return false;
+            }
+            catch (CoreCallException ex) when (ex.Code == "invalid_base_url")
+            {
+                editor.BaseUrlError = Reason(ex.Code);
+                return false;
             }
             catch (Exception ex) when (ex is CoreCallException or CoreProcessExitedException)
             {
-                AddNotice(new AppNotice(NoSave, Describe(ex)));
-                return;
+                editor.SaveAlert = SaveFailedAlert(Describe(ex));
+                return false;
             }
 
-            var persistError = await PersistAsync(url, key, oldUrl, oldKey);
+            var id = Str(saved, "id") ?? editor.Id ?? "";
+            var config = new RelayConfig(id, Str(saved, "name") ?? name, url);
+            var next = existing == null
+                ? [.. configs, config]
+                : configs.Select(c => c.Id == id ? config : c).ToList();
+            var persistError = Persist(config, key, oldKey, next);
             if (persistError != null)
             {
-                AddNotice(new AppNotice(NoSave, persistError));
-                return;
+                var reverted = existing == null
+                    ? await RollbackAddAsync(id)
+                    : await RollbackEditAsync(existing, oldKey);
+                editor.SaveAlert = SaveFailedAlert(persistError, reverted);
+                return false;
             }
 
-            modelCount = Int(result, "relay_model_count");
-            Raise(nameof(ModelCountText));
-            Raise(nameof(RelayStatusText));
-
-            RemoveNotices(NoSave, KeyUnreadable);
-            if (Flag(result, "models_changed", false) && chatGpt.IsRunning())
-                AddNotice(new AppNotice(
-                    "已保存",
-                    $"现在可用 {modelCount} 个中台模型。重启 ChatGPT 后，Codex 里会显示新的列表。",
-                    AppSeverity.Success));
-            else
-                AddNotice(new AppNotice(SavedNoRestart, "已重新获取中台模型，不需要重启 ChatGPT。", AppSeverity.Success));
+            configs = next;
+            RebuildRelays();
+            AddNotice(existing == null
+                ? new AppNotice($"已添加「{config.Name}」", $"已获取 {Int(saved, "model_count")} 个模型。{RestartHint}", AppSeverity.Success)
+                : new AppNotice($"已保存「{config.Name}」", RestartHint, AppSeverity.Success));
+            return true;
         }
         finally
         {
-            ProgressText = null;
+            editor.IsSaving = false;
             IsBusy = false;
+        }
+    }
+
+    public async Task PerformDeleteRelayAsync(string id)
+    {
+        if (busy || configs.Count <= 1) return;
+        var config = configs.FirstOrDefault(c => c.Id == id);
+        if (config == null) return;
+
+        IsBusy = true;
+        try
+        {
+            await DeleteConfirmedAsync(config);
+        }
+        finally
+        {
+            IsBusy = false;
+        }
+    }
+
+    async Task DeleteConfirmedAsync(RelayConfig config)
+    {
+        DeletingRelayId = config.Id;
+        try
+        {
+            var failedTitle = $"没有删除「{config.Name}」";
+            var next = configs.Where(c => c.Id != config.Id).ToList();
+            try
+            {
+                settings.SaveRelays(next);
+            }
+            catch (Exception ex) when (IsSystemFault(ex))
+            {
+                AddNotice(new AppNotice(failedTitle, "无法写入设置文件。"));
+                return;
+            }
+
+            try
+            {
+                ApplyStatus(await core.CallAsync("delete_relay", Params("id", config.Id)));
+            }
+            catch (Exception ex) when (ex is CoreCallException or CoreProcessExitedException)
+            {
+                var detail = Describe(ex);
+                try { settings.SaveRelays(configs); }
+                catch (Exception inner) when (IsSystemFault(inner))
+                {
+                    detail += "\n本机设置没能恢复，重启助手后这个配置会消失，需要重新添加。";
+                }
+                AddNotice(new AppNotice(failedTitle, detail));
+                return;
+            }
+
+            configs = next;
+            var keyDeleted = true;
+            try { vault.Delete(config.Id); }
+            catch (Exception ex) when (IsSystemFault(ex)) { keyDeleted = false; }
+            RebuildRelays();
+            AddNotice(keyDeleted
+                ? new AppNotice($"已删除「{config.Name}」", RestartHint, AppSeverity.Success)
+                : new AppNotice(
+                    $"已删除「{config.Name}」",
+                    RestartHint + "\n但没能从系统凭据管理器里删除它的 API Key。",
+                    AppSeverity.Warning));
+        }
+        finally
+        {
+            DeletingRelayId = null;
+        }
+    }
+
+    public async Task RetryRelayAsync(string id)
+    {
+        if (!fetching.Add(id)) return;
+        RebuildRelays();
+        try
+        {
+            ApplyStatus(await core.CallAsync("refresh_models", Params("id", id)));
+            RemoveNotices(RefreshFailed);
+        }
+        catch (Exception ex) when (ex is CoreCallException or CoreProcessExitedException)
+        {
+            AddNotice(new AppNotice(RefreshFailed, Describe(ex)));
+        }
+        finally
+        {
+            fetching.Remove(id);
+            RebuildRelays();
         }
     }
 
@@ -618,7 +828,7 @@ public sealed class AppModel : INotifyPropertyChanged
         {
             var request = new ConfirmRequest(
                 "关闭「登录时启动」？",
-                "关闭后，下次登录电脑时助手不会自动运行。在你手动打开助手之前，Codex 里的官方模型和中台模型都无法使用，因为转发仍然开着。如果以后不打算常驻，建议先关闭转发。",
+                "关闭后，下次登录电脑时助手不会自动运行。在你手动打开助手之前，Codex 里的官方模型和中转模型都无法使用，因为转发仍然开着。如果以后不打算常驻，建议先关闭转发。",
                 "仍然关闭");
             if (!await confirmer.ConfirmAsync(request))
             {
@@ -696,7 +906,7 @@ public sealed class AppModel : INotifyPropertyChanged
     {
         try
         {
-            return settings.ReadBaseUrl() == null && vault.Read() == null && !login.IsEnabled();
+            return settings.ReadRelays().Count == 0 && !vault.Any() && !login.IsEnabled();
         }
         catch (Exception ex) when (IsSystemFault(ex))
         {
@@ -720,7 +930,7 @@ public sealed class AppModel : INotifyPropertyChanged
                 var tail = chatGpt.IsRunning() ? "ChatGPT 正在运行，卸载后请重启 ChatGPT。" : "";
                 var request = new ConfirmRequest(
                     "卸载模型接入助手？",
-                    "卸载会：\n· 关闭转发，把 Codex 配置还原成安装前的样子\n· 从系统凭据管理器删除中台 API Key，删除本助手保存的 Base URL\n· 取消「登录时启动」，删除本助手\n\n不会删除 ChatGPT、聊天记录，以及你自己的其他 Codex 设置。"
+                    "卸载会：\n· 关闭转发，把 Codex 配置还原成安装前的样子\n· 从系统凭据管理器删除中转 API Key，删除本助手保存的 Base URL\n· 取消「登录时启动」，删除本助手\n\n不会删除 ChatGPT、聊天记录，以及你自己的其他 Codex 设置。"
                     + (tail == "" ? "" : "\n" + tail),
                     "卸载");
                 if (!await confirmer.ConfirmAsync(request)) return 1;
@@ -744,7 +954,7 @@ public sealed class AppModel : INotifyPropertyChanged
             }
 
             var leftovers = new List<string>();
-            try { vault.Delete(); }
+            try { vault.DeleteAll(); }
             catch (Exception ex) when (IsSystemFault(ex)) { leftovers.Add("系统凭据管理器里的 API Key 没能删除"); }
             try { settings.DeleteAll(); }
             catch (Exception ex) when (IsSystemFault(ex)) { leftovers.Add("本助手保存的设置没能删除"); }
@@ -788,21 +998,21 @@ public sealed class AppModel : INotifyPropertyChanged
         }
     }
 
-    public Task RetryAsync() => RefreshAsync("refresh_models");
+    public Task RetryAsync() => RefreshAsync("refresh_models", Params("id", null));
 
     public Task RecheckAsync()
     {
         LastError = null;
-        return RefreshAsync("status");
+        return RefreshAsync("status", null);
     }
 
-    async Task RefreshAsync(string method)
+    async Task RefreshAsync(string method, IReadOnlyDictionary<string, object?>? parameters)
     {
         if (busy) return;
         IsBusy = true;
         try
         {
-            ApplyStatus(await core.CallAsync(method));
+            ApplyStatus(await core.CallAsync(method, parameters));
             RemoveNotices(RefreshFailed);
         }
         catch (Exception ex) when (ex is CoreCallException or CoreProcessExitedException)
@@ -815,94 +1025,109 @@ public sealed class AppModel : INotifyPropertyChanged
         }
     }
 
-    async Task<bool> SaveToCoreAsync(string url, string key)
+    string? Persist(RelayConfig config, string key, string? oldKey, IReadOnlyList<RelayConfig> next)
     {
         try
         {
-            var result = await core.CallAsync("save_connection", ConnectionParams(url, key));
-            modelCount = Int(result, "relay_model_count");
-            Raise(nameof(ModelCountText));
-            return true;
-        }
-        catch (Exception ex) when (ex is CoreCallException or CoreProcessExitedException)
-        {
-            TaskError = new AppNotice("没能连上中台", Describe(ex));
-            return false;
-        }
-    }
-
-    async Task<string?> PersistAsync(string url, string key, string? oldUrl, string? oldKey)
-    {
-        string? error = null;
-        try
-        {
-            vault.Save(key);
+            vault.Save(config.Id, key);
         }
         catch (Exception ex) when (IsSystemFault(ex))
         {
-            error = CredentialWriteFailed;
+            return CredentialWriteFailed;
         }
 
-        if (error == null)
+        try
+        {
+            settings.SaveRelays(next);
+        }
+        catch (Exception ex) when (IsSystemFault(ex))
         {
             try
             {
-                settings.SaveBaseUrl(url);
+                if (oldKey != null) vault.Save(config.Id, oldKey);
+                else vault.Delete(config.Id);
             }
-            catch (Exception ex) when (IsSystemFault(ex))
-            {
-                error = SettingsWriteFailed;
-                try
-                {
-                    if (oldKey != null) vault.Save(oldKey);
-                    else vault.Delete();
-                }
-                catch (Exception inner) when (IsSystemFault(inner)) { }
-            }
+            catch (Exception inner) when (IsSystemFault(inner)) { }
+            return SettingsWriteFailed;
         }
 
-        if (error != null) await RollbackCoreAsync(oldUrl, oldKey);
-        return error;
+        return null;
     }
 
-    async Task RollbackCoreAsync(string? oldUrl, string? oldKey)
+    async Task<bool> RollbackAddAsync(string id)
     {
         try
         {
-            if (oldUrl != null && oldKey != null)
-                await core.CallAsync("save_connection", ConnectionParams(oldUrl, oldKey));
+            if (configs.Count > 0)
+                await core.CallAsync("delete_relay", Params("id", id));
             else
                 await core.CallAsync("init", new Dictionary<string, object?>
                 {
-                    ["base_url"] = null,
-                    ["api_key"] = null,
+                    ["relays"] = new List<Dictionary<string, object?>>(),
                     ["chatgpt_dir"] = chatGpt.Locate(),
                 });
         }
-        catch (Exception ex) when (ex is CoreCallException or CoreProcessExitedException) { }
+        catch (Exception ex) when (ex is CoreCallException or CoreProcessExitedException)
+        {
+            return false;
+        }
+        return true;
     }
 
-    string? TryReadBaseUrl()
+    async Task<bool> RollbackEditAsync(RelayConfig old, string? oldKey)
+    {
+        if (oldKey == null) return false;
+        try
+        {
+            await core.CallAsync("save_relay", RelayParams(old.Id, old.Name, old.BaseUrl, oldKey));
+        }
+        catch (Exception ex) when (ex is CoreCallException or CoreProcessExitedException)
+        {
+            return false;
+        }
+        return true;
+    }
+
+    IReadOnlyList<RelayConfig> TryReadRelays()
     {
         try
         {
-            return settings.ReadBaseUrl();
+            return settings.ReadRelays();
         }
         catch (Exception ex) when (IsSystemFault(ex))
         {
-            return null;
+            return [];
         }
     }
 
-    bool Validate()
+    internal static (string? Name, string? BaseUrl, string? ApiKey) ValidateRelay(
+        string name, string url, string key, IEnumerable<RelayConfig> others)
     {
-        BaseUrlError = string.IsNullOrWhiteSpace(baseUrlInput)
-            ? Required
-            : baseUrlInput.Trim().StartsWith("https://", StringComparison.OrdinalIgnoreCase)
-                ? null
-                : Reason("invalid_base_url");
-        ApiKeyError = string.IsNullOrWhiteSpace(apiKeyInput) ? Required : null;
-        return BaseUrlError == null && ApiKeyError == null;
+        string? nameError = null;
+        if (name.Length == 0) nameError = "请填写名字。";
+        else if (name.EnumerateRunes().Count() > MaxNameLength)
+            nameError = $"名字最多 {MaxNameLength} 个字，现在是 {name.EnumerateRunes().Count()} 个。";
+        else if (name.Contains('·')) nameError = Reason("name_has_dot");
+        else if (others.FirstOrDefault(c => string.Equals(c.Name, name, StringComparison.OrdinalIgnoreCase)) is { } same)
+            nameError = Reason("name_duplicate", [same.Name]);
+
+        var urlError = url.Length == 0
+            ? "请填写 Base URL。"
+            : url.StartsWith("https://", StringComparison.OrdinalIgnoreCase) ? null : Reason("invalid_base_url");
+        return (nameError, urlError, key.Length == 0 ? "请填写 API Key。" : null);
+    }
+
+    static DialogAlert SaveFailedAlert(string reason, bool reverted = true) =>
+        new(
+            NoSave,
+            reason.TrimEnd('。') + "。已填的内容都还在，改好后再保存。"
+                + (reverted ? "" : "\n已在本次运行中生效，但没能保存到本机，重启助手后会恢复成原来的样子。"),
+            DialogAlertSeverity.Danger);
+
+    bool ValidateSetup()
+    {
+        (NameError, BaseUrlError, ApiKeyError) = ValidateRelay(NameInput.Trim(), BaseUrlInput.Trim(), ApiKeyInput.Trim(), configs);
+        return NameError == null && BaseUrlError == null && ApiKeyError == null;
     }
 
     void OnCoreFailed(string reason)
@@ -915,7 +1140,6 @@ public sealed class AppModel : INotifyPropertyChanged
     {
         if (s.ValueKind != JsonValueKind.Object) return;
 
-        var relay = Prop(s, "relay");
         var proxy = Prop(s, "proxy");
         var chatgpt = Prop(s, "chatgpt");
         var update = Prop(s, "update");
@@ -924,16 +1148,19 @@ public sealed class AppModel : INotifyPropertyChanged
         ChatGptFound = Flag(chatgpt, "found", true);
         Version = Str(s, "version") is { } v ? "v" + v : "";
         ConfigPath = Str(s, "config_path") ?? "";
-        modelCount = Int(relay, "model_count");
-        fetchedAt = Str(relay, "fetched_at");
+        relayStatus = Prop(s, "relays").ValueKind == JsonValueKind.Array
+            ? Prop(s, "relays").EnumerateArray()
+                .Where(r => Str(r, "id") != null)
+                .ToDictionary(r => Str(r, "id")!, r => new RelayStatus(Int(r, "model_count"), Str(r, "fetched_at"), Flag(r, "stale", false)))
+            : [];
+        defaultRelay = Str(s, "default_relay");
         var access = Prop(s, "access");
         accessMode = Str(access, "mode");
         accessDetect = Str(access, "detect");
         Raise(nameof(AccessModeName));
         Raise(nameof(AccessReasonText));
-        Raise(nameof(AccessHelpText));
-        Raise(nameof(ModelCountText));
-        Raise(nameof(RelayStatusText));
+        Raise(nameof(OverviewTitle));
+        Raise(nameof(OverviewText));
 
         if (Str(update, "latest_version") is { } latest)
         {
@@ -948,23 +1175,6 @@ public sealed class AppModel : INotifyPropertyChanged
                 "开启转发前，Codex 配置里已有别的「官方服务地址」设置。原值已备份，关闭转发或卸载时会还原。",
                 AppSeverity.Info,
                 []));
-
-        var relayError = Str(relay, "error");
-        if (Flag(relay, "stale", false))
-        {
-            var time = FormatTime(fetchedAt);
-            var lines = new List<string>();
-            if (relayError != null) lines.Add(Reason(relayError));
-            lines.Add("Codex 里继续使用上次获取的列表" + (time == null ? "。" : $"（{time}）。"));
-            list.Add(new AppBanner("中台模型列表本次没有更新", string.Join("\n", lines), AppSeverity.Warning, [BannerAction.Retry]));
-        }
-
-        if (modelCount == 0 && relayError != null)
-            list.Add(new AppBanner(
-                "还没有获取到中台模型",
-                Reason(relayError) + "\n请检查下方的 API Key，保存后会重新获取。",
-                AppSeverity.Danger,
-                [BannerAction.Retry]));
 
         var blocked = Strings(s, "restore_blocked");
         if (blocked.Count > 0)
@@ -982,6 +1192,41 @@ public sealed class AppModel : INotifyPropertyChanged
 
         statusBanners = list;
         RebuildBanners();
+        RebuildRelays();
+    }
+
+    void RebuildRelays()
+    {
+        Relays = configs.Select(Row).ToList();
+        Raise(nameof(RelayCountText));
+        Raise(nameof(CanAddRelay));
+        Raise(nameof(RelayMinimumText));
+        Raise(nameof(RelayModelSummary));
+    }
+
+    RelayRow Row(RelayConfig config)
+    {
+        var status = relayStatus.GetValueOrDefault(config.Id);
+        var state = fetching.Contains(config.Id) ? RelayRowState.Fetching
+            : !forwardingEnabled ? RelayRowState.ForwardingOff
+            : status?.FetchedAt == null ? RelayRowState.NeverFetched
+            : status.Stale ? RelayRowState.Stale
+            : RelayRowState.Normal;
+        var count = status?.ModelCount ?? 0;
+        var text = state switch
+        {
+            RelayRowState.Fetching => "正在获取…",
+            RelayRowState.ForwardingOff => "转发关闭时不获取",
+            RelayRowState.NeverFetched => "还没获取到模型",
+            RelayRowState.Stale => $"没更新，沿用上次的 {count} 个",
+            _ => $"{count} 个模型",
+        };
+        var idle = state != RelayRowState.Fetching && !busy;
+        return new RelayRow(
+            config.Id, config.Name, config.BaseUrl, state, text,
+            state is RelayRowState.Stale or RelayRowState.NeverFetched,
+            idle,
+            idle && configs.Count > 1);
     }
 
     void RebuildBanners()
@@ -1055,21 +1300,19 @@ public sealed class AppModel : INotifyPropertyChanged
         }
     }
 
-    static string Reason(string code) =>
-        CoreErrorMessages.Messages.TryGetValue(code, out var message) ? message : CoreErrorMessages.Messages["internal_error"];
+    static string Reason(string code, IReadOnlyList<string>? keys = null) =>
+        (CoreErrorMessages.Messages.TryGetValue(code, out var message) ? message : CoreErrorMessages.Messages["internal_error"])
+            .Replace("<keys[0]>", keys?.FirstOrDefault() ?? "");
 
-    static string Describe(Exception ex) => ex is CoreCallException call ? Reason(call.Code) : CoreStopped;
+    static string Describe(Exception ex) => ex is CoreCallException call ? Reason(call.Code, call.Keys) : CoreStopped;
 
     static bool IsSystemFault(Exception ex) =>
         ex is IOException or UnauthorizedAccessException or SecurityException or System.ComponentModel.Win32Exception;
 
-    static string? FormatTime(string? iso) =>
-        DateTimeOffset.TryParse(iso, out var time) ? time.ToLocalTime().ToString("M月d日 HH:mm") : null;
-
     static Dictionary<string, object?> Params(string name, object? value) => new() { [name] = value };
 
-    static Dictionary<string, object?> ConnectionParams(string url, string key) =>
-        new() { ["base_url"] = url, ["api_key"] = key };
+    static Dictionary<string, object?> RelayParams(string? id, string name, string url, string key) =>
+        new() { ["id"] = id, ["name"] = name, ["base_url"] = url, ["api_key"] = key };
 
     static JsonElement Prop(JsonElement e, string name) =>
         e.ValueKind == JsonValueKind.Object && e.TryGetProperty(name, out var v) ? v : default;

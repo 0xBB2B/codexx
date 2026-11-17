@@ -42,7 +42,7 @@ public class CoreProcessTests
         };
 
     CoreProcess NewCore(CoreProcessOptions options) =>
-        core = new CoreProcess(options, () => new CoreInitParams(BaseUrl, Key, ChatGptDir));
+        core = new CoreProcess(options, () => new CoreInitParams([new RelayInit("1", "中转", BaseUrl, Key)], ChatGptDir));
 
     int Launches() => ReadLines("launches.log").Length;
 
@@ -173,12 +173,14 @@ public class CoreProcessTests
     }
 
     [TestMethod]
-    public async Task SaveConnection_KeySentViaStdin()
+    public async Task SaveRelay_KeySentViaStdin()
     {
         await NewCore(Options()).StartAsync();
 
-        await core!.CallAsync("save_connection", new Dictionary<string, object?>
+        await core!.CallAsync("save_relay", new Dictionary<string, object?>
         {
+            ["id"] = null,
+            ["name"] = "A家",
             ["base_url"] = "https://relay2.example.com",
             ["api_key"] = "sk-example-1111",
         });

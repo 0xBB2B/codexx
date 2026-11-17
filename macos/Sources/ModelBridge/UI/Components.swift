@@ -174,8 +174,14 @@ struct FieldRow<Control: View>: View {
                     Label(error, systemImage: "exclamationmark.circle.fill")
                         .font(Fonts.caption)
                         .foregroundColor(Palette.danger)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                        .help(error)
                 } else if let help {
                     Text(help).font(Fonts.caption).foregroundColor(Palette.textMuted)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                        .help(help)
                 }
             }
         }

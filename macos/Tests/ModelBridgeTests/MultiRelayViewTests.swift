@@ -184,6 +184,19 @@ final class RelayFormViewTests: XCTestCase {
         XCTAssertEqual(view.size.height, before, accuracy: 1)
     }
 
+    private static let longError = "已有叫「一二三四五六七八九十一二三四五六」的配置（不区分大小写），换一个名字。"
+
+    func testLongFieldError_KeepsHeight() async {
+        for field in [RelayField.name, .baseURL, .apiKey] {
+            let f = await ViewFixture.make()
+            f.model.beginAddRelay()
+            let view = RenderedView(RelayFormView(model: f.model))
+            let before = view.size.height
+            f.model.relayFieldErrors = [field: Self.longError]
+            XCTAssertEqual(view.size.height, before, accuracy: 1, "\(field)")
+        }
+    }
+
     func testSaving_ButtonTextAndCancelDisabled() async {
         let gate = Gate()
         let f = await ViewFixture.make(responses: ["save_relay": .success(Data(#"{"id":"9","name":"新","model_count":1,"models_changed":true}"#.utf8))], gates: ["save_relay": gate])
@@ -251,6 +264,17 @@ final class DeleteRelayDialogViewTests: XCTestCase {
 
 @MainActor
 final class SetupWindowNameFieldTests: XCTestCase {
+    func testLongFieldError_KeepsHeight() async {
+        for field in [RelayField.name, .baseURL, .apiKey] {
+            let f = await ViewFixture.make(relayCount: 0)
+            f.model.beginSetup()
+            let view = RenderedView(SetupWindow(model: f.model))
+            let before = view.size.height
+            f.model.relayFieldErrors = [field: "已有叫「一二三四五六七八九十一二三四五六」的配置（不区分大小写），换一个名字。"]
+            XCTAssertEqual(view.size.height, before, accuracy: 1, "\(field)")
+        }
+    }
+
     func testTitleAndNameFieldFirstWithDefault() async {
         let f = await ViewFixture.make(relayCount: 0)
         f.model.beginSetup()

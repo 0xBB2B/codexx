@@ -8,6 +8,7 @@
   </PropertyGroup>
   <ItemGroup>
     <Using Include="System.IO" />
+    <Using Remove="System.Windows.Forms" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\ModelBridge.App\ModelBridge.App.csproj" />

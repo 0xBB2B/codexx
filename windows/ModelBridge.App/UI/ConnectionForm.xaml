@@ -8,6 +8,30 @@
                 <ColumnDefinition Width="*" />
             </Grid.ColumnDefinitions>
             <StackPanel Orientation="Horizontal" VerticalAlignment="Top" Margin="0,12,0,0">
+                <TextBlock Text="名字" FontSize="13" FontWeight="SemiBold" />
+                <TextBlock Text="必填" Style="{StaticResource HelpText}" Margin="4,0,0,0" VerticalAlignment="Center" />
+            </StackPanel>
+            <StackPanel Grid.Column="1" Margin="12,0,0,0">
+                <TextBox x:Name="NameBox" Height="44" Padding="12,0" VerticalContentAlignment="Center"
+                         TextChanged="NameChanged" AutomationProperties.Name="名字" />
+                <TextBlock x:Name="NameHelp" Text="1~16 个字，不能重名，不能含「·」。" Style="{StaticResource HelpText}" />
+                <Grid x:Name="NameError" Margin="0,8,0,0" Visibility="Collapsed">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
+                    <TextBlock Text="&#xEA39;" FontFamily="Segoe MDL2 Assets" FontSize="12" Foreground="{StaticResource DangerBrush}" Margin="0,0,4,0" VerticalAlignment="Center" />
+                    <TextBlock x:Name="NameErrorText" Grid.Column="1" FontSize="12" Foreground="{StaticResource DangerBrush}" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis" />
+                </Grid>
+            </StackPanel>
+        </Grid>
+
+        <Grid Margin="0,20,0,0">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="112" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+            <StackPanel Orientation="Horizontal" VerticalAlignment="Top" Margin="0,12,0,0">
                 <TextBlock Text="Base URL" FontSize="13" FontWeight="SemiBold" />
                 <TextBlock Text="必填" Style="{StaticResource HelpText}" Margin="4,0,0,0" VerticalAlignment="Center" />
             </StackPanel>
@@ -21,10 +45,14 @@
                                Foreground="{StaticResource TextMutedBrush}" />
                 </Grid>
                 <TextBlock x:Name="UrlHelp" Text="以 https:// 开头的完整地址。" Style="{StaticResource HelpText}" />
-                <StackPanel x:Name="UrlError" Orientation="Horizontal" Margin="0,8,0,0" Visibility="Collapsed">
+                <Grid x:Name="UrlError" Margin="0,8,0,0" Visibility="Collapsed">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
                     <TextBlock Text="&#xEA39;" FontFamily="Segoe MDL2 Assets" FontSize="12" Foreground="{StaticResource DangerBrush}" Margin="0,0,4,0" VerticalAlignment="Center" />
-                    <TextBlock x:Name="UrlErrorText" FontSize="12" Foreground="{StaticResource DangerBrush}" TextWrapping="Wrap" />
-                </StackPanel>
+                    <TextBlock x:Name="UrlErrorText" Grid.Column="1" FontSize="12" Foreground="{StaticResource DangerBrush}" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis" />
+                </Grid>
             </StackPanel>
         </Grid>
 
@@ -55,11 +83,15 @@
                                   Content="&#xE7B3;" FontFamily="Segoe MDL2 Assets" FontSize="16"
                                   Click="KeyToggleClick" AutomationProperties.Name="显示 API Key" />
                 </Grid>
-                <TextBlock x:Name="KeyHelp" Text="保存在系统凭据管理器中。" Style="{StaticResource HelpText}" />
-                <StackPanel x:Name="KeyError" Orientation="Horizontal" Margin="0,8,0,0" Visibility="Collapsed">
+                <TextBlock x:Name="KeyHelp" Style="{StaticResource HelpText}" />
+                <Grid x:Name="KeyError" Margin="0,8,0,0" Visibility="Collapsed">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
                     <TextBlock Text="&#xEA39;" FontFamily="Segoe MDL2 Assets" FontSize="12" Foreground="{StaticResource DangerBrush}" Margin="0,0,4,0" VerticalAlignment="Center" />
-                    <TextBlock x:Name="KeyErrorText" FontSize="12" Foreground="{StaticResource DangerBrush}" TextWrapping="Wrap" />
-                </StackPanel>
+                    <TextBlock x:Name="KeyErrorText" Grid.Column="1" FontSize="12" Foreground="{StaticResource DangerBrush}" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis" />
+                </Grid>
             </StackPanel>
         </Grid>
     </StackPanel>

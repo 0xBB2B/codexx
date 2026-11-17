@@ -266,6 +266,9 @@
                                    Foreground="{StaticResource TextBrush}" />
                     </StackPanel>
                     <ControlTemplate.Triggers>
+                        <Trigger Property="Tag" Value="NoLabel">
+                            <Setter TargetName="Label" Property="Visibility" Value="Collapsed" />
+                        </Trigger>
                         <Trigger Property="IsChecked" Value="True">
                             <Setter TargetName="Track" Property="Background" Value="{StaticResource PrimaryBrush}" />
                             <Setter TargetName="Track" Property="BorderBrush" Value="{StaticResource PrimaryBrush}" />
@@ -482,5 +485,73 @@
         <Setter Property="Foreground" Value="{StaticResource TextMutedBrush}" />
         <Setter Property="TextWrapping" Value="Wrap" />
         <Setter Property="Margin" Value="0,8,0,0" />
+    </Style>
+
+    <StreamGeometry x:Key="AppIconGeometry">M16,50 A34,34 0 1 0 84,50 A34,34 0 1 0 16,50 M31.5,42.6 L68.5,42.6 L58.9,33 M68.5,57.4 L31.5,57.4 L41.1,67</StreamGeometry>
+    <StreamGeometry x:Key="AppIconArrowsGeometry">M22,38 L78,38 L65,25 M78,62 L22,62 L35,75</StreamGeometry>
+
+    <Style x:Key="LabelText" TargetType="TextBlock">
+        <Setter Property="Foreground" Value="{StaticResource TextMutedBrush}" />
+        <Setter Property="VerticalAlignment" Value="Center" />
+    </Style>
+
+    <Style x:Key="ValueText" TargetType="TextBlock">
+        <Setter Property="FontWeight" Value="SemiBold" />
+        <Setter Property="Foreground" Value="{StaticResource TextBrush}" />
+        <Setter Property="VerticalAlignment" Value="Center" />
+    </Style>
+
+    <Style x:Key="TitleButton" TargetType="Button">
+        <Setter Property="Width" Value="46" />
+        <Setter Property="Height" Value="32" />
+        <Setter Property="FontFamily" Value="Segoe MDL2 Assets" />
+        <Setter Property="FontSize" Value="10" />
+        <Setter Property="Foreground" Value="{StaticResource TextBrush}" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="Button">
+                    <Border x:Name="Root" Background="Transparent">
+                        <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"
+                                          TextElement.Foreground="{TemplateBinding Foreground}" />
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Root" Property="Background" Value="{StaticResource BackgroundBrush}" />
+                        </Trigger>
+                        <Trigger Property="IsPressed" Value="True">
+                            <Setter TargetName="Root" Property="Background" Value="{StaticResource DisabledBgBrush}" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <Style x:Key="TitleCloseButton" TargetType="Button" BasedOn="{StaticResource TitleButton}">
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="Button">
+                    <Border x:Name="Root" Background="Transparent">
+                        <ContentPresenter x:Name="Glyph" HorizontalAlignment="Center" VerticalAlignment="Center"
+                                          TextElement.Foreground="{TemplateBinding Foreground}" />
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Root" Property="Background" Value="{StaticResource DangerBrush}" />
+                            <Setter Property="Foreground" Value="#FFFFFF" />
+                        </Trigger>
+                        <Trigger Property="IsPressed" Value="True">
+                            <Setter TargetName="Root" Property="Background" Value="{StaticResource DangerBrush}" />
+                            <Setter Property="Foreground" Value="#FFFFFF" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <Style x:Key="RowButton" TargetType="Button" BasedOn="{StaticResource SecondaryButton}">
+        <Setter Property="Padding" Value="16,0" />
+        <Setter Property="Margin" Value="8,0,0,0" />
     </Style>
 </ResourceDictionary>
