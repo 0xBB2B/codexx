@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"image"
 	"image/color"
+	"math"
 	"testing"
 )
 
@@ -64,11 +65,10 @@ func TestRenderAppIconMac(t *testing.T) {
 		wants []pixelWant
 	}{
 		{"1024", 1024, []pixelWant{
-			{"外围留白透明", 50, 50, true, nil},
+			{"外围留白远角透明", 2, 2, true, nil},
 			{"左边底板内为底板色", 150, 512, false, []color.NRGBA{teal}},
 			{"圆心位置为图形色或底板色", 512, 512, false, []color.NRGBA{white, teal}},
 			{"外圈笔画为白色", 512, 232, false, []color.NRGBA{white}},
-			{"左边缘四周留 100px", 99, 512, true, nil},
 		}},
 		{"32 四周留 2px", 32, []pixelWant{
 			{"左外侧 1px 透明", 1, 16, true, nil},
@@ -85,6 +85,92 @@ func TestRenderAppIconMac(t *testing.T) {
 			checkPixels(t, RenderAppIconMac(tt.size), tt.size, tt.wants)
 		})
 	}
+}
+
+func TestRenderAppIconMac_ShadowBlurSigma(t *testing.T) {
+	t.Parallel()
+	const (
+		size     = 1024
+		peak     = 0x38
+		wantSig  = 16.0
+		edgeY    = 100 + 824 + 16
+		halfTol  = 2
+		sigmaTol = 0.10
+	)
+	img := RenderAppIconMac(size)
+
+	var tail float64
+	for y := edgeY; y < size; y++ {
+		tail += float64(img.NRGBAAt(512, y).A)
+	}
+	// 高斯边缘外侧的 alpha 之和 = 峰值 * sigma / sqrt(2π)
+	got := tail / peak * math.Sqrt(2*math.Pi)
+	if math.Abs(got-wantSig) > wantSig*sigmaTol {
+		t.Errorf("估得 sigma = %.2f, want %.1f ±%.0f%%", got, wantSig, sigmaTol*100)
+	}
+
+	half := -1
+	for y := 924; y < size; y++ {
+		if float64(img.NRGBAAt(512, y).A) <= peak/2 {
+			half = y
+			break
+		}
+	}
+	if half < 0 || math.Abs(float64(half-edgeY)) > halfTol {
+		t.Errorf("alpha 降到峰值一半的位置 y = %d, want %d ±%d（偏移 size/64）", half, edgeY, halfTol)
+	}
+}
+
+func TestRenderAppIconMac_Shadow(t *testing.T) {
+	t.Parallel()
+	const maxAlpha = 0x38 + 2
+	tests := []struct {
+		name         string
+		size         int
+		x, below, up int
+	}{
+		{"1024", 1024, 512, 930, 93},
+		{"64", 64, 32, 60, 3},
+		{"128", 128, 64, 120, 5},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			img := RenderAppIconMac(tt.size)
+			below := img.NRGBAAt(tt.x, tt.below)
+			up := img.NRGBAAt(tt.x, tt.up)
+			if below.A == 0 {
+				t.Fatalf("底板正下方 (%d,%d) alpha = 0, want 投影", tt.x, tt.below)
+			}
+			if below.A > maxAlpha {
+				t.Errorf("投影 alpha = %d, 不应超过 %d", below.A, maxAlpha)
+			}
+			if up.A >= below.A {
+				t.Errorf("底板正上方 alpha = %d, 应小于正下方 %d（投影向下偏移）", up.A, below.A)
+			}
+		})
+	}
+
+	t.Run("投影底色为 #172b3a", func(t *testing.T) {
+		t.Parallel()
+		img := RenderAppIconMac(1024)
+		p := img.NRGBAAt(512, 930)
+		if !near(color.NRGBA{p.R, p.G, p.B, 0xff}, ink) {
+			t.Errorf("rgb = %v, want %v", p, ink)
+		}
+	})
+
+	t.Run("小于 64 像素无投影", func(t *testing.T) {
+		t.Parallel()
+		for _, c := range []struct{ size, x, y0, y1 int }{{32, 16, 30, 31}, {48, 24, 44, 47}, {16, 8, 15, 15}} {
+			img := RenderAppIconMac(c.size)
+			for y := c.y0; y <= c.y1; y++ {
+				if a := img.NRGBAAt(c.x, y).A; a != 0 {
+					t.Errorf("size %d (%d,%d) alpha = %d, want 0", c.size, c.x, y, a)
+				}
+			}
+		}
+	})
 }
 
 func TestRenderAppIconWin(t *testing.T) {
@@ -217,7 +303,7 @@ func TestRenderAppIconMac_64(t *testing.T) {
 		{"右上角透明", 63, 0, true, nil},
 		{"左下角透明", 0, 63, true, nil},
 		{"右下角透明", 63, 63, true, nil},
-		{"左侧留白透明", 3, 32, true, nil},
+		{"左侧留白透明", 1, 32, true, nil},
 		{"底板内为底板色", 8, 32, false, []color.NRGBA{teal}},
 	})
 }

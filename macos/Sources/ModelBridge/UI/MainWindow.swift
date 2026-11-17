@@ -6,7 +6,7 @@ struct MainWindow: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            titleBar
+            WindowTitleBar(title: "模型接入助手")
             VStack(spacing: 0) {
                 VStack(alignment: .leading, spacing: 20) {
                     ForwardingOverview(model: model)
@@ -26,16 +26,6 @@ struct MainWindow: View {
         }
         .frame(width: 620)
         .background(Palette.background)
-    }
-
-    private var titleBar: some View {
-        Text("模型接入助手")
-            .font(Fonts.control)
-            .foregroundColor(Palette.text)
-            .frame(maxWidth: .infinity, minHeight: 48)
-            .background(Palette.surface)
-            .overlay(alignment: .bottom) { Rectangle().fill(Palette.border).frame(height: 1) }
-            .overlay(WindowDragArea().accessibilityHidden(true))
     }
 
     @ViewBuilder

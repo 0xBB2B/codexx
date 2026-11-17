@@ -29,7 +29,7 @@ public sealed record DialogModel(
         0);
 
     public static string DeleteRelayMessage(string name, int modelCount) =>
-        $"删除后：\n· Codex 的模型列表里不再有「{name}」的 {modelCount} 个模型\n· 它的 API Key 会从系统凭据管理器里删除\n重启 ChatGPT 后生效。";
+        $"删除后：\n· Codex 的模型列表里不再有「{name}」的 {modelCount} 个模型\n· 它的 API Key 会从系统凭据管理器里删除\n\n重启 ChatGPT 后生效。";
 
     public static DialogModel ForDeleteRelay(string name, int modelCount, bool isDeleting) => new(
         520,

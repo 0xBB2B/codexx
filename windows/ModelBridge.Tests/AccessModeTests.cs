@@ -480,21 +480,21 @@ public class AccessModeTests
     }
 
     [TestMethod]
-    public async Task Recheck_WhileDetecting_ForwardToggleDisabled()
+    public async Task Recheck_WhileDetecting_FlagIsSetThenCleared()
     {
         var h = Pushed("both", "both", "logged_in");
         await h.Model.StartAsync();
         h.Push(Access("both", "both", "logged_in"));
         var gate = new TaskCompletionSource<System.Text.Json.JsonElement>();
         h.Core.OnAsync("detect_access", _ => gate.Task);
-        Assert.IsTrue(h.Model.ToggleEnabled);
+        Assert.IsFalse(h.Model.IsDetectingAccess);
 
         var task = h.Model.RecheckAccessAsync();
-        Assert.IsFalse(h.Model.ToggleEnabled);
+        Assert.IsTrue(h.Model.IsDetectingAccess);
 
         gate.SetResult(Status("both", "both", "logged_in"));
         await task;
-        Assert.IsTrue(h.Model.ToggleEnabled);
+        Assert.IsFalse(h.Model.IsDetectingAccess);
     }
 
     #endregion

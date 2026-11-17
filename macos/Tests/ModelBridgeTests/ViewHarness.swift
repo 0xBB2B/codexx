@@ -85,6 +85,15 @@ final class RenderedView {
         return match?.axFrame()
     }
 
+    @discardableResult
+    func press(label: String) -> Bool {
+        guard let match = elements.first(where: { $0.axString("accessibilityLabel") == label }) else { return false }
+        let selector = NSSelectorFromString("accessibilityPerformPress")
+        guard match.responds(to: selector) else { return false }
+        typealias Press = @convention(c) (AnyObject, Selector) -> Bool
+        return unsafeBitCast(match.method(for: selector), to: Press.self)(match, selector)
+    }
+
     func isFocused(label: String) -> Bool? {
         let match = elements.first { $0.axString("accessibilityLabel") == label }
         return match.flatMap { $0.axBool("isAccessibilityFocused") }
@@ -147,6 +156,16 @@ private func entryJSON(_ id: String, _ name: String, count: Int, fetched: Bool, 
 
 @MainActor
 struct ViewFixture {
+    static func statusJSON(forwarding: Bool, relayCount: Int, mode: String = "both", target: String? = nil) -> String {
+        let entries = (0..<relayCount).map { entryJSON("\($0 + 1)", "配置\($0 + 1)", count: 6, fetched: true, stale: false) }
+        return """
+        {"version":"1.3.0","forwarding":\(forwarding),"proxy":{"running":true,"error":null},\
+        "chatgpt":{"found":true,"error":null},"default_relay":"配置1","relays":[\(entries.joined(separator: ","))],\
+        "taken_over":[],"restore_blocked":[],"config_path":"/Users/example/.codex/config.toml",\
+        "update":{"latest_version":null,"url":null},"access":{"mode":"\(mode)","target":"\(target ?? mode)","detect":"logged_in"}}
+        """
+    }
+
     let model: AppModel
     let core: FakeCore
 

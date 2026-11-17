@@ -164,9 +164,9 @@ document.documentElement.lang = pickLang() === 'zh' ? 'zh-CN' : 'en';
 <figure class="shot" data-pane="0" hidden><div class="stage"><div class="am" role="img" aria-label="首次设置窗口示意图" data-aria-zh="首次设置窗口示意图" data-aria-en="Mock-up of the first-run setup window"><div class="am-window" inert>
   <div class="am-titlebar"><span class="am-lights"><i class="l-close"></i><i class="l-min"></i><i class="l-max"></i></span><span>设置模型接入助手</span></div>
   <div class="am-body">
-    <div class="am-intro"><h2>连接中转服务</h2><p>填写中转提供的 Base URL 和 API Key。设置完成后，Codex 的模型列表里会多出中转模型。</p></div>
+    <div class="am-intro"><h2>连接中转服务</h2><p>填写中转服务提供的 Base URL 和 API Key。设置完成后，Codex 的模型列表里会多出中转模型。</p></div>
 <section class="am-group">
-      <div class="am-field"><span class="am-label">名字</span><div><div class="am-input">中转</div><div class="am-help">模型列表里显示为「中转 · 模型名」。</div></div></div>
+      <div class="am-field"><span class="am-label">名字 <span class="am-req">必填</span></span><div><div class="am-input">中转</div><div class="am-help">1~16 个字，不能重名，不能含「·」。</div></div></div>
       <div class="am-field"><span class="am-label">Base URL <span class="am-req">必填</span></span><div><div class="am-input am-mono">https://relay.example.com/v1</div><div class="am-help">以 https&#58;// 开头的完整地址。</div></div></div>
       <div class="am-field"><span class="am-label">API Key <span class="am-req">必填</span></span><div><div class="am-key"><div class="am-input am-mono">••••••••••••••••••••••••</div><span class="am-btn-icon"><svg class="si" viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M1.5 8s2.5-4.5 6.5-4.5S14.5 8 14.5 8 12 12.5 8 12.5 1.5 8 1.5 8z"/><circle cx="8" cy="8" r="2"/></svg></span></div><div class="am-help">保存在系统钥匙串中。</div></div></div>
     </section>

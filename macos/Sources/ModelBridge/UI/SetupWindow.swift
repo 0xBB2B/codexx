@@ -4,31 +4,34 @@ struct SetupWindow: View {
     @ObservedObject var model: AppModel
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 20) {
-            VStack(alignment: .leading, spacing: 8) {
-                Text(SetupCopy.title).font(Fonts.pageTitle).foregroundColor(Palette.text)
-                Text(SetupCopy.subtitle)
-                    .font(Fonts.control)
-                    .foregroundColor(Palette.textMuted)
+        VStack(spacing: 0) {
+            WindowTitleBar(title: "设置模型接入助手")
+            VStack(alignment: .leading, spacing: 20) {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(SetupCopy.title).font(Fonts.pageTitle).foregroundColor(Palette.text)
+                    Text(SetupCopy.subtitle)
+                        .font(Fonts.control)
+                        .foregroundColor(Palette.textMuted)
+                }
+                if case .succeeded(let title, _) = model.setupPhase {
+                    succeeded(title: title)
+                } else {
+                    form
+                }
             }
-            if case .succeeded(let title, _) = model.setupPhase {
-                succeeded(title: title)
-            } else {
-                form
-            }
-        }
-        .onAppear { model.beginSetup() }
-        .padding(24)
-        .frame(width: 620)
-        .background(Palette.background)
-        .overlay(alignment: .top) {
-            AlertOverlay {
-                NoticeStack(model: model)
-                if case .failed(let title, let detail) = model.setupPhase {
-                    AlertBar(tone: .danger, title: title, detail: detail, onClose: { model.dismissSetupFailure() })
+            .padding(24)
+            .overlay(alignment: .top) {
+                AlertOverlay {
+                    NoticeStack(model: model)
+                    if case .failed(let title, let detail) = model.setupPhase {
+                        AlertBar(tone: .danger, title: title, detail: detail, onClose: { model.dismissSetupFailure() })
+                    }
                 }
             }
         }
+        .onAppear { model.beginSetup() }
+        .frame(width: 620)
+        .background(Palette.background)
     }
 
     private var connecting: Bool { model.setupPhase == .connecting }

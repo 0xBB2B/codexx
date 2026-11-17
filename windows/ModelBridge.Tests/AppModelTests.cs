@@ -406,7 +406,7 @@ public class AppModelTests
         await h.Model.CompleteSetupAsync();
 
         Assert.AreEqual("没能连上中转服务", h.Model.TaskError?.Title);
-        Assert.AreEqual(Msg("relay_401"), h.Model.TaskError?.Detail);
+        Assert.AreEqual(Msg("relay_401") + "。", h.Model.TaskError?.Detail);
         Assert.AreEqual(0, h.Vault.Saved.Count);
         Assert.AreEqual(AppPage.Setup, h.Model.Page);
         Assert.AreEqual("https://relay.example.com", h.Model.BaseUrlInput);

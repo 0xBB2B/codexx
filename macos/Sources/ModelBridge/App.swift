@@ -31,11 +31,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let keychain = KeychainStore()
     private let loginItem = LoginItem()
     private var dialogs: DialogPresenter?
-    private var mainWindow: NSWindow?
-    private var setupWindow: NSWindow?
+    private var windows: AppWindowController?
     private var subscriptions: Set<AnyCancellable> = []
     private var activationObserver: NSObjectProtocol?
-    private var setupCloseObserver: NSObjectProtocol?
     private let startup = StartupConnection()
 
     override init() {
@@ -70,6 +68,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         model.onTerminate = { NSApp.terminate(nil) }
         model.loginStartEnabled = loginItem.isEnabled
         dialogs = DialogPresenter(model: model)
+        windows = AppWindowController(model: model) { window in
+            NSApp.activate(ignoringOtherApps: true)
+            window.makeKeyAndOrderFront(nil)
+        }
         observeModel()
 
         let launchedAtLogin = loginItem.wasLaunchedAtLogin
@@ -93,35 +95,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
 
-    func showMainWindow() {
-        if model.needsSetup {
-            if model.showSetup, let setupWindow { present(setupWindow) } else { model.showSetup = true }
-            return
-        }
-        let window = mainWindow ?? AppWindows.makeMain(model: model)
-        if mainWindow == nil { _ = RelaySheetController(model: model, window: window) }
-        mainWindow = window
-        present(window)
-    }
+    func showMainWindow() { windows?.showMainWindow() }
 
     private func observeModel() {
-        model.$showSetup.removeDuplicates().sink { [weak self] visible in
-            guard let self else { return }
-            if visible {
-                if setupWindow == nil {
-                    let window = makeWindow(title: "设置模型接入助手", content: SetupWindow(model: model))
-                    setupWindow = window
-                    setupCloseObserver = NotificationCenter.default.addObserver(
-                        forName: NSWindow.willCloseNotification, object: window, queue: .main
-                    ) { [weak self] _ in
-                        Task { @MainActor in self?.model.finishSetup() }
-                    }
-                }
-                if let setupWindow { present(setupWindow) }
-            } else {
-                setupWindow?.orderOut(nil)
-            }
-        }.store(in: &subscriptions)
         model.$mainWindowRequested.filter { $0 }.sink { [weak self] _ in
             self?.model.mainWindowRequested = false
             self?.showMainWindow()
@@ -130,20 +106,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             guard let self, !model.showSetup else { return }
             showMainWindow()
         }.store(in: &subscriptions)
-    }
-
-    private func makeWindow<Content: View>(title: String, content: Content) -> NSWindow {
-        let window = NSWindow(contentViewController: NSHostingController(rootView: content.preferredColorScheme(.light)))
-        window.title = title
-        window.styleMask = [.titled, .closable, .miniaturizable]
-        window.isReleasedWhenClosed = false
-        window.center()
-        return window
-    }
-
-    private func present(_ window: NSWindow) {
-        NSApp.activate(ignoringOtherApps: true)
-        window.makeKeyAndOrderFront(nil)
     }
 }
 

@@ -153,7 +153,7 @@ struct AppTextField: View {
     }
 
     private var borderColor: Color {
-        if !isEnabled { return Palette.disabledBg }
+        if !isEnabled { return Palette.borderStrong }
         if invalid { return Palette.danger }
         return hovering ? Palette.textMuted : Palette.borderStrong
     }

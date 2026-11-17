@@ -3,6 +3,7 @@ package main
 import (
 	"image"
 	"image/color"
+	"image/draw"
 	"math"
 )
 
@@ -22,6 +23,7 @@ const (
 var (
 	baseColor  = color.NRGBA{0x0f, 0x76, 0x6e, 0xff}
 	glyphWhite = color.NRGBA{0xff, 0xff, 0xff, 0xff}
+	inkShadow  = color.NRGBA{0x17, 0x2b, 0x3a, 0xff}
 
 	arrowsLarge = []segment{
 		{31.5, 42.6, 68.5, 42.6}, {68.5, 42.6, 58.9, 33.0},
@@ -110,7 +112,79 @@ func RenderAppIconMac(size int) *image.NRGBA {
 		margin = 2
 	}
 	side := float64(size) - 2*margin
-	return renderPlate(size, margin, side, side*184/824, side)
+	plate := renderPlate(size, margin, side, side*184/824, side)
+	if size < 64 {
+		return plate
+	}
+	out := dropShadow(plate)
+	draw.Draw(out, out.Bounds(), plate, image.Point{}, draw.Over)
+	return out
+}
+
+// 偏移 size/64，高斯 sigma=size/64（即 CSS 语义的模糊半径 size/32），最大不透明度 0x38
+func dropShadow(plate *image.NRGBA) *image.NRGBA {
+	size := plate.Bounds().Dx()
+	offset := size / 64
+	alpha := make([]float64, size*size)
+	for y := offset; y < size; y++ {
+		for x := 0; x < size; x++ {
+			alpha[y*size+x] = float64(plate.Pix[plate.PixOffset(x, y-offset)+3]) / 255
+		}
+	}
+	kernel := gaussianKernel(float64(size) / 64)
+	tmp := make([]float64, size*size)
+	gaussBlur(alpha, tmp, size, kernel, true)
+	gaussBlur(tmp, alpha, size, kernel, false)
+	out := image.NewNRGBA(plate.Bounds())
+	for y := 0; y < size; y++ {
+		for x := 0; x < size; x++ {
+			a := uint8(math.Round(alpha[y*size+x] * 0x38))
+			if a > 0 {
+				out.SetNRGBA(x, y, color.NRGBA{inkShadow.R, inkShadow.G, inkShadow.B, a})
+			}
+		}
+	}
+	return out
+}
+
+func gaussianKernel(sigma float64) []float64 {
+	r := int(math.Ceil(3 * sigma))
+	k := make([]float64, 2*r+1)
+	var sum float64
+	for i := range k {
+		d := float64(i - r)
+		k[i] = math.Exp(-d * d / (2 * sigma * sigma))
+		sum += k[i]
+	}
+	for i := range k {
+		k[i] /= sum
+	}
+	return k
+}
+
+func gaussBlur(src, dst []float64, size int, kernel []float64, horizontal bool) {
+	r := len(kernel) / 2
+	for line := 0; line < size; line++ {
+		for i := 0; i < size; i++ {
+			var v float64
+			for t, w := range kernel {
+				j := i + t - r
+				if j < 0 || j >= size {
+					continue
+				}
+				if horizontal {
+					v += w * src[line*size+j]
+				} else {
+					v += w * src[j*size+line]
+				}
+			}
+			if horizontal {
+				dst[line*size+i] = v
+			} else {
+				dst[i*size+line] = v
+			}
+		}
+	}
 }
 
 func RenderAppIconWin(size int) *image.NRGBA {

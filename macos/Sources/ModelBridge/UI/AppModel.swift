@@ -217,6 +217,7 @@ final class AppModel: ObservableObject {
     private static let updateFailedTitle = "暂时无法检查更新，请稍后再试"
     private var noticeTimers: [UUID: Task<Void, Never>] = [:]
     private var startupAligned = false
+    private var forwardingSwitchCount = 0
 
     init(
         core: any CoreClient,
@@ -298,7 +299,7 @@ final class AppModel: ObservableObject {
     }
 
     var forwardingToggleDisabled: Bool {
-        !coreRunning || status?.chatgpt?.found == false || isSwitchingForwarding || isDetectingAccess
+        !coreRunning || status?.chatgpt?.found == false || isSwitchingForwarding
     }
 
     var modelCountText: String { "中转模型 " + modelCountValue + (modelCountNote ?? "") }
@@ -460,7 +461,8 @@ final class AppModel: ObservableObject {
         do {
             saved = try await saveToCore()
         } catch {
-            setupPhase = .failed(title: SetupCopy.failedTitle, detail: CoreFailure(error).message)
+            let message = CoreFailure(error).message
+            setupPhase = .failed(title: SetupCopy.failedTitle, detail: message.hasSuffix("。") ? message : message + "。")
             return
         }
         do {
@@ -509,12 +511,18 @@ final class AppModel: ObservableObject {
         removeNotices(titled: Self.detectFailedTitle)
         isDetectingAccess = true
         defer { isDetectingAccess = false }
+        let switchCount = forwardingSwitchCount
         guard let data = try? await core.call("detect_access", params: Empty()),
-              let value = try? JSONDecoder.snakeCase.decode(CoreStatus.self, from: data) else {
+              var value = try? JSONDecoder.snakeCase.decode(CoreStatus.self, from: data) else {
             addNotice(Notice(title: "没能重新检测", kind: .error))
             return
         }
         removeNotices(titled: "没能重新检测")
+        if switchCount != forwardingSwitchCount {
+            value.forwarding = forwardingEnabled
+            apply(value)
+            return
+        }
         apply(value)
         guard let access = value.access else { return }
         if access.detect == "failed" {
@@ -548,6 +556,8 @@ final class AppModel: ObservableObject {
         draftAPIKey = ((try? keychain.load(relayID: id)) ?? nil) ?? ""
         showRelayForm = true
     }
+
+    func clearRelaySaveAlert() { relaySaveAlert = nil }
 
     func cancelRelayForm() {
         guard !isSavingRelay else { return }
@@ -734,6 +744,7 @@ final class AppModel: ObservableObject {
 
     private func setForwarding(_ enabled: Bool) async -> Bool {
         isSwitchingForwarding = true
+        forwardingSwitchCount += 1
         defer { isSwitchingForwarding = false }
         forwardingFailure = nil
         do {
@@ -747,7 +758,7 @@ final class AppModel: ObservableObject {
     }
 
     private func alignOnStartup(_ value: CoreStatus) async {
-        guard !startupAligned, value.forwarding else { return }
+        guard !startupAligned, value.forwarding, !isSwitchingForwarding else { return }
         startupAligned = true
         guard value.access?.target != nil else { return }
         if value.access?.detect == "failed" {
@@ -759,6 +770,7 @@ final class AppModel: ObservableObject {
 
     private func reconcileAccess(_ value: CoreStatus) async {
         guard let target = value.access?.target, target != value.access?.mode else { return }
+        guard !isSwitchingForwarding, value.forwarding else { return }
         guard await applyAccess(), chatGPT.isRunning() else { return }
         addNotice(target == "both"
             ? Notice(title: "已切换到「官方 + 中转」", detail: "已检测到 ChatGPT 登录。重启 ChatGPT 后生效。", kind: .success)
@@ -766,6 +778,8 @@ final class AppModel: ObservableObject {
     }
 
     private func applyAccess() async -> Bool {
+        isSwitchingForwarding = true
+        defer { isSwitchingForwarding = false }
         forwardingFailure = nil
         do {
             let data = try await core.call("apply_access", params: Empty())

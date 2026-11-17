@@ -80,7 +80,6 @@ func TestSite_RequiredText(t *testing.T) {
 		{"中转配置卡片", "中转配置"},
 		{"配置数量说明", "已有 2 个，最多 10 个。"},
 		{"首次设置大标题", "连接中转服务"},
-		{"首次设置名字栏", ">名字<"},
 		{"模型名示例", "中转 · auto"},
 		{"第二个配置模型示例", "A家 · auto"},
 		{"第二个配置示例地址", "https://relay.example.com/alt/v1"},
@@ -95,6 +94,13 @@ func TestSite_RequiredText(t *testing.T) {
 				t.Errorf("页面缺少文字 %q", tt.text)
 			}
 		})
+	}
+}
+
+func TestSite_FirstRunNameLabel(t *testing.T) {
+	t.Parallel()
+	if !regexp.MustCompile(`>名字\s*<`).MatchString(readSite(t)) {
+		t.Error("页面缺少「名字」栏")
 	}
 }
 
@@ -456,5 +462,29 @@ func TestSite_PassesCheck(t *testing.T) {
 	}
 	if len(got) != 0 {
 		t.Errorf("违规 %d 处: %v", len(got), got)
+	}
+}
+
+func TestSite_FirstRunMockupMatchesApp(t *testing.T) {
+	t.Parallel()
+	html := readSite(t)
+	start := strings.Index(html, `class="am-intro"`)
+	if start < 0 {
+		t.Fatal("找不到首次设置示意图")
+	}
+	end := strings.Index(html[start:], "</figure>")
+	if end < 0 {
+		t.Fatal("首次设置示意图没有闭合")
+	}
+	block := html[start : start+end]
+
+	if !strings.Contains(block, "<p>填写中转服务提供的 Base URL 和 API Key。") {
+		t.Error("说明文字应以「填写中转服务提供的 Base URL 和 API Key。」开头")
+	}
+	if !regexp.MustCompile(`am-label">名字\s*<span class="am-req">必填</span>`).MatchString(block) {
+		t.Error("「名字」标签后应有「必填」")
+	}
+	if !strings.Contains(block, `<div class="am-help">1~16 个字，不能重名，不能含「·」。</div>`) {
+		t.Error("名字下面的帮助文字应为「1~16 个字，不能重名，不能含「·」。」")
 	}
 }

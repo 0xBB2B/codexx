@@ -11,13 +11,34 @@ struct WindowDragArea: NSViewRepresentable {
     func updateNSView(_ nsView: NSView, context: Context) {}
 }
 
+struct WindowTitleBar: View {
+    let title: String
+
+    var body: some View {
+        Text(title)
+            .font(Fonts.control)
+            .foregroundColor(Palette.text)
+            .frame(maxWidth: .infinity, minHeight: AppWindows.titleBarHeight)
+            .background(Palette.surface)
+            .overlay(alignment: .bottom) { Rectangle().fill(Palette.border).frame(height: 1) }
+            .overlay(WindowDragArea().accessibilityHidden(true))
+    }
+}
+
 @MainActor
 enum AppWindows {
     static let titleBarHeight: CGFloat = 48
 
     static func makeMain(model: AppModel) -> NSWindow {
-        let content = MainWindow(model: model).preferredColorScheme(.light).ignoresSafeArea(edges: .top)
-        let host = NSHostingView(rootView: content)
+        makeShell(title: "模型接入助手", content: MainWindow(model: model))
+    }
+
+    static func makeSetup(model: AppModel) -> NSWindow {
+        makeShell(title: "设置模型接入助手", content: SetupWindow(model: model))
+    }
+
+    private static func makeShell<Content: View>(title: String, content: Content) -> NSWindow {
+        let host = NSHostingView(rootView: content.preferredColorScheme(.light).ignoresSafeArea(edges: .top))
         if #available(macOS 13.3, *) { host.safeAreaRegions = [] }
         let window = MainShellWindow(
             contentRect: NSRect(origin: .zero, size: host.fittingSize),
@@ -25,13 +46,61 @@ enum AppWindows {
             backing: .buffered, defer: false
         )
         window.contentView = host
-        window.title = "模型接入助手"
+        window.title = title
         window.titlebarAppearsTransparent = true
         window.titleVisibility = .hidden
         window.isReleasedWhenClosed = false
         window.center()
         window.centerTrafficLights()
         return window
+    }
+}
+
+@MainActor
+final class AppWindowController {
+    private let model: AppModel
+    private let present: (NSWindow) -> Void
+    private(set) var mainWindow: NSWindow?
+    private(set) var setupWindow: NSWindow?
+    private var setupCloseObserver: NSObjectProtocol?
+    private var subscription: AnyCancellable?
+
+    init(model: AppModel, present: @escaping (NSWindow) -> Void) {
+        self.model = model
+        self.present = present
+        subscription = model.$showSetup.removeDuplicates().sink { [weak self] visible in
+            guard let self else { return }
+            if visible {
+                showSetupWindow()
+            } else {
+                setupWindow?.orderOut(nil)
+                if !model.needsSetup { showMainWindow() }
+            }
+        }
+    }
+
+    func showMainWindow() {
+        if model.needsSetup {
+            if model.showSetup, let setupWindow { present(setupWindow) } else { model.showSetup = true }
+            return
+        }
+        let window = mainWindow ?? AppWindows.makeMain(model: model)
+        if mainWindow == nil { _ = RelaySheetController(model: model, window: window) }
+        mainWindow = window
+        present(window)
+    }
+
+    private func showSetupWindow() {
+        if setupWindow == nil {
+            let window = AppWindows.makeSetup(model: model)
+            setupWindow = window
+            setupCloseObserver = NotificationCenter.default.addObserver(
+                forName: NSWindow.willCloseNotification, object: window, queue: .main
+            ) { [weak self] _ in
+                Task { @MainActor in self?.model.finishSetup() }
+            }
+        }
+        if let setupWindow { present(setupWindow) }
     }
 }
 

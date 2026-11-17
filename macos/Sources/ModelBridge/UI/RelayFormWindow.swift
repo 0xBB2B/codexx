@@ -61,7 +61,7 @@ struct RelayFormView: View {
         .background(RoundedRectangle(cornerRadius: 12).fill(Palette.surface))
         .overlay(alignment: .top) {
             if let alert = model.relaySaveAlert {
-                AlertBar(tone: alert.tone, title: alert.title, detail: alert.message)
+                AlertBar(tone: alert.tone, title: alert.title, detail: alert.message, onClose: { model.clearRelaySaveAlert() })
                     .shadow(color: Color(hex: 0x172b3a).opacity(0.16), radius: 24, x: 0, y: 16)
                     .padding(.top, 12).padding(.horizontal, 24)
             }

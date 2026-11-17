@@ -126,6 +126,7 @@ public sealed class AppModel : IRelayFields
     readonly IChatGptControl chatGpt;
     readonly IConfirmer confirmer;
     RelayEditorModel? activeEditor;
+    int forwardingToggles;
 
     string nameInput = DefaultRelayName;
     string baseUrlInput = "";
@@ -308,7 +309,7 @@ public sealed class AppModel : IRelayFields
         }
     }
 
-    public bool ToggleEnabled => !busy && !isDetectingAccess && chatGptFound && coreRunning;
+    public bool ToggleEnabled => !busy && chatGptFound && coreRunning;
 
     public string? AccessModeName => forwardingEnabled ? ModeName(accessMode) : null;
 
@@ -445,7 +446,7 @@ public sealed class AppModel : IRelayFields
             }
             catch (Exception ex) when (ex is CoreCallException or CoreProcessExitedException)
             {
-                TaskError = new AppNotice("没能连上中转服务", Describe(ex));
+                TaskError = new AppNotice("没能连上中转服务", Describe(ex).TrimEnd('。') + "。");
                 return;
             }
 
@@ -504,6 +505,7 @@ public sealed class AppModel : IRelayFields
         if (busy || !chatGptFound) return;
 
         IsBusy = true;
+        forwardingToggles++;
         LastError = null;
         try
         {
@@ -535,6 +537,7 @@ public sealed class AppModel : IRelayFields
     {
         RemoveNotices(DetectFailedTitle);
         IsDetectingAccess = true;
+        var togglesBefore = forwardingToggles;
         try
         {
             JsonElement status;
@@ -549,7 +552,10 @@ public sealed class AppModel : IRelayFields
             }
 
             RemoveNotices(RecheckFailedTitle);
+            var toggledMeanwhile = forwardingToggles != togglesBefore;
+            var forwardingNow = forwardingEnabled;
             ApplyStatus(status);
+            if (toggledMeanwhile) ForwardingEnabled = forwardingNow;
             var access = Prop(status, "access");
             var mode = Str(access, "mode");
             var target = Str(access, "target");
@@ -572,6 +578,7 @@ public sealed class AppModel : IRelayFields
                 return;
             }
 
+            if (toggledMeanwhile || !forwardingEnabled) return;
             await ReconcileAccessAsync(target);
         }
         finally
@@ -582,7 +589,7 @@ public sealed class AppModel : IRelayFields
 
     void OnStatusReceived(JsonElement s)
     {
-        if (startupAligned || !Flag(s, "forwarding", false)) return;
+        if (startupAligned || busy || !Flag(s, "forwarding", false)) return;
         startupAligned = true;
 
         var access = Prop(s, "access");
@@ -598,6 +605,20 @@ public sealed class AppModel : IRelayFields
     }
 
     async Task ReconcileAccessAsync(string target)
+    {
+        if (busy) return;
+        IsBusy = true;
+        try
+        {
+            await ApplyAccessAsync(target);
+        }
+        finally
+        {
+            IsBusy = false;
+        }
+    }
+
+    async Task ApplyAccessAsync(string target)
     {
         LastError = null;
         try

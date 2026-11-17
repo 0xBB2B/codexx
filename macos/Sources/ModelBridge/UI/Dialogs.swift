@@ -26,7 +26,7 @@ struct DeleteRelayDialogView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 8) {
-                Image(systemName: "exclamationmark.triangle").font(.system(size: 16)).foregroundColor(Palette.primary)
+                AppIconView(size: 24)
                 Text(model.pendingConfirmation?.title ?? "").font(Fonts.sectionTitle).foregroundColor(Palette.text)
             }
             .padding(.top, 24).padding(.horizontal, 24)
@@ -75,7 +75,7 @@ private final class DialogResult {
     init(_ action: DialogAction) { self.action = action }
 }
 
-private struct DialogView: View {
+struct DialogView: View {
     let model: DialogContent
     let onAction: (DialogAction) -> Void
     @FocusState private var focusedIndex: Int?
@@ -83,7 +83,7 @@ private struct DialogView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 8) {
-                Image(systemName: "exclamationmark.triangle").font(.system(size: 16)).foregroundColor(Palette.primary)
+                AppIconView(size: 24)
                 Text(model.title).font(Fonts.sectionTitle).foregroundColor(Palette.text)
             }
             .padding(.top, 24).padding(.horizontal, 24)
