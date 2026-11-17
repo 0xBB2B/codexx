@@ -144,11 +144,11 @@ struct ViewFixture {
 
     static func make(
         relayCount: Int = 3, forwarding: Bool = true, mode: String = "both",
-        failingIDs: Set<String> = [], responses: [String: Result<Data, CoreError>] = [:],
+        failingIDs: Set<String> = [], firstName: String? = nil, responses: [String: Result<Data, CoreError>] = [:],
         gates: [String: Gate] = [:]
     ) async -> ViewFixture {
         let relays = (0..<relayCount).map { $0 + 1 }.map {
-            RelayConfig(id: "\($0)", name: "配置\($0)", baseURL: "https://r\($0).example.com")
+            RelayConfig(id: "\($0)", name: $0 == 1 ? (firstName ?? "配置1") : "配置\($0)", baseURL: "https://r\($0).example.com")
         }
         let log = CallLog()
         let core = FakeCore(log: log, responses: responses, gates: gates)

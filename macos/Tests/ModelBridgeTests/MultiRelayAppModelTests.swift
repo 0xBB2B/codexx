@@ -243,7 +243,7 @@ final class MultiRelayAppModelTests: XCTestCase {
 
     func testValidation_NameDuplicateIgnoringCase() async {
         let error = await validationError({ $0.draftName = "alpha" }, field: .name)
-        XCTAssertEqual(error, "已有叫「Alpha」的配置（不区分大小写），换一个名字。")
+        XCTAssertEqual(error, "已有同名配置「Alpha」。")
     }
 
     func testValidation_BaseURLEmpty() async {

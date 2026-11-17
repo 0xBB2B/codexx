@@ -210,13 +210,13 @@ final class MultiRelayStorageTests: XCTestCase {
     }
 
     func testErrorMessage_NameDuplicateTemplateHasNoAnnotation() {
-        XCTAssertEqual(CoreProtocol.errorMessages["name_duplicate"], "已有叫「<keys[0]>」的配置（不区分大小写），换一个名字。")
+        XCTAssertEqual(CoreProtocol.errorMessages["name_duplicate"], "已有同名配置「<keys[0]>」。")
     }
 
     func testCoreFailure_NameDuplicateFillsExistingName() {
         XCTAssertEqual(
             CoreFailure(code: "name_duplicate", keys: ["Alpha"]).message,
-            "已有叫「Alpha」的配置（不区分大小写），换一个名字。"
+            "已有同名配置「Alpha」。"
         )
     }
 

@@ -184,7 +184,7 @@ final class RelayFormViewTests: XCTestCase {
         XCTAssertEqual(view.size.height, before, accuracy: 1)
     }
 
-    private static let longError = "已有叫「一二三四五六七八九十一二三四五六」的配置（不区分大小写），换一个名字。"
+    private static let longError = "已有同名配置「一二三四五六七八九十一二三四五六」。"
 
     func testLongFieldError_KeepsHeight() async {
         for field in [RelayField.name, .baseURL, .apiKey] {
@@ -195,6 +195,21 @@ final class RelayFormViewTests: XCTestCase {
             f.model.relayFieldErrors = [field: Self.longError]
             XCTAssertEqual(view.size.height, before, accuracy: 1, "\(field)")
         }
+    }
+
+    func testDuplicateErrorFor16CharName_NotTruncated() async throws {
+        let longName = "一二三四五六七八九十一二三四五六"
+        let f = await ViewFixture.make(firstName: longName)
+        f.model.beginAddRelay()
+        f.model.draftName = longName
+        f.model.draftBaseURL = "https://new.example.com"
+        f.model.draftAPIKey = "sk-draft-0000"
+        let view = RenderedView(RelayFormView(model: f.model))
+        await f.model.saveRelay()
+        let message = "已有同名配置「\(longName)」。"
+        let frame = try XCTUnwrap(view.frame(ofExactText: message))
+        let natural = (message as NSString).size(withAttributes: [.font: NSFont.systemFont(ofSize: 12)]).width
+        XCTAssertGreaterThanOrEqual(frame.width, natural - 1)
     }
 
     func testSaving_ButtonTextAndCancelDisabled() async {
@@ -270,7 +285,7 @@ final class SetupWindowNameFieldTests: XCTestCase {
             f.model.beginSetup()
             let view = RenderedView(SetupWindow(model: f.model))
             let before = view.size.height
-            f.model.relayFieldErrors = [field: "已有叫「一二三四五六七八九十一二三四五六」的配置（不区分大小写），换一个名字。"]
+            f.model.relayFieldErrors = [field: "已有同名配置「一二三四五六七八九十一二三四五六」。"]
             XCTAssertEqual(view.size.height, before, accuracy: 1, "\(field)")
         }
     }

@@ -348,7 +348,7 @@ public class MultiRelayTests
 
         await editor.SaveAsync();
 
-        Assert.AreEqual("已有叫「A家」的配置（不区分大小写），换一个名字。", editor.NameError);
+        Assert.AreEqual("已有同名配置「A家」。", editor.NameError);
         Assert.AreEqual(0, h.Core.Count("save_relay"));
     }
 
@@ -526,7 +526,7 @@ public class MultiRelayTests
 
         await editor.SaveAsync();
 
-        Assert.AreEqual("已有叫「A家」的配置（不区分大小写），换一个名字。", editor.NameError);
+        Assert.AreEqual("已有同名配置「A家」。", editor.NameError);
         Assert.AreEqual(2, h.Settings.Relays.Count);
     }
 

@@ -10,7 +10,7 @@ public static class CoreErrorMessages
         ["name_empty"] = "请填写名字。",
         ["name_too_long"] = "名字最多 16 个字。",
         ["name_has_dot"] = "名字里不能有「·」。",
-        ["name_duplicate"] = "已有叫「<keys[0]>」的配置（不区分大小写），换一个名字。",
+        ["name_duplicate"] = "已有同名配置「<keys[0]>」。",
         ["relay_limit"] = "已有 10 个，达到上限。",
         ["relay_last"] = "至少保留一个配置。",
         ["relay_not_found"] = "这个配置不存在，请刷新后重试。",
