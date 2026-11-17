@@ -121,7 +121,7 @@ func RenderAppIconMac(size int) *image.NRGBA {
 	return out
 }
 
-// 偏移 size/64，高斯 sigma=size/64（即 CSS 语义的模糊半径 size/32），最大不透明度 0x38
+// 偏移 size/64，高斯标准差 size/32，即 CSS drop-shadow 的第三个值；最大不透明度 0x38
 func dropShadow(plate *image.NRGBA) *image.NRGBA {
 	size := plate.Bounds().Dx()
 	offset := size / 64
@@ -131,7 +131,7 @@ func dropShadow(plate *image.NRGBA) *image.NRGBA {
 			alpha[y*size+x] = float64(plate.Pix[plate.PixOffset(x, y-offset)+3]) / 255
 		}
 	}
-	kernel := gaussianKernel(float64(size) / 64)
+	kernel := gaussianKernel(float64(size) / 32)
 	tmp := make([]float64, size*size)
 	gaussBlur(alpha, tmp, size, kernel, true)
 	gaussBlur(tmp, alpha, size, kernel, false)

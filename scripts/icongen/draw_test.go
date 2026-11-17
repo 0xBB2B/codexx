@@ -87,12 +87,19 @@ func TestRenderAppIconMac(t *testing.T) {
 	}
 }
 
+func TestRenderAppIconMac_64_ShadowFadesAtLeftEdge(t *testing.T) {
+	t.Parallel()
+	if a := RenderAppIconMac(64).NRGBAAt(0, 32).A; a > 1 {
+		t.Errorf("(0,32) alpha = %d, want <= 1（σ=2，距底板 2.9σ）", a)
+	}
+}
+
 func TestRenderAppIconMac_ShadowBlurSigma(t *testing.T) {
 	t.Parallel()
 	const (
 		size     = 1024
 		peak     = 0x38
-		wantSig  = 16.0
+		wantSig  = 32.0
 		edgeY    = 100 + 824 + 16
 		halfTol  = 2
 		sigmaTol = 0.10
@@ -303,7 +310,6 @@ func TestRenderAppIconMac_64(t *testing.T) {
 		{"右上角透明", 63, 0, true, nil},
 		{"左下角透明", 0, 63, true, nil},
 		{"右下角透明", 63, 63, true, nil},
-		{"左侧留白透明", 1, 32, true, nil},
 		{"底板内为底板色", 8, 32, false, []color.NRGBA{teal}},
 	})
 }
