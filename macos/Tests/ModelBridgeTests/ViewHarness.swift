@@ -1,0 +1,188 @@
+import AppKit
+import SwiftUI
+import XCTest
+@testable import ModelBridge
+
+private final class KeyableWindow: NSWindow {
+    override var canBecomeKey: Bool { true }
+}
+
+extension NSObject {
+    func axObject(_ name: String) -> AnyObject? {
+        let selector = NSSelectorFromString(name)
+        guard responds(to: selector) else { return nil }
+        return perform(selector)?.takeUnretainedValue()
+    }
+
+    func axString(_ name: String) -> String? {
+        let value = axObject(name)
+        return (value as? String) ?? (value as? NSString).map(String.init)
+    }
+
+    func axBool(_ name: String) -> Bool? {
+        let selector = NSSelectorFromString(name)
+        guard responds(to: selector) else { return nil }
+        typealias Getter = @convention(c) (AnyObject, Selector) -> Bool
+        return unsafeBitCast(method(for: selector), to: Getter.self)(self, selector)
+    }
+
+    func axFrame() -> NSRect? {
+        let selector = NSSelectorFromString("accessibilityFrame")
+        guard responds(to: selector) else { return nil }
+        typealias Getter = @convention(c) (AnyObject, Selector) -> NSRect
+        return unsafeBitCast(method(for: selector), to: Getter.self)(self, selector)
+    }
+}
+
+@MainActor
+final class RenderedView {
+    private let window: NSWindow
+    let host: NSView
+
+    init(existing window: NSWindow) {
+        NSApplication.shared.setAccessibilityEnabled(true)
+        NSApplication.shared.setValue(true, forKey: "accessibilityEnhancedUserInterface")
+        self.window = window
+        host = window.contentView ?? NSView()
+    }
+
+    init<V: View>(_ view: V) {
+        NSApplication.shared.setAccessibilityEnabled(true)
+        NSApplication.shared.setValue(true, forKey: "accessibilityEnhancedUserInterface")
+        host = NSHostingView(rootView: view)
+        window = KeyableWindow(contentRect: .zero, styleMask: [.borderless], backing: .buffered, defer: false)
+        window.contentView = host
+        window.isReleasedWhenClosed = false
+        host.layoutSubtreeIfNeeded()
+    }
+
+    func makeKeyOffscreen() {
+        window.setFrame(NSRect(origin: CGPoint(x: -20000, y: -20000), size: host.fittingSize), display: false)
+        window.makeKeyAndOrderFront(nil)
+    }
+
+    func close() { window.orderOut(nil) }
+
+    func frame(ofText text: String) -> NSRect? {
+        let match = elements.first { element in
+            ["accessibilityLabel", "accessibilityValue"].contains { element.axString($0)?.contains(text) == true }
+        }
+        return match?.axFrame()
+    }
+
+    func frame(ofExactText text: String) -> NSRect? {
+        let match = elements.first { element in
+            ["accessibilityLabel", "accessibilityValue"].contains { element.axString($0) == text }
+        }
+        return match?.axFrame()
+    }
+
+    func isFocused(label: String) -> Bool? {
+        let match = elements.first { $0.axString("accessibilityLabel") == label }
+        return match.flatMap { $0.axBool("isAccessibilityFocused") }
+    }
+
+    var size: CGSize {
+        host.layoutSubtreeIfNeeded()
+        return host.fittingSize
+    }
+
+    var elements: [NSObject] {
+        host.layoutSubtreeIfNeeded()
+        return Self.walk(host)
+    }
+
+    var texts: [String] {
+        elements.flatMap { element in
+            ["accessibilityLabel", "accessibilityTitle", "accessibilityValue"]
+                .compactMap { element.axString($0) }
+                .filter { !$0.isEmpty }
+        }
+    }
+
+    func has(_ text: String) -> Bool {
+        Self.squash(texts.joined()).contains(Self.squash(text))
+    }
+
+    func hasExactly(_ text: String) -> Bool { texts.contains(text) }
+
+    func isEnabled(label: String) -> Bool? {
+        let match = elements.first { $0.axString("accessibilityLabel") == label }
+        return match.flatMap { $0.axBool("isAccessibilityEnabled") }
+    }
+
+    func order(ofExactly text: String) -> Int? {
+        texts.firstIndex(of: text)
+    }
+
+    func firstTextFieldIsFocused() -> Bool? {
+        let field = elements.first { $0.axString("accessibilityRole") == NSAccessibility.Role.textField.rawValue }
+        return field.flatMap { $0.axBool("isAccessibilityFocused") }
+    }
+
+    private static func squash(_ text: String) -> String {
+        text.filter { !$0.isWhitespace }
+    }
+
+    private static func walk(_ object: NSObject) -> [NSObject] {
+        var result = [object]
+        let children = (object.axObject("accessibilityChildren") as? [NSObject]) ?? []
+        for child in children { result += walk(child) }
+        return result
+    }
+}
+
+private func entryJSON(_ id: String, _ name: String, count: Int, fetched: Bool, stale: Bool) -> String {
+    let fetchedAt = fetched ? "\"2026-11-16T00:12:00Z\"" : "null"
+    return #"{"id":"\#(id)","name":"\#(name)","model_count":\#(count),"fetched_at":\#(fetchedAt),"stale":\#(stale),"error":null}"#
+}
+
+@MainActor
+struct ViewFixture {
+    let model: AppModel
+    let core: FakeCore
+
+    static func make(
+        relayCount: Int = 3, forwarding: Bool = true, mode: String = "both",
+        failingIDs: Set<String> = [], responses: [String: Result<Data, CoreError>] = [:],
+        gates: [String: Gate] = [:]
+    ) async -> ViewFixture {
+        let relays = (0..<relayCount).map { $0 + 1 }.map {
+            RelayConfig(id: "\($0)", name: "配置\($0)", baseURL: "https://r\($0).example.com")
+        }
+        let log = CallLog()
+        let core = FakeCore(log: log, responses: responses, gates: gates)
+        let keys = Dictionary(uniqueKeysWithValues: relays.map { ($0.id, "sk-example-\($0.id)") })
+        let model = AppModel(
+            core: core, keychain: RelayFakeKeychain(log: log, entries: keys),
+            settings: RelayFakeSettings(log: log, relays: relays),
+            loginItem: FakeLoginItem(log: log), chatGPT: FakeChatGPT(running: false)
+        )
+        await model.start()
+        let entries = relays.map { entryJSON($0.id, $0.name, count: failingIDs.contains($0.id) ? 0 : 6, fetched: !failingIDs.contains($0.id), stale: false) }
+        let text = """
+        {"version":"1.3.0","forwarding":\(forwarding),"proxy":{"running":true,"error":null},\
+        "chatgpt":{"found":true,"error":null},"default_relay":"配置1","relays":[\(entries.joined(separator: ","))],\
+        "taken_over":[],"restore_blocked":[],"config_path":"/Users/example/.codex/config.toml",\
+        "update":{"latest_version":null,"url":null},"access":{"mode":"\(mode)","target":"\(mode)","detect":"logged_in"}}
+        """
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        model.status = try! decoder.decode(CoreStatus.self, from: Data(text.utf8))
+        return ViewFixture(model: model, core: core)
+    }
+}
+
+@MainActor
+func awaitUntil(timeout: TimeInterval = 2, _ condition: () -> Bool) async {
+    let deadline = Date().addingTimeInterval(timeout)
+    while !condition(), Date() < deadline { try? await Task.sleep(nanoseconds: 5_000_000) }
+}
+
+@MainActor
+func hideOffscreen(_ window: NSWindow) {
+    window.alphaValue = 0
+    window.ignoresMouseEvents = true
+    window.makeKeyAndOrderFront(nil)
+    window.setFrameOrigin(NSPoint(x: -20000, y: -20000))
+}

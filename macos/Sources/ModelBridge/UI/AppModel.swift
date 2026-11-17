@@ -253,7 +253,7 @@ final class AppModel: ObservableObject {
     var relayFormLocked: Bool { isSavingRelay }
 
     var relaySaveButtonTitle: String {
-        isSavingRelay ? "正在保存并获取模型…" : (editingRelayID == nil ? "添加" : "保存")
+        isSavingRelay ? "正在保存并获取模型…" : "保存"
     }
 
     var deleteBlockedReason: String? { relays.count <= 1 ? CoreProtocol.errorMessages["relay_last"] : nil }
@@ -301,11 +301,15 @@ final class AppModel: ObservableObject {
         !coreRunning || status?.chatgpt?.found == false || isSwitchingForwarding || isDetectingAccess
     }
 
-    var modelCountText: String {
-        guard forwardingEnabled else { return "中转模型 转发关闭时不获取" }
+    var modelCountText: String { "中转模型 " + modelCountValue + (modelCountNote ?? "") }
+
+    var modelCountValue: String {
+        guard forwardingEnabled else { return "转发关闭时不获取" }
         let total = (status?.relays ?? []).reduce(0) { $0 + ($1.modelCount ?? 0) }
-        return "中转模型 \(total) 个（\(relays.count) 个配置）"
+        return "\(total) 个"
     }
+
+    var modelCountNote: String? { forwardingEnabled ? "（\(relays.count) 个配置）" : nil }
 
     var accessModeName: String? {
         guard forwardingEnabled else { return nil }
@@ -531,13 +535,13 @@ final class AppModel: ObservableObject {
     }
 
     func beginAddRelay() {
-        guard canAddRelay else { return }
+        guard canAddRelay, !isSavingRelay, !showRelayForm else { return }
         resetDraft(name: "")
         showRelayForm = true
     }
 
     func beginEditRelay(id: String) {
-        guard let relay = relays.first(where: { $0.id == id }) else { return }
+        guard !isSavingRelay, let relay = relays.first(where: { $0.id == id }) else { return }
         resetDraft(name: relay.name)
         editingRelayID = id
         draftBaseURL = relay.baseURL
@@ -583,7 +587,7 @@ final class AppModel: ObservableObject {
     func canDeleteRelay(id: String) -> Bool { relays.count > 1 && relays.contains { $0.id == id } }
 
     func requestDeleteRelay(id: String) {
-        guard canDeleteRelay(id: id), let relay = relays.first(where: { $0.id == id }) else { return }
+        guard !isDeletingRelay, canDeleteRelay(id: id), let relay = relays.first(where: { $0.id == id }) else { return }
         let count = status?.relays?.first { $0.id == id }?.modelCount ?? 0
         let models = count > 0 ? "的 \(count) 个模型" : "的模型"
         pendingConfirmation = Confirmation(
@@ -602,6 +606,7 @@ final class AppModel: ObservableObject {
 
     func setLoginStart(_ enabled: Bool) async {
         if !enabled, forwardingEnabled {
+            guard !isDeletingRelay else { mainWindowRequested = true; return }
             pendingConfirmation = Confirmation(
                 kind: .loginStartOff,
                 title: "关闭「登录时启动」？",
@@ -614,6 +619,7 @@ final class AppModel: ObservableObject {
     }
 
     func quit() async {
+        guard !isDeletingRelay else { mainWindowRequested = true; return }
         if forwardingEnabled {
             pendingConfirmation = Confirmation(
                 kind: .quit,
@@ -628,6 +634,7 @@ final class AppModel: ObservableObject {
     }
 
     func uninstall() async {
+        guard !isDeletingRelay else { mainWindowRequested = true; return }
         pendingConfirmation = Confirmation(
             kind: .uninstall,
             title: "卸载模型接入助手？",

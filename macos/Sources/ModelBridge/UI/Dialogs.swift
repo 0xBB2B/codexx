@@ -2,8 +2,72 @@ import AppKit
 import Combine
 import SwiftUI
 
-private final class DialogPanel: NSPanel {
+final class DialogPanel: NSPanel {
     override var canBecomeKey: Bool { true }
+
+    @MainActor
+    static func make<Content: View>(_ content: Content) -> DialogPanel {
+        let panel = DialogPanel(contentRect: .zero, styleMask: [.borderless], backing: .buffered, defer: false)
+        let host = NSHostingView(rootView: content.padding(48))
+        panel.contentView = host
+        panel.setContentSize(host.fittingSize)
+        panel.isOpaque = false
+        panel.backgroundColor = .clear
+        panel.hasShadow = false
+        panel.isReleasedWhenClosed = false
+        return panel
+    }
+}
+
+struct DeleteRelayDialogView: View {
+    @ObservedObject var model: AppModel
+    @FocusState private var cancelFocused: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 8) {
+                Image(systemName: "exclamationmark.triangle").font(.system(size: 16)).foregroundColor(Palette.primary)
+                Text(model.pendingConfirmation?.title ?? "").font(Fonts.sectionTitle).foregroundColor(Palette.text)
+            }
+            .padding(.top, 24).padding(.horizontal, 24)
+            .accessibilityAddTraits(.isHeader)
+            Text(model.pendingConfirmation?.message ?? "")
+                .font(.system(size: 14))
+                .foregroundColor(Palette.text)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.top, 12).padding(.horizontal, 24).padding(.bottom, 24)
+            Rectangle().fill(Palette.border).frame(height: 1)
+            HStack(spacing: 12) {
+                Spacer(minLength: 0)
+                Button("取消") { model.cancelPending() }
+                    .secondaryAction()
+                    .keyboardShortcut(.cancelAction)
+                    .disabled(model.deleteCancelDisabled)
+                    .focusable()
+                    .focused($cancelFocused)
+                Button { Task { await model.confirmPending() } } label: {
+                    BusyLabel(text: model.deleteBusyLabel ?? "删除", busy: model.isDeletingRelay)
+                }
+                .primaryAction()
+                .disabled(model.isDeletingRelay)
+            }
+            .padding(.vertical, 16).padding(.horizontal, 24)
+        }
+        .frame(width: 520)
+        .background(RoundedRectangle(cornerRadius: 12).fill(Palette.surface))
+        .shadow(color: Color(hex: 0x172b3a).opacity(0.16), radius: 24, x: 0, y: 16)
+        .preferredColorScheme(.light)
+        .onAppear { DispatchQueue.main.async { cancelFocused = true } }
+        .accessibilityElement(children: .contain)
+    }
+}
+
+extension Confirmation.Kind {
+    var isDeleteRelay: Bool {
+        if case .deleteRelay = self { return true }
+        return false
+    }
 }
 
 private final class DialogResult {
@@ -76,7 +140,7 @@ final class DialogPresenter {
 
     init(model: AppModel) {
         self.model = model
-        model.$pendingConfirmation.compactMap { $0 }.sink { [weak self] value in
+        model.$pendingConfirmation.compactMap { $0 }.filter { !$0.kind.isDeleteRelay }.sink { [weak self] value in
             Task { @MainActor in await self?.present(value) }
         }.store(in: &subscriptions)
         model.onTrashFailure = { path in

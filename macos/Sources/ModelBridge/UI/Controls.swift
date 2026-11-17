@@ -125,8 +125,9 @@ struct AppTextField: View {
     var mono = false
     var invalid = false
     var errorText: String?
+    var focus: FocusState<Bool>.Binding?
     @Environment(\.isEnabled) private var isEnabled
-    @FocusState private var focused: Bool
+    @FocusState private var ownFocus: Bool
     @State private var hovering = false
 
     var body: some View {
@@ -140,12 +141,12 @@ struct AppTextField: View {
         .textFieldStyle(.plain)
         .font(mono ? Fonts.mono : Fonts.control)
         .foregroundColor(isEnabled ? Palette.text : Palette.textDisabled)
-        .focused($focused)
+        .focused(focus ?? $ownFocus)
         .padding(.horizontal, 12)
         .frame(height: 44)
         .background(RoundedRectangle(cornerRadius: 8).fill(isEnabled ? Palette.surface : Palette.disabledBg))
         .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(borderColor, lineWidth: 1))
-        .overlay { if focused { FocusRing() } }
+        .overlay { if focus?.wrappedValue ?? ownFocus { FocusRing() } }
         .onHover { hovering = $0 }
         .accessibilityLabel(label)
         .accessibilityHint(invalid ? (errorText ?? "") : "")
@@ -161,6 +162,7 @@ struct AppTextField: View {
 struct SwitchRow: View {
     let label: String
     @Binding var isOn: Bool
+    var showsState = true
     @Environment(\.isEnabled) private var isEnabled
 
     var body: some View {
@@ -169,9 +171,11 @@ struct SwitchRow: View {
                 .buttonStyle(.plain)
                 .accessibilityLabel(label)
                 .accessibilityValue(isOn ? "已开启" : "已关闭")
-            Text(isOn ? "已开启" : "已关闭")
-                .font(Fonts.label)
-                .foregroundColor(isEnabled ? Palette.text : Palette.textDisabled)
+            if showsState {
+                Text(isOn ? "已开启" : "已关闭")
+                    .font(Fonts.label)
+                    .foregroundColor(isEnabled ? Palette.text : Palette.textDisabled)
+            }
         }
         .frame(minHeight: 44)
     }

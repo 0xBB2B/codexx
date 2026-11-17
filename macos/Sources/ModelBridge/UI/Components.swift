@@ -43,6 +43,72 @@ enum Fonts {
     static let mono = Font.system(size: 12, design: .monospaced)
 }
 
+struct LabelValue: View {
+    let label: String
+    let value: String
+    var note: String?
+    var font: Font = Fonts.control
+    var weight: Font.Weight = .semibold
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Text(label).foregroundColor(Palette.textMuted)
+            HStack(spacing: 4) {
+                Text(value).fontWeight(weight).foregroundColor(Palette.text)
+                if let note { Text(note).foregroundColor(Palette.textMuted) }
+            }
+        }
+        .font(font)
+    }
+}
+
+struct AppIconView: View {
+    let size: CGFloat
+
+    private var inset: CGFloat {
+        if size <= 16 { return 1 }
+        if size <= 32 { return 2 }
+        return size * 100 / 1024
+    }
+
+    private var lineRatio: CGFloat { size >= 64 ? 0.06 : (size >= 24 ? 0.09 : 0.12) }
+
+    var body: some View {
+        let plate = size - inset * 2
+        let unit = plate / 100
+        ZStack {
+            RoundedRectangle(cornerRadius: size * 184 / 1024).fill(Palette.primary)
+                .frame(width: plate, height: plate)
+            Canvas { context, _ in
+                var path = Path()
+                if size >= 24 {
+                    path.addEllipse(in: CGRect(x: 16 * unit, y: 16 * unit, width: 68 * unit, height: 68 * unit))
+                    path.move(to: CGPoint(x: 31.5 * unit, y: 42.6 * unit))
+                    path.addLine(to: CGPoint(x: 68.5 * unit, y: 42.6 * unit))
+                    path.addLine(to: CGPoint(x: 58.9 * unit, y: 33 * unit))
+                    path.move(to: CGPoint(x: 68.5 * unit, y: 57.4 * unit))
+                    path.addLine(to: CGPoint(x: 31.5 * unit, y: 57.4 * unit))
+                    path.addLine(to: CGPoint(x: 41.1 * unit, y: 67 * unit))
+                } else {
+                    path.move(to: CGPoint(x: 22 * unit, y: 38 * unit))
+                    path.addLine(to: CGPoint(x: 78 * unit, y: 38 * unit))
+                    path.addLine(to: CGPoint(x: 65 * unit, y: 25 * unit))
+                    path.move(to: CGPoint(x: 78 * unit, y: 62 * unit))
+                    path.addLine(to: CGPoint(x: 22 * unit, y: 62 * unit))
+                    path.addLine(to: CGPoint(x: 35 * unit, y: 75 * unit))
+                }
+                context.stroke(
+                    path, with: .color(.white),
+                    style: StrokeStyle(lineWidth: plate * lineRatio, lineCap: .round, lineJoin: .round)
+                )
+            }
+            .frame(width: plate, height: plate)
+        }
+        .frame(width: size, height: size)
+        .accessibilityHidden(true)
+    }
+}
+
 struct BusyLabel: View {
     let text: String
     var busy = false

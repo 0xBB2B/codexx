@@ -98,7 +98,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if model.showSetup, let setupWindow { present(setupWindow) } else { model.showSetup = true }
             return
         }
-        let window = mainWindow ?? makeWindow(title: "模型接入助手", content: MainWindow(model: model))
+        let window = mainWindow ?? AppWindows.makeMain(model: model)
+        if mainWindow == nil { _ = RelaySheetController(model: model, window: window) }
         mainWindow = window
         present(window)
     }

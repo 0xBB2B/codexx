@@ -37,6 +37,17 @@ struct SetupWindow: View {
     private var form: some View {
         Card {
             FieldRow(
+                label: "名字",
+                required: true,
+                help: RelayFormCopy.nameHelp,
+                error: model.relayFieldErrors[.name]
+            ) {
+                AppTextField(
+                    label: "名字", placeholder: "", text: $model.draftName,
+                    invalid: model.relayFieldErrors[.name] != nil, errorText: model.relayFieldErrors[.name]
+                )
+            }
+            FieldRow(
                 label: "Base URL",
                 required: true,
                 help: "以 https:// 开头的完整地址。",
