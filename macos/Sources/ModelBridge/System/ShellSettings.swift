@@ -80,6 +80,9 @@ struct ShellSettings: Sendable {
             do { try FileManager.default.removeItem(at: url) } catch { failure = error }
         }
         if let failure { throw failure }
+        if let rest = try? FileManager.default.contentsOfDirectory(atPath: directory.path), rest.isEmpty {
+            try FileManager.default.removeItem(at: directory)
+        }
     }
 }
 

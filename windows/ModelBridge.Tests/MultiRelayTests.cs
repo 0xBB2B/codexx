@@ -501,6 +501,30 @@ public class MultiRelayTests
     }
 
     [TestMethod]
+    public async Task Add_RelayNon2xxWithStatus_AlertHasStatusNumberWithoutFullStop()
+    {
+        (string Code, string Status, string Expected)[] cases =
+        [
+            ("relay_5xx", "503", "中转服务返回 503：中转服务暂时不可用"),
+            ("relay_4xx", "400", "中转服务返回 400：请求未被中转服务接受"),
+            ("relay_bad_response", "302", "中转服务返回 302：没有返回模型列表，请检查 Base URL"),
+        ];
+        foreach (var (code, status, expected) in cases)
+        {
+            var h = new MultiHarness();
+            await h.StartWithTwoAsync();
+            h.Core.Fail("save_relay", code, status);
+            var editor = Editors.Add(h.Model);
+            Fill(editor);
+
+            Assert.IsFalse(await editor.SaveAsync());
+
+            Assert.AreEqual("没有保存", editor.SaveAlert!.Title, code);
+            Assert.AreEqual(expected, editor.SaveAlert.Message, code);
+        }
+    }
+
+    [TestMethod]
     public async Task Add_CoreFails_KeyNeverAppearsInNoticesOrAlert()
     {
         var h = new MultiHarness();

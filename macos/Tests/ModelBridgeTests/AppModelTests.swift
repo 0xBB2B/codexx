@@ -979,7 +979,7 @@ final class AppModelTests: XCTestCase {
 
     func testForwardingHelpText_ThreeStates() throws {
         let on = Harness(status: makeStatus(forwarding: true))
-        XCTAssertEqual(on.model.forwardingHelpText, "开启时，本助手按下方的接入方式修改 Codex 配置。")
+        XCTAssertEqual(on.model.forwardingHelpText, "")
         let off = Harness(status: makeStatus(forwarding: false))
         XCTAssertEqual(off.model.forwardingHelpText, "已关闭：Codex 配置已还原为开启前的样子。")
         let notFound = Harness(status: makeStatus(forwarding: false, chatgptFound: false))
@@ -1516,5 +1516,85 @@ final class AppModelTests: XCTestCase {
             h.model.setupSucceededText,
             "已获取 7 个中转模型。已检测到 ChatGPT 登录，接入方式为「官方 + 中转」。\n请重启 ChatGPT 后使用。助手会在你登录电脑时自动启动，在菜单栏里常驻。"
         )
+    }
+}
+
+private let chatGPTUnavailableCases: [(name: String, json: String)] = [
+    ("不支持", #""chatgpt":{"found":true,"error":"chatgpt_unsupported"}"#),
+    ("没找到", #""chatgpt":{"found":false,"error":"chatgpt_not_found"}"#),
+]
+
+private func unavailableStatusJSON(chatgpt: String, mode: String = "relay", target: String = "both", detect: String = "logged_in") -> String {
+    """
+    {"version":"1.2.0","forwarding":true,"proxy":{"running":false,"error":null},\
+    \(chatgpt),"default_relay":null,"relays":[],\
+    "taken_over":[],"restore_blocked":[],"config_path":"/Users/example/.codex/config.toml",\
+    "update":{"latest_version":null,"url":null},\
+    "access":{"mode":"\(mode)","target":"\(target)","detect":"\(detect)"}}
+    """
+}
+
+private func decodeStatus(_ json: String) -> CoreStatus {
+    let decoder = JSONDecoder()
+    decoder.keyDecodingStrategy = .convertFromSnakeCase
+    return try! decoder.decode(CoreStatus.self, from: Data(json.utf8))
+}
+
+extension AppModelTests {
+    func testStartupAlign_ChatGPTUnavailable_DoesNotApplyUntilRecheckSucceeds() async {
+        for variant in chatGPTUnavailableCases {
+            let available = unavailableStatusJSON(chatgpt: #""chatgpt":{"found":true,"error":null}"#)
+            let h = Harness(responses: [
+                "status": resultJSON(available),
+                "apply_access": accessResult(mode: "both", target: "both", detect: "logged_in"),
+            ])
+            await h.model.start()
+            h.core.statusContinuation.yield(decodeStatus(unavailableStatusJSON(chatgpt: variant.json)))
+            await waitUntil { h.model.status != nil }
+            try? await Task.sleep(nanoseconds: 100_000_000)
+            XCTAssertEqual(h.core.calls("apply_access").count, 0, variant.name)
+
+            await h.model.recheckStatus()
+            await waitUntil { h.core.calls("apply_access").count == 1 }
+            try? await Task.sleep(nanoseconds: 100_000_000)
+            XCTAssertEqual(h.core.calls("apply_access").count, 1, variant.name)
+
+            h.core.statusContinuation.yield(decodeStatus(available))
+            try? await Task.sleep(nanoseconds: 100_000_000)
+            XCTAssertEqual(h.core.calls("apply_access").count, 1, variant.name)
+        }
+    }
+
+    func testQuit_ChatGPTUnavailableWhileCoreForwardingOn_NoConfirmationAndShutsDownWithRestore() async {
+        for variant in chatGPTUnavailableCases {
+            let h = Harness(status: decodeStatus(unavailableStatusJSON(chatgpt: variant.json)))
+            await h.model.quit()
+            XCTAssertNil(h.model.pendingConfirmation, variant.name)
+            XCTAssertEqual(h.core.calls("shutdown").map(\.params), [#"{"restore":true}"#], variant.name)
+            XCTAssertEqual(h.terminations.value, 1, variant.name)
+        }
+    }
+
+    func testRecheckAccess_ChatGPTUnavailable_KeepsCoreForwardingValueWhenToggledMeanwhile() async {
+        let gate = Gate()
+        let unsupported = unavailableStatusJSON(chatgpt: #""chatgpt":{"found":true,"error":"chatgpt_unsupported"}"#)
+        let h = Harness(
+            responses: [
+                "detect_access": resultJSON(unsupported),
+                "set_forwarding": remote("chatgpt_unsupported"),
+            ],
+            gates: ["detect_access": gate],
+            status: decodeStatus(unsupported)
+        )
+        XCTAssertEqual(h.model.status?.forwarding, true)
+
+        let task = Task { await h.model.recheckAccess() }
+        await waitUntil { !h.core.calls("detect_access").isEmpty }
+        await h.model.toggleForwarding(enabled: true)
+        await gate.open()
+        await task.value
+
+        XCTAssertEqual(h.model.status?.forwarding, true)
+        XCTAssertFalse(h.model.forwardingEnabled)
     }
 }

@@ -71,7 +71,7 @@ public partial class SetupWindow : Window
         foreach (var notice in model.Notices)
             alerts.Add(notice.DetailInDialog
                 ? AlertView.Create(notice.Severity, notice.Title, "", () => model.DismissNotice(notice.Id), false,
-                    ("查看详情", () => Dialogs.Show(DialogModel.ForInfo(AppModel.SettingsUnreadable, notice.Detail))))
+                    ("查看详情", () => Dialogs.Show(DialogModel.ForInfo(AppModel.SettingsUnreadable, notice.Detail)), false))
                 : AlertView.Create(notice.Severity, notice.Title, notice.Detail, () => model.DismissNotice(notice.Id)));
         AlertView.Fill(AlertHost, alerts);
     }

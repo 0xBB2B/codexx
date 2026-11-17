@@ -143,7 +143,13 @@ public class AccessModeTests
     [TestMethod]
     public void ForwardingHelpText_On()
     {
-        Assert.AreEqual("开启时，本助手按下方的接入方式修改 Codex 配置。", Pushed("both", "both", "logged_in").Model.ForwardingHelpText);
+        Assert.AreEqual("", Pushed("both", "both", "logged_in").Model.ForwardingHelpText);
+    }
+
+    [TestMethod]
+    public void ForwardingHelpText_OnWithoutAccessMode_IsEmpty()
+    {
+        Assert.AreEqual("", Pushed(null, null, null).Model.ForwardingHelpText);
     }
 
     [TestMethod]
@@ -518,6 +524,35 @@ public class AccessModeTests
         Assert.AreEqual(1, h.Core.Count("apply_access"));
         Assert.AreEqual(0, h.Core.Count("detect_access"));
         Assert.AreEqual(0, h.Confirmer.Requests.Count);
+    }
+
+    static Action<JsonObject> Unavailable(bool unsupported) => s =>
+    {
+        Access("relay", "both", "logged_in")(s);
+        s["chatgpt"] = unsupported
+            ? new JsonObject { ["found"] = true, ["error"] = "chatgpt_unsupported" }
+            : new JsonObject { ["found"] = false, ["error"] = "chatgpt_not_found" };
+    };
+
+    [TestMethod]
+    public async Task StartupAlign_ChatGptUnavailable_DoesNotApplyUntilRecheckSucceeds()
+    {
+        foreach (var unsupported in new[] { true, false })
+        {
+            var h = await StartedAsync();
+            Answer(h, "apply_access", "both", "both", "logged_in");
+            h.Core.On("status", _ => Status("relay", "both", "logged_in"));
+
+            h.Push(Unavailable(unsupported));
+            await Task.Delay(100);
+            Assert.AreEqual(0, h.Core.Count("apply_access"), $"unsupported={unsupported}");
+
+            await h.Model.RecheckAsync();
+            await WaitUntilAsync(() => h.Core.Count("apply_access") == 1);
+            h.Push(Access("relay", "both", "logged_in"));
+            await Task.Delay(100);
+            Assert.AreEqual(1, h.Core.Count("apply_access"), $"unsupported={unsupported}");
+        }
     }
 
     [TestMethod]

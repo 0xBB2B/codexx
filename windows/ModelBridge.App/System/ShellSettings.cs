@@ -104,6 +104,7 @@ public sealed class ShellSettings(string directory)
             }
         }
         if (first != null) ExceptionDispatchInfo.Capture(first).Throw();
+        if (Directory.Exists(directory) && !Directory.EnumerateFileSystemEntries(directory).Any()) Directory.Delete(directory);
     }
 
     public bool HasBackup() => File.Exists(BackupPath);

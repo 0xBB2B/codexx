@@ -40,7 +40,11 @@ struct MainWindow: View {
             case .refreshModels:
                 Button("重试") { Task { await model.refreshModels() } }.secondaryAction(compact: true)
             case .recheckStatus:
-                Button("重新检测") { Task { await model.recheckStatus() } }.secondaryAction(compact: true)
+                Button { Task { await model.recheckStatus() } } label: {
+                    BusyLabel(text: model.isRecheckingStatus ? "正在检测…" : "重新检测", busy: model.isRecheckingStatus)
+                }
+                .secondaryAction(compact: true)
+                .disabled(model.isRecheckingStatus)
             case .restoreHelp, .configInvalidHelp:
                 Button("查看详情") {
                     Task {
@@ -70,7 +74,7 @@ struct ForwardingOverview: View {
     @ObservedObject var model: AppModel
 
     private var subtitle: String {
-        if model.forwardingEnabled, model.status?.chatgpt?.found != false, let help = model.accessHelpText { return help }
+        if model.forwardingEnabled, let help = model.accessHelpText { return help }
         return model.forwardingHelpText
     }
 
@@ -188,6 +192,10 @@ struct StatusFooter: View {
     @ObservedObject var model: AppModel
 
     private var chatGPTFound: Bool { model.status?.chatgpt?.found != false }
+    private var chatGPTValue: String {
+        if model.chatGPTUnsupported { return "版本暂不支持" }
+        return chatGPTFound ? "已检测到" : "未找到"
+    }
     private var modelsFetched: Bool { model.forwardingEnabled && model.relayRows.contains { !$0.canRetry && $0.text.hasSuffix("个模型") } }
 
     var body: some View {
@@ -195,9 +203,9 @@ struct StatusFooter: View {
             Text("v\(model.status?.version ?? "—")").font(Fonts.mono).foregroundColor(Palette.textMuted)
             HStack(spacing: 8) {
                 Circle().fill(model.coreRunning ? Palette.success : Palette.borderStrong).frame(width: 8, height: 8)
-                Text(model.runtimeText).font(Fonts.caption).foregroundColor(Palette.textMuted)
+                Text(model.runtimeText).font(Fonts.caption).foregroundColor(Palette.textMuted).lineLimit(1).fixedSize(horizontal: true, vertical: false)
             }
-            item("ChatGPT", chatGPTFound ? "已检测到" : "未找到", note: nil, good: chatGPTFound)
+            item("ChatGPT", chatGPTValue, note: nil, good: chatGPTFound && !model.chatGPTUnsupported)
             item("中转模型", model.modelCountValue, note: model.modelCountNote, good: modelsFetched)
             Spacer(minLength: 0)
             if let update = model.availableUpdate {

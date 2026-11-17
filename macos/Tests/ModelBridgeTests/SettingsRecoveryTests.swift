@@ -242,6 +242,29 @@ final class SettingsBackupUninstallTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: backupURL.path))
     }
 
+    func testDeleteAll_DirectoryBecomesEmpty_RemovesDirectory() throws {
+        try settings.saveRelays([RelayConfig(id: "1", name: "中转", baseURL: "https://a.example.com")])
+        try corrupt.write(to: backupURL)
+        try settings.deleteAll()
+        XCTAssertFalse(FileManager.default.fileExists(atPath: dir.path))
+    }
+
+    func testDeleteAll_DirectoryHasOtherFiles_KeepsDirectoryAndFilesWithoutError() throws {
+        let other = dir.appendingPathComponent("other.log")
+        try Data("keep".utf8).write(to: other)
+        try settings.saveRelays([RelayConfig(id: "1", name: "中转", baseURL: "https://a.example.com")])
+        XCTAssertNoThrow(try settings.deleteAll())
+        XCTAssertFalse(FileManager.default.fileExists(atPath: settings.fileURL.path))
+        XCTAssertEqual(try Data(contentsOf: other), Data("keep".utf8))
+    }
+
+    func testUninstall_RemovesEmptiedDataDirectory() async throws {
+        try settings.saveRelays([RelayConfig(id: "1", name: "中转", baseURL: "https://a.example.com")])
+        let model = await uninstall()
+        XCTAssertFalse(FileManager.default.fileExists(atPath: dir.path))
+        XCTAssertEqual(model.uninstallLeftovers, [])
+    }
+
     func testUninstall_RemovesBackupFile() async throws {
         try corrupt.write(to: backupURL)
         let model = await uninstall()

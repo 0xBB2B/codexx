@@ -147,7 +147,7 @@ static class AlertView
         string detail,
         Action? onClose = null,
         bool showProgress = false,
-        params (string Label, Action Click)[] actions)
+        params (string Label, Action Click, bool Busy)[] actions)
     {
         var (fg, bg, glyph) = severity switch
         {
@@ -181,9 +181,17 @@ static class AlertView
         if (actions.Length > 0)
         {
             var row = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 12, 0, 0) };
-            foreach (var (label, click) in actions)
+            foreach (var (label, click, busy) in actions)
             {
-                var button = new Button { Content = label, MinHeight = 44, Padding = new Thickness(16, 0, 16, 0), Margin = new Thickness(0, 0, 8, 0) };
+                var button = new Button { MinHeight = 44, Padding = new Thickness(16, 0, 16, 0), Margin = new Thickness(0, 0, 8, 0), IsEnabled = !busy };
+                if (busy)
+                {
+                    var content = new StackPanel { Orientation = Orientation.Horizontal };
+                    content.Children.Add(new Spinner { Margin = new Thickness(0, 0, 8, 0), VerticalAlignment = VerticalAlignment.Center });
+                    content.Children.Add(new TextBlock { Text = label, VerticalAlignment = VerticalAlignment.Center });
+                    button.Content = content;
+                }
+                else button.Content = label;
                 button.Click += (_, _) => click();
                 row.Children.Add(button);
             }

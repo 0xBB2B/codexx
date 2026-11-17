@@ -2,6 +2,7 @@ using Button = System.Windows.Controls.Button;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
+using System.Text.Json.Nodes;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using ModelBridge.UI;
 
@@ -216,6 +217,148 @@ public class MainWindowLayoutTests
             StringAssert.Contains(joined, "（3 个配置）");
             Assert.IsNotNull(UiHost.FindButton(window, "检查更新"));
             return Task.CompletedTask;
+        });
+    }
+
+    [TestMethod]
+    public async Task StatusRow_ForwardingOff_CoreTextHasNoForwardingClosedSuffix()
+    {
+        var h = await StartAsync(3, forwarding: false);
+
+        await WithWindowAsync(h, window =>
+        {
+            Assert.IsNotNull(UiHost.FindText(window, "后台运行中"));
+            Assert.IsFalse(UiHost.Joined(window).Contains("转发已关闭"));
+            return Task.CompletedTask;
+        });
+    }
+
+    [TestMethod]
+    public async Task RelayRow_StaleAndNeverFetched_TextUsesWarningBrush()
+    {
+        var h = await StartAsync(3, firstStale: true);
+
+        await WithWindowAsync(h, async window =>
+        {
+            var warning = UiHost.ThemeBrush("WarningBrush").Color;
+            AssertRowTextColor(window, h.Model.Relays[0].StatusText, warning);
+
+            h.Core.Entries[0] = h.Core.Entries[0] with { Stale = false, ModelCount = 0, FetchedAt = null, Error = "relay_401" };
+            h.Push();
+            await UiHost.Settle();
+
+            Assert.AreEqual("还没获取到模型", h.Model.Relays[0].StatusText);
+            AssertRowTextColor(window, "还没获取到模型", warning);
+        });
+    }
+
+    [TestMethod]
+    public async Task RelayRow_Normal_TextUsesSuccessBrush()
+    {
+        var h = await StartAsync(3);
+
+        await WithWindowAsync(h, window =>
+        {
+            Assert.AreEqual(RelayRowState.Normal, h.Model.Relays[0].State);
+            AssertRowTextColor(window, h.Model.Relays[0].StatusText, UiHost.ThemeBrush("SuccessBrush").Color);
+            return Task.CompletedTask;
+        });
+    }
+
+    static void AssertRowTextColor(MainWindow window, string text, System.Windows.Media.Color expected)
+    {
+        var block = UiHost.FindText(window, text);
+        Assert.IsNotNull(block, text);
+        Assert.IsTrue(block.Foreground is SolidColorBrush b && b.Color == expected, text);
+    }
+
+    static async Task PushChatGptUnsupported(MultiHarness h)
+    {
+        var status = JsonNode.Parse(RelayJson.Status(false, h.Core.Entries.ToArray()).GetRawText())!;
+        status["chatgpt"] = new JsonObject { ["found"] = true, ["error"] = "chatgpt_unsupported" };
+        h.Core.RaiseStatus(RelayJson.Parse(status.ToJsonString()));
+        await UiHost.Settle();
+    }
+
+    [TestMethod]
+    public async Task ChatGptUnsupported_ToggleDisabled_OverviewBannerAndStatusRow()
+    {
+        var h = await StartAsync(3, forwarding: false);
+
+        await WithWindowAsync(h, async window =>
+        {
+            await PushChatGptUnsupported(h);
+
+            Assert.IsFalse(UiHost.All<System.Windows.Controls.Primitives.ToggleButton>(window).Single(t => t.Name == "ForwardToggle").IsEnabled);
+            Assert.IsNotNull(UiHost.FindText(window, "当前 ChatGPT 版本暂不支持，暂时不能打开。"));
+            Assert.IsNotNull(UiHost.FindText(window, "当前 ChatGPT 版本暂不支持"));
+            Assert.IsNotNull(UiHost.FindText(window,
+                "读不到 ChatGPT 自带的官方模型清单，转发保持关闭。请把 ChatGPT 更新到最新版后点「重新检测」；还是不行的话，请等待助手新版本。"));
+            Assert.IsNotNull(UiHost.FindButton(window, "重新检测"));
+            var statusRow = string.Concat(UiHost.Joined(window).Where(c => !char.IsWhiteSpace(c)));
+            StringAssert.Contains(statusRow, "ChatGPT版本暂不支持");
+            Assert.IsFalse(statusRow.Contains("ChatGPT已检测到"));
+        });
+    }
+
+    [TestMethod]
+    public async Task ChatGptUnsupported_StatusRow_TextsFullyShownAndDoNotOverlapUpdateButton()
+    {
+        var h = await StartAsync(3, forwarding: false);
+
+        await WithWindowAsync(h, async window =>
+        {
+            await PushChatGptUnsupported(h);
+            var items = new (string Name, TextBlock Block)[]
+            {
+                ("版本号", window.VersionText),
+                ("后台运行中", window.CoreText),
+                ("ChatGPT 取值", window.ChatGptValue),
+                ("中转模型 标签", window.RelayLabel),
+                ("中转模型 取值", window.RelayValue),
+            };
+            var statusBarWidth = UiHost.Ancestors(window.VersionText).OfType<Border>().First().ActualWidth;
+            foreach (var (name, block) in items)
+                block.Measure(new System.Windows.Size(double.PositiveInfinity, double.PositiveInfinity));
+            foreach (var (name, block) in items)
+                Console.WriteLine($"[状态行] {name} Text=\"{block.Text}\" X={UiHost.PositionIn(window, block).X} ActualWidth={block.ActualWidth} DesiredWidth={block.DesiredSize.Width}");
+            Console.WriteLine($"[状态行] 检查更新按钮 X={UiHost.PositionIn(window, window.UpdateButton).X} ActualWidth={window.UpdateButton.ActualWidth}; 状态栏 ActualWidth={statusBarWidth}; 窗口 ActualWidth={window.ActualWidth}");
+
+            Assert.AreEqual("后台运行中", window.CoreText.Text, $"状态栏 ActualWidth={statusBarWidth}");
+            Assert.AreEqual("转发关闭时不获取", window.RelayValue.Text, $"状态栏 ActualWidth={statusBarWidth}");
+            foreach (var (name, block) in items)
+            {
+                Assert.IsTrue(block.ActualWidth >= block.DesiredSize.Width - block.Margin.Left - block.Margin.Right - 0.5,
+                    $"{name} 被裁掉: Text=\"{block.Text}\" ActualWidth={block.ActualWidth} DesiredWidth={block.DesiredSize.Width} 状态栏 ActualWidth={statusBarWidth}");
+            }
+
+            var right = UiHost.PositionIn(window, window.RelayValue).X + window.RelayValue.ActualWidth;
+            var buttonLeft = UiHost.PositionIn(window, window.UpdateButton).X;
+            Assert.IsTrue(right <= buttonLeft,
+                $"状态行文字右边界 {right} 压到了「检查更新」左边界 {buttonLeft}; RelayValue Text=\"{window.RelayValue.Text}\" ActualWidth={window.RelayValue.ActualWidth} DesiredWidth={window.RelayValue.DesiredSize.Width} 状态栏 ActualWidth={statusBarWidth}");
+        });
+    }
+
+    [TestMethod]
+    public async Task ChatGptUnsupported_Redetect_ShowsBusyAndCallsStatus()
+    {
+        var h = await StartAsync(3, forwarding: false);
+
+        await WithWindowAsync(h, async window =>
+        {
+            await PushChatGptUnsupported(h);
+            var gate = new TaskCompletionSource<System.Text.Json.JsonElement>();
+            h.Core.OnAsync("status", _ => gate.Task);
+
+            var before = h.Core.Count("status");
+            var rechecking = h.Model.RecheckAsync();
+            await UiHost.Settle();
+
+            Assert.AreEqual(before + 1, h.Core.Count("status"));
+            Assert.IsNotNull(UiHost.FindText(window, "正在检测…"));
+            Assert.IsNull(UiHost.FindButton(window, "重新检测"));
+            gate.SetResult(RelayJson.Status(false, h.Core.Entries.ToArray()));
+            await rechecking;
         });
     }
 

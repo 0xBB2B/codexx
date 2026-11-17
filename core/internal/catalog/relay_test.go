@@ -128,7 +128,7 @@ func TestFetchRelayIDs_InvalidBody(t *testing.T) {
 			}))
 			defer srv.Close()
 			_, err := catalog.FetchRelayIDs(context.Background(), srv.URL, "sk-example-0000", time.Second)
-			if got := catalog.ErrorCode(err); got != "relay_404" {
+			if got := catalog.ErrorCode(err); got != "relay_bad_response" {
 				t.Fatalf("code = %q (err=%v)", got, err)
 			}
 		})
@@ -149,7 +149,7 @@ func TestFetchRelayIDs_BodyOver8MBRejected(t *testing.T) {
 	defer srv.Close()
 	start := time.Now()
 	_, err := catalog.FetchRelayIDs(context.Background(), srv.URL, "sk-example-0000", 5*time.Second)
-	if got := catalog.ErrorCode(err); got != "relay_404" {
+	if got := catalog.ErrorCode(err); got != "relay_bad_response" {
 		t.Fatalf("code = %q (err=%v)", got, err)
 	}
 	if time.Since(start) > 3*time.Second {

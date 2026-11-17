@@ -8,7 +8,7 @@
 ## 响应（核心 → 外壳）
 {"id": <同请求>, "result": { ... }}
 {"id": <同请求>, "error": {"code": "<错误码>", "keys": ["<键名>", ...]}}
-`keys` 在 restore_blocked 和 config_invalid 时出现，列出相关键名；在 name_duplicate 时放已有的那个配置名字。
+`keys` 在 restore_blocked 和 config_invalid 时出现，列出相关键名；在 name_duplicate 时放已有的那个配置名字。在 relay_5xx、relay_4xx、relay_bad_response 时，`keys` 放中转服务返回的状态码。
 
 ## 事件（核心 → 外壳，无 id）
 {"event": "status", "data": <Status>}
@@ -65,8 +65,9 @@
 | relay_403 | 中转服务返回 403：API Key 没有权限 |
 | relay_404 | 中转服务返回 404：Base URL 不正确 |
 | relay_429 | 中转服务返回 429：请求太频繁，请稍后重试 |
-| relay_5xx | 中转服务暂时不可用 |
-| relay_4xx | 请求未被中转服务接受 |
+| relay_5xx | 中转服务返回 <keys[0]>：中转服务暂时不可用 |
+| relay_4xx | 中转服务返回 <keys[0]>：请求未被中转服务接受 |
+| relay_bad_response | 中转服务返回 <keys[0]>：没有返回模型列表，请检查 Base URL |
 | relay_unreachable | 连不上中转服务，请检查网络和 Base URL |
 | chatgpt_not_found | 没有找到 ChatGPT |
 | chatgpt_unsupported | 当前 ChatGPT 版本暂不支持 |

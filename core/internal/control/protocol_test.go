@@ -25,11 +25,12 @@ import (
 )
 
 type client struct {
-	t      *testing.T
-	in     *io.PipeWriter
-	lines  chan map[string]any
-	done   chan error
-	nextID int
+	t         *testing.T
+	in        *io.PipeWriter
+	lines     chan map[string]any
+	done      chan error
+	collected chan struct{}
+	nextID    int
 
 	mu     sync.Mutex
 	raw    bytes.Buffer
@@ -40,12 +41,13 @@ func startServe(t *testing.T, opts control.Options) *client {
 	t.Helper()
 	inR, inW := io.Pipe()
 	outR, outW := io.Pipe()
-	c := &client{t: t, in: inW, lines: make(chan map[string]any, 64), done: make(chan error, 1)}
+	c := &client{t: t, in: inW, lines: make(chan map[string]any, 64), done: make(chan error, 1), collected: make(chan struct{})}
 	go func() {
 		c.done <- control.Serve(context.Background(), opts, inR, outW)
 		_ = outW.Close()
 	}()
 	go func() {
+		defer close(c.collected)
 		sc := bufio.NewScanner(outR)
 		sc.Buffer(make([]byte, 1<<20), 1<<20)
 		for sc.Scan() {
@@ -127,6 +129,11 @@ func (c *client) output() string {
 func (c *client) waitExit() error {
 	select {
 	case err := <-c.done:
+		select {
+		case <-c.collected:
+		case <-time.After(5 * time.Second):
+			c.t.Fatal("输出没有在 5 秒内收集完")
+		}
 		return err
 	case <-time.After(5 * time.Second):
 		c.t.Fatal("Serve 没有在 5 秒内退出")
@@ -1698,5 +1705,44 @@ func TestServe_EOFAfterStatusCancelsRestartAndRunsShutdown(t *testing.T) {
 	out := c.output()
 	if !strings.Contains(out, `"id":101`) {
 		t.Errorf("排队的 shutdown 应得到响应, 输出：%s", out)
+	}
+}
+
+func TestServe_SaveRelay_NonSuccessStatusCarriesStatusNumber(t *testing.T) {
+	tests := []struct {
+		status   int
+		wantCode string
+	}{
+		{500, "relay_5xx"},
+		{502, "relay_5xx"},
+		{503, "relay_5xx"},
+		{400, "relay_4xx"},
+		{418, "relay_4xx"},
+		{301, "relay_bad_response"},
+		{302, "relay_bad_response"},
+		{304, "relay_bad_response"},
+		{201, "relay_bad_response"},
+		{204, "relay_bad_response"},
+		{206, "relay_bad_response"},
+		{200, "relay_bad_response"},
+	}
+	for _, tt := range tests {
+		t.Run(strconv.Itoa(tt.status), func(t *testing.T) {
+			e := newEnv(t, false)
+			c := startServe(t, e.opts)
+			before := relayList(t, c.result("init", initParams(e)))
+			e.relay.setStatus(tt.status)
+
+			errObj := c.errorOf("save_relay", relayJSON(nil, "新", e.relay.baseURL(), keyB))
+
+			code, _ := errObj["code"].(string)
+			if code != tt.wantCode {
+				t.Errorf("code = %q, want %q", code, tt.wantCode)
+			}
+			if keys, _ := errObj["keys"].([]any); !reflect.DeepEqual(keys, []any{strconv.Itoa(tt.status)}) {
+				t.Errorf("keys = %v, want [%d]", errObj["keys"], tt.status)
+			}
+			requireRelaysUnchanged(t, c, before)
+		})
 	}
 }

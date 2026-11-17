@@ -2157,6 +2157,67 @@ func TestStatus_ForwardingOff_RedetectsRestoreBlocked(t *testing.T) {
 	}
 }
 
+func TestStatus_ForwardingOff_RestoreBlocked(t *testing.T) {
+	setup := func(t *testing.T) (*env, *client, string) {
+		t.Helper()
+		e := newEnv(t, true)
+		e.initRelay(t)
+		e.shutDown = true
+		if err := e.svc.Shutdown(context.Background(), false); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(e.dataDir, "settings.json"), []byte(`{"forwarding":false}`), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		enabledText := e.config(t)
+		statePath := filepath.Join(e.dataDir, "access-state.json")
+		if !exists(statePath) {
+			t.Fatal("前置条件：转发打开过，状态文件应存在")
+		}
+		c := startServe(t, e.opts)
+		c.result("init", initParams(e))
+		return e, c, enabledText
+	}
+
+	t.Run("手改项改回后 status 还原配置并删除状态文件", func(t *testing.T) {
+		e, c, enabledText := setup(t)
+		e.handEditBaseURL(t)
+		c.result("status", nil)
+		if err := os.WriteFile(e.configPath, []byte(enabledText), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		res := c.result("status", nil)
+
+		if list, _ := res["restore_blocked"].([]any); len(list) != 0 {
+			t.Errorf("restore_blocked = %v, want 空", list)
+		}
+		if got := e.config(t); got != originalConfig {
+			t.Errorf("配置没还原到开启前: %q", got)
+		}
+		if exists(filepath.Join(e.dataDir, "access-state.json")) {
+			t.Error("状态文件应已删除")
+		}
+	})
+
+	t.Run("仍被手改时继续列出 restore_blocked 且文件不动", func(t *testing.T) {
+		e, c, _ := setup(t)
+		edited := e.handEditBaseURL(t)
+
+		res := c.result("status", nil)
+
+		if got, _ := res["restore_blocked"].([]any); !reflect.DeepEqual(got, []any{"openai_base_url"}) {
+			t.Errorf("restore_blocked = %v, want [openai_base_url]", got)
+		}
+		if got := e.config(t); got != edited {
+			t.Errorf("配置不该有任何改动: %q", got)
+		}
+		if !exists(filepath.Join(e.dataDir, "access-state.json")) {
+			t.Error("状态文件应保留")
+		}
+	})
+}
+
 func TestForwardingOn_ProxyNotRunning_MethodRestartsProxy(t *testing.T) {
 	causes := []struct {
 		name  string
@@ -2487,5 +2548,277 @@ func TestInit_UpstreamHangIsLimitedByRestartTimeout(t *testing.T) {
 	}
 	if elapsed := time.Since(start); elapsed > 5*time.Second {
 		t.Errorf("Init 耗时 %v, 上游挂住时应在 RestartTimeout(1 秒)后返回", elapsed)
+	}
+}
+
+func TestStatus_ChatGPTUnsupported_PersistsUntilRedetectSucceeds(t *testing.T) {
+	healCodex := func(t *testing.T, e *env) {
+		t.Helper()
+		out := filepath.Join(filepath.Dir(e.codexPath), "out.json")
+		body := "#!/bin/sh\ncat '" + out + "'\n"
+		if err := os.WriteFile(e.codexPath, []byte(body), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	broken := func(t *testing.T) func(*env) {
+		return func(e *env) { e.codexPath = writeFakeCodex(t, officialJSON, 1) }
+	}
+	requireUnsupported := func(t *testing.T, st control.Status) {
+		t.Helper()
+		if !st.ChatGPT.Found || st.ChatGPT.Error == nil || *st.ChatGPT.Error != "chatgpt_unsupported" {
+			t.Errorf("ChatGPT = %+v, want Found 且 Error=chatgpt_unsupported", st.ChatGPT)
+		}
+	}
+
+	t.Run("打开转发失败后转发关着轮询 status 不清掉", func(t *testing.T) {
+		e := newEnv(t, false, broken(t))
+		e.initRelay(t)
+		_, err := e.svc.SetForwarding(context.Background(), true)
+		requireCode(t, err, "chatgpt_unsupported")
+
+		for range 3 {
+			st := e.svc.Status()
+			if st.Forwarding {
+				t.Fatalf("Forwarding = true, want 保持关闭")
+			}
+			requireUnsupported(t, st)
+		}
+	})
+
+	t.Run("下一次重新检测成功后清掉", func(t *testing.T) {
+		e := newEnv(t, false, broken(t))
+		e.initRelay(t)
+		_, err := e.svc.SetForwarding(context.Background(), true)
+		requireCode(t, err, "chatgpt_unsupported")
+		requireUnsupported(t, e.svc.Status())
+
+		healCodex(t, e)
+		st := e.svc.Status()
+
+		if !st.ChatGPT.Found || st.ChatGPT.Error != nil {
+			t.Errorf("ChatGPT = %+v, want Found 且 Error=nil", st.ChatGPT)
+		}
+	})
+
+	t.Run("启动时转发应开但读不到清单 status 一直保留", func(t *testing.T) {
+		e := newEnv(t, true, broken(t))
+		requireUnsupported(t, e.initRelay(t))
+
+		for range 3 {
+			requireUnsupported(t, e.svc.Status())
+		}
+	})
+
+	t.Run("重新进入检测流程后仍读不到则继续保留", func(t *testing.T) {
+		e := newEnv(t, false, broken(t))
+		e.initRelay(t)
+		_, err := e.svc.SetForwarding(context.Background(), true)
+		requireCode(t, err, "chatgpt_unsupported")
+
+		st, _ := e.svc.SetForwarding(context.Background(), true)
+
+		requireUnsupported(t, st)
+	})
+}
+
+func leftoverEnabledEnv(t *testing.T) (*env, string) {
+	t.Helper()
+	e := newEnv(t, true)
+	e.initRelay(t)
+	e.shutDown = true
+	if err := e.svc.Shutdown(context.Background(), false); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(e.dataDir, "settings.json"), []byte(`{"forwarding":false}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	enabledText := e.config(t)
+	if !exists(filepath.Join(e.dataDir, "access-state.json")) {
+		t.Fatal("前置条件：转发打开过，状态文件应存在")
+	}
+	return e, enabledText
+}
+
+func TestStatus_ForwardingOff_RestoreFailsForOtherReason_KeepsRestoreBlockedAndRetries(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root 不受目录只读限制")
+	}
+	e, enabledText := leftoverEnabledEnv(t)
+	svc := control.NewService(e.opts)
+	t.Cleanup(func() { _ = svc.Shutdown(context.Background(), false) })
+	e.handEditBaseURL(t)
+	if _, err := svc.Init(context.Background(), initParamsOf(t, initParams(e))); err != nil {
+		t.Fatal(err)
+	}
+	if got := svc.Status().RestoreBlocked; !reflect.DeepEqual(got, []string{"openai_base_url"}) {
+		t.Fatalf("前置条件：restore_blocked = %v", got)
+	}
+	if err := os.WriteFile(e.configPath, []byte(enabledText), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Dir(e.configPath)
+	if err := os.Chmod(dir, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
+
+	st := svc.Status()
+
+	if !reflect.DeepEqual(st.RestoreBlocked, []string{"openai_base_url"}) {
+		t.Errorf("还原失败后 restore_blocked = %v, want 保留 [openai_base_url]", st.RestoreBlocked)
+	}
+	if err := os.Chmod(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	st = svc.Status()
+
+	if len(st.RestoreBlocked) != 0 {
+		t.Errorf("目录恢复可写后 restore_blocked = %v, want 空", st.RestoreBlocked)
+	}
+	if got := e.config(t); got != originalConfig {
+		t.Errorf("配置没还原到开启前: %q", got)
+	}
+	if exists(filepath.Join(e.dataDir, "access-state.json")) {
+		t.Error("状态文件应已删除")
+	}
+}
+
+func TestStatus_FirstStatusAfterInit_DoesNotTouchConfigOrState(t *testing.T) {
+	for _, handEdited := range []bool{false, true} {
+		t.Run("手改过="+strconv.FormatBool(handEdited), func(t *testing.T) {
+			e, _ := leftoverEnabledEnv(t)
+			if handEdited {
+				e.handEditBaseURL(t)
+			}
+			svc := control.NewService(e.opts)
+			t.Cleanup(func() { _ = svc.Shutdown(context.Background(), false) })
+			if _, err := svc.Init(context.Background(), initParamsOf(t, initParams(e))); err != nil {
+				t.Fatal(err)
+			}
+			statePath := filepath.Join(e.dataDir, "access-state.json")
+			cfgBefore, stateBefore := readFile(t, e.configPath), readFile(t, statePath)
+
+			svc.Status()
+
+			if got := readFile(t, e.configPath); got != cfgBefore {
+				t.Errorf("config.toml 变了: %q -> %q", cfgBefore, got)
+			}
+			if got := readFile(t, statePath); got != stateBefore {
+				t.Errorf("状态文件变了: %q -> %q", stateBefore, got)
+			}
+		})
+	}
+}
+
+func TestForwardingOn_ChatGPTUnavailable_RelayOperationsDoNotActivate(t *testing.T) {
+	variants := []struct {
+		name string
+		mod  func(t *testing.T) func(*env)
+	}{
+		{"官方清单读不到", func(t *testing.T) func(*env) {
+			return func(e *env) { e.codexPath = writeFakeCodex(t, officialJSON, 1) }
+		}},
+		{"找不到 ChatGPT", func(t *testing.T) func(*env) {
+			return func(e *env) { e.codexPath = filepath.Join(t.TempDir(), "no-such-codex") }
+		}},
+	}
+	for _, v := range variants {
+		t.Run(v.name, func(t *testing.T) {
+			ctx := context.Background()
+			e := newEnv(t, true, v.mod(t))
+			e.relay.keys[keyB] = true
+			st := e.initRelay(t)
+			if !st.Forwarding || st.Proxy.Running {
+				t.Fatalf("前置条件：core 应报告 forwarding=true 且转发服务没运行: %+v", st)
+			}
+			requireUntouched := func(step string, st control.Status) {
+				t.Helper()
+				if !st.Forwarding || st.Proxy.Running {
+					t.Errorf("%s 后 Forwarding=%v Proxy.Running=%v, want true/false", step, st.Forwarding, st.Proxy.Running)
+				}
+				if got := e.config(t); got != originalConfig {
+					t.Errorf("%s 改动了 Codex 配置: %q", step, got)
+				}
+				if exists(e.catalogPath()) {
+					t.Errorf("%s 写了合并目录", step)
+				}
+			}
+
+			saved, err := e.svc.SaveRelay(ctx, control.SaveRelayParams{Name: "备用", BaseURL: e.relay.baseURL(), APIKey: keyB})
+			if err != nil {
+				t.Fatalf("SaveRelay: %v", err)
+			}
+			requireUntouched("save_relay", e.svc.Status())
+
+			st, err = e.svc.RefreshModels(ctx, nil)
+			if err != nil {
+				t.Fatalf("RefreshModels: %v", err)
+			}
+			requireUntouched("refresh_models", st)
+
+			st, err = e.svc.DeleteRelay(ctx, saved.ID)
+			if err != nil {
+				t.Fatalf("DeleteRelay: %v", err)
+			}
+			requireUntouched("delete_relay", st)
+			if len(st.Relays) != 1 {
+				t.Errorf("relays = %d, want 1", len(st.Relays))
+			}
+		})
+	}
+}
+
+func TestForwardingOn_ChatGPTUnsupported_RestoreFailsForOtherReason_NotReportedAsProxyError(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root 不受目录只读限制")
+	}
+	e := newEnv(t, true)
+	e.initRelay(t)
+	e.shutDown = true
+	if err := e.svc.Shutdown(context.Background(), false); err != nil {
+		t.Fatal(err)
+	}
+	enabledText := e.config(t)
+	if enabledText == originalConfig || !exists(filepath.Join(e.dataDir, "access-state.json")) {
+		t.Fatal("前置条件：配置应处于开启状态且状态文件存在")
+	}
+	out := filepath.Join(filepath.Dir(e.codexPath), "out.json")
+	if err := os.WriteFile(e.codexPath, []byte("#!/bin/sh\ncat '"+out+"'\nexit 1\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Dir(e.configPath)
+	if err := os.Chmod(dir, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
+	svc := control.NewService(e.opts)
+	t.Cleanup(func() { _ = svc.Shutdown(context.Background(), false) })
+
+	st, err := svc.Init(context.Background(), initParamsOf(t, initParams(e)))
+	if err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+
+	if st.ChatGPT.Error == nil || *st.ChatGPT.Error != "chatgpt_unsupported" {
+		t.Errorf("ChatGPT = %+v, want Error=chatgpt_unsupported", st.ChatGPT)
+	}
+	if st.Proxy.Error != nil {
+		t.Errorf("Proxy.Error = %q, 还原失败不能显示成「本机转发服务没能启动」", *st.Proxy.Error)
+	}
+
+	if err := os.Chmod(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	st = svc.Status()
+
+	if got := e.config(t); got != originalConfig {
+		t.Errorf("目录恢复可写后 status 没有重试还原: %q", got)
+	}
+	if exists(filepath.Join(e.dataDir, "access-state.json")) {
+		t.Error("状态文件应已删除")
+	}
+	if st.Proxy.Error != nil {
+		t.Errorf("Proxy.Error = %q, want nil", *st.Proxy.Error)
 	}
 }

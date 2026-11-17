@@ -397,6 +397,28 @@ public class AppModelTests
     }
 
     [TestMethod]
+    public async Task Setup_RelayNon2xxWithStatus_DetailHasStatusNumberAndFullStop()
+    {
+        (string Code, string Status, string Expected)[] cases =
+        [
+            ("relay_5xx", "502", "中转服务返回 502：中转服务暂时不可用。"),
+            ("relay_4xx", "418", "中转服务返回 418：请求未被中转服务接受。"),
+            ("relay_bad_response", "302", "中转服务返回 302：没有返回模型列表，请检查 Base URL。"),
+        ];
+        foreach (var (code, status, expected) in cases)
+        {
+            var h = new Harness();
+            h.FillInputs();
+            h.Core.Fail("save_relay", code, status);
+
+            await h.Model.CompleteSetupAsync();
+
+            Assert.AreEqual("没能连上中转服务", h.Model.TaskError?.Title, code);
+            Assert.AreEqual(expected, h.Model.TaskError?.Detail, code);
+        }
+    }
+
+    [TestMethod]
     public async Task Setup_CoreFails_TaskErrorWithCodeMessage_NoCredentialWrite_InputKept()
     {
         var h = new Harness();
@@ -829,6 +851,51 @@ public class AppModelTests
         Assert.IsFalse(h.Model.CoreRunning);
     }
 
+    static Action<JsonObject> ForwardingOnButChatGptUnavailable(bool unsupported) => s =>
+    {
+        s["forwarding"] = true;
+        s["chatgpt"] = unsupported
+            ? new JsonObject { ["found"] = true, ["error"] = "chatgpt_unsupported" }
+            : new JsonObject { ["found"] = false, ["error"] = "chatgpt_not_found" };
+    };
+
+    [TestMethod]
+    public async Task Quit_ChatGptUnavailableWhileCoreForwardingOn_NoAskAndShutdownWithRestore()
+    {
+        foreach (var unsupported in new[] { true, false })
+        {
+            var h = new Harness();
+            await h.Model.StartAsync();
+            h.Push(ForwardingOnButChatGptUnavailable(unsupported));
+
+            await h.Model.QuitAsync();
+
+            Assert.AreEqual(0, h.Confirmer.Requests.Count, $"unsupported={unsupported}");
+            Assert.AreEqual(true, h.Core.ParamsOf("shutdown")["restore"], $"unsupported={unsupported}");
+            Assert.AreEqual(1, h.ExitCount, $"unsupported={unsupported}");
+        }
+    }
+
+    [TestMethod]
+    public async Task ToggleForwarding_ChatGptUnavailable_DoesNothing()
+    {
+        foreach (var unsupported in new[] { true, false })
+        foreach (var forwarding in new[] { true, false })
+        {
+            var h = new Harness();
+            await h.Model.StartAsync();
+            h.Push(s =>
+            {
+                ForwardingOnButChatGptUnavailable(unsupported)(s);
+                s["forwarding"] = forwarding;
+            });
+
+            await h.Model.ToggleForwardingAsync();
+
+            Assert.AreEqual(0, h.Core.Count("set_forwarding"), $"unsupported={unsupported} forwarding={forwarding}");
+        }
+    }
+
     [TestMethod]
     public async Task Quit_RestoreBlocked_NoExitRecordsKeysShowsWindowCoreStopped()
     {
@@ -1091,6 +1158,104 @@ public class AppModelTests
         var h = new Harness();
         h.Push(s => s["chatgpt"] = new JsonObject { ["found"] = false, ["error"] = null });
         Assert.IsTrue(Has(h, "没有找到 ChatGPT"));
+    }
+
+    static void PushChatGptUnsupported(Harness h) =>
+        h.Push(s =>
+        {
+            s["forwarding"] = false;
+            s["chatgpt"] = new JsonObject { ["found"] = true, ["error"] = "chatgpt_unsupported" };
+        });
+
+    [TestMethod]
+    public void ChatGptUnsupported_ToggleDisabled_ForwardingStaysOff()
+    {
+        var h = new Harness();
+        PushChatGptUnsupported(h);
+
+        Assert.IsFalse(h.Model.ToggleEnabled);
+        Assert.IsFalse(h.Model.ForwardingEnabled);
+        Assert.AreEqual("当前 ChatGPT 版本暂不支持，暂时不能打开。", h.Model.ForwardingHelpText);
+        Assert.AreEqual("当前 ChatGPT 版本暂不支持，暂时不能打开。", h.Model.OverviewText);
+    }
+
+    [TestMethod]
+    public void ChatGptUnsupported_Banner_TitleDetailAndRedetectAction()
+    {
+        var h = new Harness();
+        PushChatGptUnsupported(h);
+
+        var banner = h.Model.Banners.Single();
+        Assert.AreEqual("当前 ChatGPT 版本暂不支持", banner.Title);
+        Assert.AreEqual(
+            "读不到 ChatGPT 自带的官方模型清单，转发保持关闭。请把 ChatGPT 更新到最新版后点「重新检测」；还是不行的话，请等待助手新版本。",
+            banner.Detail);
+        Assert.AreEqual(AppSeverity.Danger, banner.Severity);
+        CollectionAssert.AreEqual(new[] { BannerAction.Redetect }, banner.Actions.ToArray());
+    }
+
+    [TestMethod]
+    public async Task ForwardingReportedOn_ChatGptUnsupported_ShownAsClosedAndDisabled()
+    {
+        var h = new Harness();
+        await h.Model.StartAsync();
+
+        h.Push(s =>
+        {
+            s["forwarding"] = true;
+            s["chatgpt"] = new JsonObject { ["found"] = true, ["error"] = "chatgpt_unsupported" };
+        });
+
+        Assert.IsFalse(h.Model.ForwardingEnabled);
+        Assert.AreEqual("使用中转 · 已关闭", h.Model.OverviewTitle);
+        Assert.IsFalse(h.Model.ToggleEnabled);
+        Assert.AreEqual("当前 ChatGPT 版本暂不支持，暂时不能打开。", h.Model.ForwardingHelpText);
+        Assert.AreEqual("当前 ChatGPT 版本暂不支持，暂时不能打开。", h.Model.OverviewText);
+        Assert.AreEqual("当前 ChatGPT 版本暂不支持", h.Model.Banners.Single().Title);
+    }
+
+    [TestMethod]
+    public async Task ForwardingReportedOn_ChatGptNotFound_ShownAsClosedAndDisabled()
+    {
+        var h = new Harness();
+        await h.Model.StartAsync();
+
+        h.Push(s =>
+        {
+            s["forwarding"] = true;
+            s["chatgpt"] = new JsonObject { ["found"] = false, ["error"] = "chatgpt_not_found" };
+        });
+
+        Assert.IsFalse(h.Model.ForwardingEnabled);
+        Assert.AreEqual("使用中转 · 已关闭", h.Model.OverviewTitle);
+        Assert.IsFalse(h.Model.ToggleEnabled);
+        Assert.AreEqual("找到 ChatGPT 后才能打开。", h.Model.ForwardingHelpText);
+        Assert.AreEqual("没有找到 ChatGPT", h.Model.Banners.Single().Title);
+    }
+
+    [TestMethod]
+    public async Task ChatGptUnsupported_Recheck_CallsStatus()
+    {
+        var h = new Harness();
+        PushChatGptUnsupported(h);
+
+        await h.Model.RecheckAsync();
+
+        Assert.AreEqual(1, h.Core.Calls.Count(c => c.Method == "status"));
+    }
+
+    [TestMethod]
+    public async Task ChatGptUnsupportedGone_BannerAndHelpTextRestored()
+    {
+        var h = new Harness();
+        await h.Model.StartAsync();
+        PushChatGptUnsupported(h);
+
+        h.Push(s => s["forwarding"] = false);
+
+        Assert.AreEqual(0, h.Model.Banners.Count);
+        Assert.IsTrue(h.Model.ToggleEnabled);
+        Assert.AreEqual("已关闭：Codex 配置已还原为开启前的样子。", h.Model.ForwardingHelpText);
     }
 
     [TestMethod]

@@ -59,6 +59,8 @@ struct LabelValue: View {
             }
         }
         .font(font)
+        .lineLimit(1)
+        .fixedSize(horizontal: true, vertical: false)
     }
 }
 

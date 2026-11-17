@@ -37,6 +37,10 @@
 
         <Border DockPanel.Dock="Bottom" Style="{StaticResource StatusBar}">
             <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
                 <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                     <TextBlock x:Name="VersionText" Style="{StaticResource StatusText}" FontFamily="Consolas" />
                     <Ellipse x:Name="StatusDot" Width="8" Height="8" Margin="16,0,8,0" />
@@ -50,11 +54,11 @@
                         <TextBlock x:Name="RelayGlyph" Style="{StaticResource StatusGlyph}" Visibility="Visible" />
                         <TextBlock x:Name="RelayLabel" Style="{StaticResource LabelText}" FontSize="12" Margin="0,0,8,0" />
                         <TextBlock x:Name="RelayValue" Style="{StaticResource ValueText}" FontSize="12" />
-                        <TextBlock x:Name="RelayNote" Style="{StaticResource LabelText}" FontSize="12" FontWeight="Normal" Margin="4,0,0,0" />
+                        <TextBlock x:Name="RelayNote" Style="{StaticResource LabelText}" FontSize="12" FontWeight="Normal" />
                     </StackPanel>
                 </StackPanel>
-                <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
-                    <TextBlock x:Name="UpdateText" Style="{StaticResource StatusText}" Margin="0,0,12,0" />
+                <StackPanel Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
+                    <TextBlock x:Name="UpdateText" Style="{StaticResource StatusText}" />
                     <Button x:Name="UpdateButton" Style="{StaticResource LinkButton}" Click="UpdateClick" />
                 </StackPanel>
             </Grid>
@@ -175,6 +179,15 @@
                                                                             </DataTrigger>
                                                                             <DataTrigger Binding="{Binding State}" Value="ForwardingOff">
                                                                                 <Setter Property="Foreground" Value="{StaticResource TextMutedBrush}" />
+                                                                            </DataTrigger>
+                                                                            <DataTrigger Binding="{Binding State}" Value="Normal">
+                                                                                <Setter Property="Foreground" Value="{StaticResource SuccessBrush}" />
+                                                                            </DataTrigger>
+                                                                            <DataTrigger Binding="{Binding State}" Value="Stale">
+                                                                                <Setter Property="Foreground" Value="{StaticResource WarningBrush}" />
+                                                                            </DataTrigger>
+                                                                            <DataTrigger Binding="{Binding State}" Value="NeverFetched">
+                                                                                <Setter Property="Foreground" Value="{StaticResource WarningBrush}" />
                                                                             </DataTrigger>
                                                                         </Style.Triggers>
                                                                     </Style>

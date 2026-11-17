@@ -17,6 +17,7 @@ public partial class MainWindow : Window
     object? shownNotices;
     string? shownProgress;
     string? dismissedProgress;
+    bool shownRechecking;
 
     public MainWindow(AppModel appModel)
     {
@@ -48,7 +49,7 @@ public partial class MainWindow : Window
         Hero.Background = AlertView.Brush(model.ForwardingEnabled ? "SelectedBgBrush" : "SurfaceBrush");
         Hero.BorderBrush = AlertView.Brush(model.ForwardingEnabled ? "PrimaryBrush" : "DividerBrush");
         HeroTitle.Text = model.OverviewTitle;
-        HeroSub.Text = model.ChatGptFound ? model.OverviewText ?? model.ForwardingHelpText : model.ForwardingHelpText;
+        HeroSub.Text = model.ChatGptFound && !model.ChatGptUnsupported ? model.OverviewText ?? model.ForwardingHelpText : model.ForwardingHelpText;
         ModeRow.Visibility = model.AccessModeName != null ? Visibility.Visible : Visibility.Collapsed;
         AccessName.Text = model.AccessModeName ?? "";
         AccessReason.Text = model.AccessReasonText ?? "";
@@ -62,8 +63,8 @@ public partial class MainWindow : Window
 
         VersionText.Text = model.Version;
         StatusDot.Fill = AlertView.Brush(model.CoreRunning ? "SuccessBrush" : "DangerBrush");
-        CoreText.Text = model.CoreStatusText + (model.ForwardingEnabled || !model.CoreRunning ? "" : " · 转发已关闭");
-        SetStatusGlyph(ChatGptGlyph, model.ChatGptFound);
+        CoreText.Text = model.CoreStatusText;
+        SetStatusGlyph(ChatGptGlyph, model.ChatGptFound && !model.ChatGptUnsupported);
         ChatGptValue.Text = model.ChatGptText;
         SetStatusGlyph(RelayGlyph, model.ForwardingEnabled);
         var summary = model.RelayModelSummary;
@@ -73,11 +74,13 @@ public partial class MainWindow : Window
         var note = rest.IndexOf('（');
         RelayValue.Text = note < 0 ? rest : rest[..note];
         RelayNote.Text = note < 0 ? "" : rest[note..];
+        RelayNote.Margin = new Thickness(note < 0 ? 0 : 4, 0, 0, 0);
         UpdateText.Text = model.UpdateVersion == null ? "" : $"发现新版本 {model.UpdateVersion}";
+        UpdateText.Margin = new Thickness(0, 0, model.UpdateVersion == null ? 0 : 12, 0);
         UpdateButton.Content = model.UpdateVersion == null ? "检查更新" : "打开下载页";
 
         if (model.ProgressText == null) dismissedProgress = null;
-        if (ReferenceEquals(shownBanners, model.Banners) && ReferenceEquals(shownNotices, model.Notices) && shownProgress == model.ProgressText)
+        if (ReferenceEquals(shownBanners, model.Banners) && ReferenceEquals(shownNotices, model.Notices) && shownProgress == model.ProgressText && shownRechecking == model.IsRechecking)
             return;
         Rebuild();
     }
@@ -93,6 +96,7 @@ public partial class MainWindow : Window
         shownBanners = model.Banners;
         shownNotices = model.Notices;
         shownProgress = model.ProgressText;
+        shownRechecking = model.IsRechecking;
         AlertView.Fill(AlertHost, BuildAlerts());
     }
 
@@ -114,15 +118,15 @@ public partial class MainWindow : Window
                 banner.Detail,
                 () => model.DismissBanner(banner),
                 false,
-                banner.Actions.Select(a => (Label(a), (Action)(() => Run(a, banner)))).ToArray()));
+                banner.Actions.Select(a => (Label(a, model.IsRechecking), (Action)(() => Run(a, banner)), a == BannerAction.Redetect && model.IsRechecking)).ToArray()));
         return alerts;
     }
 
-    static string Label(BannerAction action) => action switch
+    static string Label(BannerAction action, bool rechecking) => action switch
     {
         BannerAction.Retry => "重试",
         BannerAction.ShowDetail => "查看详情",
-        _ => "重新检测",
+        _ => rechecking ? "正在检测…" : "重新检测",
     };
 
     void Run(BannerAction action, AppBanner banner)

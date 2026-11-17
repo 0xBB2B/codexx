@@ -38,12 +38,14 @@ func FetchRelayIDs(ctx context.Context, baseURL, key string, timeout time.Durati
 		return nil, newErr("relay_403", "中转禁止访问")
 	case resp.StatusCode == http.StatusTooManyRequests:
 		return nil, newErr("relay_429", "中转限流")
-	case resp.StatusCode >= 500:
-		return nil, newErr("relay_5xx", "中转服务出错")
-	case resp.StatusCode >= 400 && resp.StatusCode != http.StatusNotFound:
-		return nil, newErr("relay_4xx", "中转未接受请求")
-	default:
+	case resp.StatusCode == http.StatusNotFound:
 		return nil, newErr("relay_404", "中转地址不对或没有模型列表接口")
+	case resp.StatusCode >= 500:
+		return nil, newStatusErr("relay_5xx", "中转服务出错", resp.StatusCode)
+	case resp.StatusCode >= 400:
+		return nil, newStatusErr("relay_4xx", "中转未接受请求", resp.StatusCode)
+	default:
+		return nil, newStatusErr("relay_bad_response", "中转返回的不是模型列表", resp.StatusCode)
 	}
 
 	var body struct {
@@ -52,7 +54,7 @@ func FetchRelayIDs(ctx context.Context, baseURL, key string, timeout time.Durati
 		} `json:"data"`
 	}
 	if err := json.NewDecoder(io.LimitReader(resp.Body, maxRelayBody)).Decode(&body); err != nil || body.Data == nil {
-		return nil, newErr("relay_404", "中转返回的不是模型列表")
+		return nil, newStatusErr("relay_bad_response", "中转返回的不是模型列表", resp.StatusCode)
 	}
 	ids := make([]string, len(body.Data))
 	for i, d := range body.Data {

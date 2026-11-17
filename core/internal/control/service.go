@@ -225,9 +225,40 @@ func (s *Service) redetect(ctx context.Context) {
 		_ = s.detect(ctx)
 		return
 	}
-	s.restoreBlocked, _ = codexconfig.CheckTampered(s.configCfg())
-	_, err := s.locateCodex()
-	s.chatgptFound, s.chatgptErr = err == nil, errCode(err)
+	s.restoreOnRedetect()
+	codex, err := s.locateCodex()
+	s.chatgptFound = err == nil
+	if err != nil {
+		s.chatgptErr = errCode(err)
+		return
+	}
+	if s.chatgptErr == "chatgpt_unsupported" {
+		if _, err := catalog.LoadOfficial(ctx, codex); err != nil {
+			return
+		}
+	}
+	s.chatgptErr = ""
+}
+
+func (s *Service) restoreOnRedetect() {
+	cfg := s.configCfg()
+	prevBlocked := s.restoreBlocked
+	wasBlocked := len(prevBlocked) > 0
+	s.restoreBlocked, _ = codexconfig.CheckTampered(cfg)
+	if len(s.restoreBlocked) > 0 || !wasBlocked {
+		return
+	}
+	err := codexconfig.Restore(cfg)
+	if err == nil {
+		s.takenOver = nil
+		return
+	}
+	var ce *codexconfig.Error
+	if errors.As(err, &ce) && ce.Code == codexconfig.CodeRestoreBlocked {
+		s.restoreBlocked = ce.Keys
+		return
+	}
+	s.restoreBlocked = prevBlocked
 }
 
 var RestartTimeout = 30 * time.Second
@@ -620,7 +651,14 @@ func (s *Service) enable() error {
 
 func (s *Service) refreshRelay(ctx context.Context, plan relayPlan) error {
 	if s.forwarding && s.proxy == nil {
-		return s.activate(ctx)
+		if !s.chatgptFound {
+			if _, err := s.locateCodex(); err == nil {
+				s.chatgptFound, s.chatgptErr = true, ""
+			}
+		}
+		if s.chatgptFound && s.chatgptErr == "" {
+			return s.activate(ctx)
+		}
 	}
 	if !s.forwarding || s.proxy == nil {
 		return s.probe(ctx, plan)
@@ -1078,7 +1116,7 @@ func toError(err error) *Error {
 		return &Error{Code: pe.Code}
 	}
 	if code := catalog.ErrorCode(err); code != "" {
-		return &Error{Code: code}
+		return &Error{Code: code, Keys: catalog.ErrorKeys(err)}
 	}
 	return &Error{Code: "internal_error"}
 }

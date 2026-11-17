@@ -54,4 +54,30 @@ public class ShellSettingsTests
     {
         new ShellSettings(dir).DeleteAll();
     }
+
+    [TestMethod]
+    public void DeleteAll_DirectoryBecomesEmpty_RemovesDirectory()
+    {
+        var settings = new ShellSettings(dir);
+        settings.SaveRelays([new("1", "中转", "https://relay.example.com")]);
+        File.WriteAllText(settings.FilePath + ".bak", "{}");
+
+        settings.DeleteAll();
+
+        Assert.IsFalse(Directory.Exists(dir));
+    }
+
+    [TestMethod]
+    public void DeleteAll_DirectoryHasOtherFiles_KeepsDirectoryAndFilesWithoutError()
+    {
+        var settings = new ShellSettings(dir);
+        settings.SaveRelays([new("1", "中转", "https://relay.example.com")]);
+        var other = Path.Combine(dir, "other.log");
+        File.WriteAllText(other, "keep");
+
+        settings.DeleteAll();
+
+        Assert.IsFalse(File.Exists(settings.FilePath));
+        Assert.AreEqual("keep", File.ReadAllText(other));
+    }
 }

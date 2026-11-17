@@ -304,3 +304,132 @@ final class SetupWindowNameFieldTests: XCTestCase {
         if let name, let url { XCTAssertLessThan(name, url) }
     }
 }
+
+@MainActor
+final class ChatGPTUnsupportedViewTests: XCTestCase {
+    private let overview = "当前 ChatGPT 版本暂不支持，暂时不能打开。"
+    private let bannerTitle = "当前 ChatGPT 版本暂不支持"
+    private let bannerDetail = "读不到 ChatGPT 自带的官方模型清单，转发保持关闭。请把 ChatGPT 更新到最新版后点「重新检测」；还是不行的话，请等待助手新版本。"
+
+    private func unsupported(
+        responses: [String: Result<Data, CoreError>] = [:], gates: [String: Gate] = [:]
+    ) async -> ViewFixture {
+        let f = await ViewFixture.make(forwarding: false, responses: responses, gates: gates)
+        f.model.status = Self.decode(unsupportedJSON())
+        return f
+    }
+
+    private func unsupportedJSON() -> String {
+        ViewFixture.statusJSON(forwarding: false, relayCount: 1)
+            .replacingOccurrences(of: #""chatgpt":{"found":true,"error":null}"#, with: #""chatgpt":{"found":true,"error":"chatgpt_unsupported"}"#)
+    }
+
+    private static func decode(_ text: String) -> CoreStatus {
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        return try! decoder.decode(CoreStatus.self, from: Data(text.utf8))
+    }
+
+    private func forwardingReportedOn(chatgpt: String) async -> ViewFixture {
+        let f = await ViewFixture.make(forwarding: true)
+        let text = ViewFixture.statusJSON(forwarding: true, relayCount: 1)
+            .replacingOccurrences(of: #""chatgpt":{"found":true,"error":null}"#, with: chatgpt)
+        f.model.status = Self.decode(text)
+        return f
+    }
+
+    func testForwardingReportedOn_ChatGPTUnsupported_ShownAsClosedAndDisabled() async {
+        let f = await forwardingReportedOn(chatgpt: #""chatgpt":{"found":true,"error":"chatgpt_unsupported"}"#)
+        XCTAssertFalse(f.model.forwardingEnabled)
+        XCTAssertEqual(f.model.forwardingTitle, "使用中转 · 已关闭")
+        XCTAssertTrue(f.model.forwardingToggleDisabled)
+        XCTAssertEqual(f.model.forwardingHelpText, overview)
+        XCTAssertEqual(f.model.banners.map(\.title), [bannerTitle])
+        XCTAssertEqual(f.model.banners.first?.detail, bannerDetail)
+        let view = RenderedView(MainWindow(model: f.model))
+        XCTAssertTrue(view.hasExactly("使用中转 · 已关闭"))
+        XCTAssertTrue(view.hasExactly(overview))
+        XCTAssertFalse(view.has("官方模型在上，中转模型在下"))
+        XCTAssertTrue(view.has("中转模型 转发关闭时不获取"))
+    }
+
+    func testForwardingReportedOn_ChatGPTNotFound_ShownAsClosedAndDisabled() async {
+        let f = await forwardingReportedOn(chatgpt: #""chatgpt":{"found":false,"error":"chatgpt_not_found"}"#)
+        XCTAssertFalse(f.model.forwardingEnabled)
+        XCTAssertEqual(f.model.forwardingTitle, "使用中转 · 已关闭")
+        XCTAssertTrue(f.model.forwardingToggleDisabled)
+        XCTAssertEqual(f.model.forwardingHelpText, "找到 ChatGPT 后才能打开。")
+        XCTAssertEqual(f.model.banners.map(\.title), ["没有找到 ChatGPT"])
+        let view = RenderedView(MainWindow(model: f.model))
+        XCTAssertTrue(view.hasExactly("使用中转 · 已关闭"))
+        XCTAssertTrue(view.hasExactly("找到 ChatGPT 后才能打开。"))
+        XCTAssertFalse(view.has("官方模型在上，中转模型在下"))
+    }
+
+    func testToggleDisabledAndOverviewText() async {
+        let f = await unsupported()
+        XCTAssertTrue(f.model.forwardingToggleDisabled)
+        XCTAssertFalse(f.model.forwardingEnabled)
+        XCTAssertEqual(f.model.forwardingHelpText, overview)
+        XCTAssertTrue(RenderedView(MainWindow(model: f.model)).hasExactly(overview))
+    }
+
+    func testBanner_TitleDetailAndRecheckAction() async {
+        let f = await unsupported()
+        let banner = f.model.banners.first { $0.title == bannerTitle }
+        XCTAssertEqual(banner?.detail, bannerDetail)
+        XCTAssertEqual(banner?.kind, .error)
+        XCTAssertEqual(banner?.action, .recheckStatus)
+        XCTAssertEqual(f.model.banners.count, 1)
+        let view = RenderedView(MainWindow(model: f.model))
+        XCTAssertTrue(view.hasExactly(bannerTitle))
+        XCTAssertTrue(view.hasExactly("重新检测"))
+    }
+
+    func testStatusFooter_ChatGPTUnsupported_EveryItemStaysOnOneLine() async throws {
+        let f = await unsupported()
+        let view = RenderedView(StatusFooter(model: f.model).frame(width: 620))
+        let reference = try XCTUnwrap(view.frame(ofExactText: "后台运行中")).height
+        for text in ["版本暂不支持", "转发关闭时不获取"] {
+            let frame = try XCTUnwrap(view.frame(ofExactText: text), text)
+            XCTAssertEqual(frame.height, reference, accuracy: 2, text)
+        }
+    }
+
+    func testStatusRow_ChatGPTVersionUnsupported() async {
+        let f = await unsupported()
+        let view = RenderedView(MainWindow(model: f.model))
+        XCTAssertTrue(view.hasExactly("版本暂不支持"))
+        XCTAssertFalse(view.has("ChatGPT 已检测到"))
+        XCTAssertFalse(view.has("ChatGPT 未找到"))
+    }
+
+    func testDismissBanner_KeepsToggleDisabledAndTextsUnchanged() async throws {
+        let f = await unsupported()
+        let banner = try XCTUnwrap(f.model.banners.first)
+        f.model.dismissBanner(banner)
+        XCTAssertTrue(f.model.banners.isEmpty)
+        XCTAssertTrue(f.model.forwardingToggleDisabled)
+        XCTAssertEqual(f.model.forwardingHelpText, overview)
+        let view = RenderedView(MainWindow(model: f.model))
+        XCTAssertTrue(view.hasExactly(overview))
+        XCTAssertTrue(view.hasExactly("版本暂不支持"))
+    }
+
+    func testRecheck_CallsStatusAndButtonShowsBusyDisabled() async {
+        let gate = Gate()
+        let f = await unsupported(
+            responses: ["status": .success(Data(unsupportedJSON().utf8))], gates: ["status": gate]
+        )
+        let view = RenderedView(MainWindow(model: f.model))
+        XCTAssertEqual(view.isEnabled(label: "重新检测"), true)
+        let task = Task { await f.model.recheckStatus() }
+        await awaitUntil { !f.core.calls("status").isEmpty }
+        XCTAssertEqual(f.core.calls("status").count, 1)
+        XCTAssertTrue(view.has("正在检测…"))
+        XCTAssertEqual(view.isEnabled(label: "正在检测…"), false)
+        await gate.open()
+        await task.value
+        XCTAssertTrue(view.hasExactly("重新检测"))
+    }
+}

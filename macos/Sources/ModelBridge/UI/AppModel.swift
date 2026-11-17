@@ -202,6 +202,7 @@ final class AppModel: ObservableObject {
     @Published var mainWindowRequested = false
     @Published var isSwitchingForwarding = false
     @Published var isDetectingAccess = false
+    @Published var isRecheckingStatus = false
 
     @Published var coreRunning = true
     @Published var setupFollowUpIssues: [String] = []
@@ -246,7 +247,7 @@ final class AppModel: ObservableObject {
         self.appURL = appURL
     }
 
-    var forwardingEnabled: Bool { status?.forwarding ?? false }
+    var forwardingEnabled: Bool { status?.forwardingUsable ?? false }
 
     static let maxRelays = 10
 
@@ -308,8 +309,10 @@ final class AppModel: ObservableObject {
     }
 
     var forwardingToggleDisabled: Bool {
-        !coreRunning || status?.chatgpt?.found == false || isSwitchingForwarding
+        !coreRunning || status?.chatgpt?.found == false || chatGPTUnsupported || isSwitchingForwarding
     }
+
+    var chatGPTUnsupported: Bool { status?.chatgpt?.error == "chatgpt_unsupported" }
 
     var modelCountText: String { "中转模型 " + modelCountValue + (modelCountNote ?? "") }
 
@@ -352,8 +355,9 @@ final class AppModel: ObservableObject {
 
     var forwardingHelpText: String {
         if status?.chatgpt?.found == false { return "找到 ChatGPT 后才能打开。" }
+        if chatGPTUnsupported { return "当前 ChatGPT 版本暂不支持，暂时不能打开。" }
         return forwardingEnabled
-            ? "开启时，本助手按下方的接入方式修改 Codex 配置。"
+            ? ""
             : "已关闭：Codex 配置已还原为开启前的样子。"
     }
 
@@ -399,6 +403,14 @@ final class AppModel: ObservableObject {
                     detail: CoreProtocol.errorMessages[error],
                     kind: .error,
                     action: .refreshModels
+                ))
+            }
+            if chatGPTUnsupported {
+                result.append(Banner(
+                    title: "当前 ChatGPT 版本暂不支持",
+                    detail: "读不到 ChatGPT 自带的官方模型清单，转发保持关闭。请把 ChatGPT 更新到最新版后点「重新检测」；还是不行的话，请等待助手新版本。",
+                    kind: .error,
+                    action: .recheckStatus
                 ))
             }
             if status.chatgpt?.found == false {
@@ -551,7 +563,7 @@ final class AppModel: ObservableObject {
         }
         removeNotices(titled: "没能重新检测")
         if switchCount != forwardingSwitchCount {
-            value.forwarding = forwardingEnabled
+            value.forwarding = status?.forwarding ?? value.forwarding
             apply(value)
             return
         }
@@ -672,7 +684,7 @@ final class AppModel: ObservableObject {
                 confirmLabel: "还原并退出"
             )
         } else {
-            await shutdown(restore: false)
+            await shutdown(restore: status?.forwarding ?? false)
         }
     }
 
@@ -717,6 +729,8 @@ final class AppModel: ObservableObject {
     func refreshModels() async { await refresh("refresh_models", params: RefreshParams(id: nil)) }
 
     func recheckStatus() async {
+        isRecheckingStatus = true
+        defer { isRecheckingStatus = false }
         forwardingFailure = nil
         await refresh("status", params: Empty())
     }
@@ -791,7 +805,7 @@ final class AppModel: ObservableObject {
     }
 
     private func alignOnStartup(_ value: CoreStatus) async {
-        guard !startupAligned, value.forwarding, !isSwitchingForwarding else { return }
+        guard !startupAligned, value.forwardingUsable, !isSwitchingForwarding else { return }
         startupAligned = true
         guard value.access?.target != nil else { return }
         if value.access?.detect == "failed" {
@@ -803,7 +817,7 @@ final class AppModel: ObservableObject {
 
     private func reconcileAccess(_ value: CoreStatus) async {
         guard let target = value.access?.target, target != value.access?.mode else { return }
-        guard !isSwitchingForwarding, value.forwarding else { return }
+        guard !isSwitchingForwarding, value.forwardingUsable else { return }
         guard await applyAccess(), chatGPT.isRunning() else { return }
         addNotice(target == "both"
             ? Notice(title: "已切换到「官方 + 中转」", detail: "已检测到 ChatGPT 登录。重启 ChatGPT 后生效。", kind: .success)
@@ -866,6 +880,7 @@ final class AppModel: ObservableObject {
         guard let data = try? await core.call(method, params: params),
               let value = try? JSONDecoder.snakeCase.decode(CoreStatus.self, from: data) else { return }
         apply(value)
+        await alignOnStartup(value)
     }
 
     private func applyLoginStart(_ enabled: Bool) {

@@ -111,6 +111,10 @@ struct CoreStatus: Codable, Sendable, Equatable {
     var configPath: String?
     var update: Update?
     var access: Access?
+
+    var forwardingUsable: Bool {
+        forwarding && chatgpt?.found != false && chatgpt?.error != "chatgpt_unsupported"
+    }
 }
 
 enum CoreProtocol {
@@ -127,8 +131,9 @@ enum CoreProtocol {
         "relay_403": "中转服务返回 403：API Key 没有权限",
         "relay_404": "中转服务返回 404：Base URL 不正确",
         "relay_429": "中转服务返回 429：请求太频繁，请稍后重试",
-        "relay_5xx": "中转服务暂时不可用",
-        "relay_4xx": "请求未被中转服务接受",
+        "relay_5xx": "中转服务返回 <keys[0]>：中转服务暂时不可用",
+        "relay_4xx": "中转服务返回 <keys[0]>：请求未被中转服务接受",
+        "relay_bad_response": "中转服务返回 <keys[0]>：没有返回模型列表，请检查 Base URL",
         "relay_unreachable": "连不上中转服务，请检查网络和 Base URL",
         "chatgpt_not_found": "没有找到 ChatGPT",
         "chatgpt_unsupported": "当前 ChatGPT 版本暂不支持",

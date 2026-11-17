@@ -28,6 +28,21 @@ final class CoreProtocolTests: XCTestCase {
         }
     }
 
+    func testCoreFailure_Relay5xxAnd4xxFillStatusNumber() {
+        XCTAssertEqual(CoreFailure(code: "relay_5xx", keys: ["502"]).message, "中转服务返回 502：中转服务暂时不可用")
+        XCTAssertEqual(CoreFailure(code: "relay_4xx", keys: ["418"]).message, "中转服务返回 418：请求未被中转服务接受")
+    }
+
+    func testErrorMessages_NonListResponseCodeFillsStatusNumber() throws {
+        let table = try protocolErrorTable()
+        let entry = table.first { $0.value.contains("没有返回模型列表，请检查 Base URL") }
+        let code = try XCTUnwrap(entry?.key, "PROTOCOL.md 缺少「没有返回模型列表，请检查 Base URL」对应的错误码")
+        XCTAssertEqual(code, "relay_bad_response")
+        XCTAssertEqual(CoreProtocol.errorMessages[code], entry?.value)
+        XCTAssertEqual(CoreFailure(code: code, keys: ["302"]).message, "中转服务返回 302：没有返回模型列表，请检查 Base URL")
+        XCTAssertEqual(CoreFailure(code: code, keys: ["204"]).message, "中转服务返回 204：没有返回模型列表，请检查 Base URL")
+    }
+
     func testErrorMessages_NoCodesBeyondProtocol() throws {
         let expected = try protocolErrorTable()
         XCTAssertEqual(Set(CoreProtocol.errorMessages.keys), Set(expected.keys))

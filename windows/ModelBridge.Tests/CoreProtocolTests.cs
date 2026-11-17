@@ -51,6 +51,24 @@ public class CoreProtocolTests
     }
 
     [TestMethod]
+    public void ErrorMessages_NonListResponseCode_IsInProtocolAndNotRelay404()
+    {
+        const string text = "没有返回模型列表，请检查 Base URL";
+        var entry = ReadProtocolErrorTable().Where(e => e.Value.Contains(text)).ToArray();
+
+        Assert.AreEqual(1, entry.Length, "PROTOCOL.md 里应有且只有一个错误码对应「" + text + "」");
+        Assert.AreEqual("relay_bad_response", entry[0].Key);
+        Assert.AreEqual("中转服务返回 <keys[0]>：" + text, CoreErrorMessages.Messages[entry[0].Key]);
+    }
+
+    [TestMethod]
+    public void ErrorMessages_Relay5xxAnd4xx_CarryStatusPlaceholder()
+    {
+        Assert.AreEqual("中转服务返回 <keys[0]>：中转服务暂时不可用", CoreErrorMessages.Messages["relay_5xx"]);
+        Assert.AreEqual("中转服务返回 <keys[0]>：请求未被中转服务接受", CoreErrorMessages.Messages["relay_4xx"]);
+    }
+
+    [TestMethod]
     public void ErrorMessages_IncludeMultiRelayCodes()
     {
         string[] codes = ["name_empty", "name_too_long", "name_has_dot", "name_duplicate", "relay_limit", "relay_last", "relay_not_found"];

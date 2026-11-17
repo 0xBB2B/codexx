@@ -811,6 +811,39 @@ final class MultiRelayAppModelTests: XCTestCase {
         XCTAssertTrue(h.keychain.stored.isEmpty)
     }
 
+    func testSetup_RelayNon2xxWithStatus_ShowsStatusNumberWithPeriod() async {
+        let cases: [(String, String, String)] = [
+            ("relay_5xx", "502", "中转服务返回 502：中转服务暂时不可用。"),
+            ("relay_4xx", "418", "中转服务返回 418：请求未被中转服务接受。"),
+            ("relay_bad_response", "302", "中转服务返回 302：没有返回模型列表，请检查 Base URL。"),
+        ]
+        for (code, status, expected) in cases {
+            let h = await Harness.make(relays: [], responses: ["save_relay": .failure(.remote(code: code, keys: [status]))])
+            h.model.beginSetup()
+            h.model.draftBaseURL = "https://a.example.com"
+            h.model.draftAPIKey = "sk-bad"
+            await h.model.completeSetup()
+            guard case .failed(let title, let detail) = h.model.setupPhase else { return XCTFail("应失败") }
+            XCTAssertEqual(title, "没能连上中转服务")
+            XCTAssertEqual(detail, expected, code)
+        }
+    }
+
+    func testSave_RelayNon2xxWithStatus_ShowsStatusNumberWithoutPeriod() async {
+        let cases: [(String, String, String)] = [
+            ("relay_5xx", "503", "中转服务返回 503：中转服务暂时不可用"),
+            ("relay_4xx", "400", "中转服务返回 400：请求未被中转服务接受"),
+            ("relay_bad_response", "302", "中转服务返回 302：没有返回模型列表，请检查 Base URL"),
+        ]
+        for (code, status, expected) in cases {
+            let h = await Harness.make(responses: ["save_relay": .failure(.remote(code: code, keys: [status]))])
+            h.model.beginAddRelay()
+            fillDraft(h.model, name: "备用", url: "https://b.example.com", key: "sk-bad")
+            await h.model.saveRelay()
+            XCTAssertEqual(h.model.relaySaveAlert, DialogAlert(title: "没有保存", message: expected, severity: .danger), code)
+        }
+    }
+
     // MARK: 菜单文案
 
     func testMenu_ForwardingItemIsUseRelay() async {

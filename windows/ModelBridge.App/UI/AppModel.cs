@@ -151,6 +151,9 @@ public sealed class AppModel : IRelayFields
     string successText = "";
     bool forwardingEnabled;
     bool chatGptFound = true;
+    bool chatGptUnsupported;
+    bool coreForwarding;
+    bool isRechecking;
     bool loginStartEnabled;
     bool coreRunning;
     string? accessMode;
@@ -282,6 +285,25 @@ public sealed class AppModel : IRelayFields
         }
     }
 
+    public bool ChatGptUnsupported
+    {
+        get => chatGptUnsupported;
+        private set
+        {
+            if (!Set(ref chatGptUnsupported, value)) return;
+            Raise(nameof(ToggleEnabled));
+            Raise(nameof(ChatGptText));
+            Raise(nameof(ForwardingHelpText));
+            Raise(nameof(OverviewText));
+        }
+    }
+
+    public bool IsRechecking
+    {
+        get => isRechecking;
+        private set => Set(ref isRechecking, value);
+    }
+
     public bool CoreRunning
     {
         get => coreRunning;
@@ -314,7 +336,7 @@ public sealed class AppModel : IRelayFields
         }
     }
 
-    public bool ToggleEnabled => !busy && chatGptFound && coreRunning;
+    public bool ToggleEnabled => !busy && chatGptFound && !chatGptUnsupported && coreRunning;
 
     public string? AccessModeName => forwardingEnabled ? ModeName(accessMode) : null;
 
@@ -328,7 +350,9 @@ public sealed class AppModel : IRelayFields
 
     public string OverviewTitle => "使用中转 · " + (forwardingEnabled ? "已开启" : "已关闭");
 
-    public string? OverviewText => !forwardingEnabled
+    public string? OverviewText => chatGptUnsupported
+        ? UnsupportedHelp
+        : !forwardingEnabled
         ? "已关闭：Codex 配置已还原为开启前的样子。"
         : accessMode switch
         {
@@ -339,17 +363,21 @@ public sealed class AppModel : IRelayFields
             _ => null,
         };
 
+    const string UnsupportedHelp = "当前 ChatGPT 版本暂不支持，暂时不能打开。";
+
     public string ForwardingHelpText => !chatGptFound
         ? "找到 ChatGPT 后才能打开。"
+        : chatGptUnsupported
+            ? UnsupportedHelp
         : forwardingEnabled
-            ? "开启时，本助手按下方的接入方式修改 Codex 配置。"
+            ? ""
             : "已关闭：Codex 配置已还原为开启前的样子。";
 
     public string CoreStatusText => coreRunning ? "后台运行中" : "后台服务已停止";
 
     public string TrayStatusText => coreRunning ? (forwardingEnabled ? "转发已开启" : "转发已关闭") + " · " + CoreStatusText : CoreStatusText;
 
-    public string ChatGptText => chatGptFound ? "已检测到" : "未找到";
+    public string ChatGptText => chatGptUnsupported ? "版本暂不支持" : chatGptFound ? "已检测到" : "未找到";
 
     public int ModelCountOf(string id) => relayStatus.GetValueOrDefault(id)?.ModelCount ?? 0;
 
@@ -507,7 +535,7 @@ public sealed class AppModel : IRelayFields
 
     public async Task ToggleForwardingAsync()
     {
-        if (busy || !chatGptFound) return;
+        if (busy || !chatGptFound || chatGptUnsupported) return;
 
         IsBusy = true;
         forwardingToggles++;
@@ -592,9 +620,15 @@ public sealed class AppModel : IRelayFields
         }
     }
 
+    static bool ForwardingUsable(JsonElement s)
+    {
+        var chatgpt = Prop(s, "chatgpt");
+        return Flag(s, "forwarding", false) && Flag(chatgpt, "found", true) && Str(chatgpt, "error") != "chatgpt_unsupported";
+    }
+
     void OnStatusReceived(JsonElement s)
     {
-        if (startupAligned || busy || !Flag(s, "forwarding", false)) return;
+        if (startupAligned || busy || !ForwardingUsable(s)) return;
         startupAligned = true;
 
         var access = Prop(s, "access");
@@ -727,7 +761,9 @@ public sealed class AppModel : IRelayFields
             }
             catch (Exception ex) when (ex is CoreCallException or CoreProcessExitedException)
             {
-                editor.SaveAlert = SaveFailedAlert(Describe(ex));
+                editor.SaveAlert = ex is CoreCallException { Code: "relay_5xx" or "relay_4xx" or "relay_bad_response" }
+                    ? new DialogAlert(NoSave, Describe(ex), DialogAlertSeverity.Danger)
+                    : SaveFailedAlert(Describe(ex));
                 return false;
             }
 
@@ -884,9 +920,9 @@ public sealed class AppModel : IRelayFields
         IsBusy = true;
         try
         {
-            var restore = forwardingEnabled;
+            var restore = coreForwarding;
             LastError = null;
-            if (restore)
+            if (forwardingEnabled)
             {
                 var tail = chatGpt.IsRunning() ? QuitRunningTail : "";
                 if (!await confirmer.ConfirmAsync(new ConfirmRequest("退出模型接入助手？", QuitBase + tail, "还原并退出")))
@@ -1037,16 +1073,26 @@ public sealed class AppModel : IRelayFields
     public Task RecheckAsync()
     {
         LastError = null;
-        return RefreshAsync("status", null);
+        return RecheckStatusAsync();
+    }
+
+    async Task RecheckStatusAsync()
+    {
+        if (busy) return;
+        IsRechecking = true;
+        try { await RefreshAsync("status", null); }
+        finally { IsRechecking = false; }
     }
 
     async Task RefreshAsync(string method, IReadOnlyDictionary<string, object?>? parameters)
     {
         if (busy) return;
         IsBusy = true;
+        JsonElement? result = null;
         try
         {
-            ApplyStatus(await core.CallAsync(method, parameters));
+            result = await core.CallAsync(method, parameters);
+            ApplyStatus(result.Value);
             RemoveNotices(RefreshFailed);
         }
         catch (Exception ex) when (ex is CoreCallException or CoreProcessExitedException)
@@ -1057,6 +1103,7 @@ public sealed class AppModel : IRelayFields
         {
             IsBusy = false;
         }
+        if (result is { } status) OnStatusReceived(status);
     }
 
     string? Persist(RelayConfig config, string key, string? oldKey, IReadOnlyList<RelayConfig> next)
@@ -1193,8 +1240,12 @@ public sealed class AppModel : IRelayFields
         var chatgpt = Prop(s, "chatgpt");
         var update = Prop(s, "update");
 
-        ForwardingEnabled = Flag(s, "forwarding", false);
-        ChatGptFound = Flag(chatgpt, "found", true);
+        var found = Flag(chatgpt, "found", true);
+        var unsupported = Str(chatgpt, "error") == "chatgpt_unsupported";
+        coreForwarding = Flag(s, "forwarding", false);
+        ForwardingEnabled = ForwardingUsable(s);
+        ChatGptFound = found;
+        ChatGptUnsupported = unsupported;
         Version = Str(s, "version") is { } v ? "v" + v : "";
         ConfigPath = Str(s, "config_path") ?? "";
         relayStatus = Prop(s, "relays").ValueKind == JsonValueKind.Array
@@ -1236,6 +1287,13 @@ public sealed class AppModel : IRelayFields
             list.Add(new AppBanner(
                 "没有找到 ChatGPT",
                 "请先安装官方 ChatGPT 桌面版，再回来打开转发。如果已经安装，可能是当前 ChatGPT 版本暂不支持，请等待助手新版本。",
+                AppSeverity.Danger,
+                [BannerAction.Redetect]));
+
+        if (chatGptUnsupported)
+            list.Add(new AppBanner(
+                "当前 ChatGPT 版本暂不支持",
+                "读不到 ChatGPT 自带的官方模型清单，转发保持关闭。请把 ChatGPT 更新到最新版后点「重新检测」；还是不行的话，请等待助手新版本。",
                 AppSeverity.Danger,
                 [BannerAction.Redetect]));
 
