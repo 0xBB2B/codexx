@@ -147,13 +147,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 }
 
+func menuBarImage(in directory: URL) -> NSImage? {
+    let size = NSSize(width: 18, height: 18)
+    let image = NSImage(size: size)
+    for name in ["MenuBarIcon.png", "MenuBarIcon@2x.png"] {
+        guard let data = try? Data(contentsOf: directory.appendingPathComponent(name)),
+              let rep = NSBitmapImageRep(data: data) else { return nil }
+        rep.size = size
+        image.addRepresentation(rep)
+    }
+    image.isTemplate = true
+    return image
+}
+
 @main
 struct ModelBridgeApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
 
     var body: some Scene {
-        MenuBarExtra("模型接入助手", systemImage: "arrow.left.arrow.right.circle") {
+        MenuBarExtra {
             MenuPanel(model: delegate.model) { delegate.showMainWindow() }
+        } label: {
+            if let image = Bundle.main.resourceURL.flatMap(menuBarImage(in:)) {
+                Image(nsImage: image).accessibilityLabel("模型接入助手")
+            } else {
+                // swift run 开发时没有打包好的资源，不退回系统符号菜单栏就没有入口
+                Image(systemName: "arrow.left.arrow.right.circle").accessibilityLabel("模型接入助手")
+            }
         }
         .menuBarExtraStyle(.window)
     }

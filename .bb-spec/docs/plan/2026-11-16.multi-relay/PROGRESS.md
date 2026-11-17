@@ -10,14 +10,9 @@
 | 06 | 06-windows-relay-model | done | 2026-11-17 |
 | 05 | 05-macos-main-window | done | 2026-11-17 |
 | 07 | 07-windows-main-window | done | 2026-11-17 |
-| 09 | 09-menubar-tray-icons | pending | — |
+| 09 | 09-menubar-tray-icons | done | 2026-11-17 |
 ## 当前
-2026-11-16 用户要求暂停。05、06、07 的代码都在工作区里（未提交），状态：
-- 06（Windows 外壳模型）：实现与测试完成，复查 14/14 合规；最后一处「首次设置重置核心失败时提示」已改，随 07 一起等 CI 通过后提交。
-- 07（Windows 主窗口）：最后一次 CI（run 43835731297）windows 396 个里 1 个失败：MainWindowLayoutTests.StatusRow_ShowsVersionCoreChatGptRelayModelsAndUpdate（MainWindowLayoutTests.cs:207 起的某条 Contains）。待查是测试还是实现。
-- 05（macOS 主窗口）：本机全量 314 通过、复查 15/15 合规；但 CI 的 macOS 上 MultiRelayViewTests 大量失败：测试辅助 ViewHarness 用 KVC 读 accessibilityTitle，CI 的 macOS 版本不支持（NSUnknownKeyException）；MainWindowShellTests 真实窗口高 675（CI 系统标题栏高度与本机不同，交通灯重摆公式依赖标题栏高度）。需要：改测试辅助只读各系统都有的属性；窗口高度/交通灯位置改为不依赖系统标题栏高度的做法。
-- 05 复查遗留（不阻塞，待做）：顶栏 32~48px 段拖动改用 performDrag；macOS 13~15 交通灯位置未验证；删除进行中点「退出/卸载/关闭登录启动」无反馈（建议带出主窗口）；sheet 无遮罩与 DESIGN.md「弹窗」要求不符，需用户决定补遮罩还是在 DESIGN.md 注明 macOS 用 sheet 代替。
-- 之后还剩 09（菜单栏与托盘图标），以及收尾（全量测试、界面对比、doc-update、删 plan 目录）。
+01–10 全部完成，进入收尾：全量测试、界面对比、doc-update、删 plan 目录。
 ## 阻塞
 （无）
 ## 重试与自修（每次记一条）
@@ -30,7 +25,11 @@
 - 08-app-icon-assets 自修第 1 轮：DESIGN.md 单色图标规则与 PRD 04 C7（16px 托盘按 16px 规则）矛盾，按 PRD 改正 DESIGN.md 文字并补 64px；Scale 从公用 GlyphFor 挪到 RenderMono；补测试（单色放大、各档线宽、Win 88%、24/32/48、Mac 64） → 结果：已修，复查 17/17 合规
 - 07-windows-main-window 自修第 1 轮：长的名字错误被裁掉（同根因：macOS 表单错误会换行撑高）；窗口圆角 8px 未设置；旧方法不存在的测试、ApiKeyHelp 双来源；配置行第二行 12px、状态区图标 16px、卡片间距 20px；表单弹窗未登记 Dialogs.Current、保存不设 busy、行按钮不看 busy、忙碌时 Alt+F4 可关弹窗；补 5 条测试遗漏 → 结果：通过，CI run 44001912479 全部通过，复查关闭 8/9；截断那条用户 2026-11-17 定为缩短重名提示文字，另行修改
 
+- 09-menubar-tray-icons 自修第 1 轮：读不到菜单栏图标时退回旧系统符号缺 WHY 说明（保留：swift run 开发时没有打包资源，不退回菜单栏就没有入口）；菜单栏图标缺辅助功能名称「模型接入助手」（本次改用 label 写法丢了标题）；补高 DPI 取 32 像素测试 → 结果：通过，CI run 44003798025 全部通过，复查 5/5 合规
+
 ## 无关发现（发现一条记一条）
+- windows/ModelBridge.Tests/MultiRelayTests.cs:834、MainWindowLayoutTests.cs:304 等共 40 条 CS8602 空引用编译警告（测试代码）；不处理：警告堆积会掩盖新警告；约 20 分钟。
+- macos/Sources/ModelBridge/UI/StatusMenu.swift:32 菜单面板头部仍用系统符号 arrow.left.arrow.right.circle，PRD 04 只规定菜单栏图标，面板头部要不要换成应用图标未定；不处理：面板头部和菜单栏图标不一致；约 10 分钟（需先出预览，属界面改动）。
 - windows/ModelBridge.App/UI/MainWindow.xaml:42 版本号到状态圆点间距 12px，DESIGN.md 规定状态行各项之间 16px（旧代码）；不处理：间距略紧；约 5 分钟。
 - core/internal/control/update_test.go 没有对应的 update.go（测试与实现一一对应规则），原有问题
 （无）

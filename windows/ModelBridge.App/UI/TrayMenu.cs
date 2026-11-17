@@ -5,6 +5,8 @@ using System.Runtime.InteropServices;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Interop;
+using Microsoft.Win32;
+using ModelBridge.Services;
 using Forms = System.Windows.Forms;
 
 namespace ModelBridge.UI;
@@ -15,7 +17,7 @@ public sealed class TrayMenu : IDisposable
     readonly Action openMain;
     readonly Func<Task> uninstall;
     readonly Forms.NotifyIcon icon;
-    readonly Icon iconImage;
+    Icon? iconImage;
     TrayPanelWindow? panel;
     DateTime lastClosed = DateTime.MinValue;
     bool disposed;
@@ -26,8 +28,9 @@ public sealed class TrayMenu : IDisposable
         openMain = openMainWindow;
         uninstall = uninstallApp;
 
-        iconImage = CreateIcon();
-        icon = new Forms.NotifyIcon { Icon = iconImage, Text = "模型接入助手", Visible = true };
+        icon = new Forms.NotifyIcon { Text = "模型接入助手", Visible = true };
+        UpdateTrayIcon();
+        SystemEvents.UserPreferenceChanged += OnUserPreferenceChanged;
         icon.MouseUp += (_, e) =>
         {
             if (e.Button is Forms.MouseButtons.Left or Forms.MouseButtons.Right) Show();
@@ -60,10 +63,11 @@ public sealed class TrayMenu : IDisposable
     {
         if (disposed) return;
         disposed = true;
+        SystemEvents.UserPreferenceChanged -= OnUserPreferenceChanged;
         panel?.Close();
         icon.Visible = false;
         icon.Dispose();
-        iconImage.Dispose();
+        iconImage?.Dispose();
     }
 
     async void Run(TrayMenuCommand command)
@@ -102,27 +106,25 @@ public sealed class TrayMenu : IDisposable
         if (model.Notices.Any(n => !before.Contains(n.Id))) openMain();
     }
 
-    static Icon CreateIcon()
+    void UpdateTrayIcon()
     {
-        using var bitmap = new Bitmap(32, 32);
-        using (var g = Graphics.FromImage(bitmap))
-        {
-            g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
-            using var fill = new SolidBrush(ColorTranslator.FromHtml("#0F766E"));
-            g.FillEllipse(fill, 2, 2, 28, 28);
-            using var ring = new Pen(Color.White, 3);
-            g.DrawEllipse(ring, 9, 9, 14, 14);
-        }
-        var handle = bitmap.GetHicon();
-        using var temp = Icon.FromHandle(handle);
-        var copy = (Icon)temp.Clone();
-        DestroyIcon(handle);
-        return copy;
+        var size = TaskbarTheme.IconSizeFor(GetDpiForSystem());
+        var uri = new Uri($"pack://application:,,,/Assets/{TaskbarTheme.IconFor(TaskbarTheme.IsLight())}");
+        var next = new Icon(Application.GetResourceStream(uri).Stream, new System.Drawing.Size(size, size));
+        icon.Icon = next;
+        iconImage?.Dispose();
+        iconImage = next;
+    }
+
+    void OnUserPreferenceChanged(object sender, UserPreferenceChangedEventArgs e)
+    {
+        if (e.Category is UserPreferenceCategory.General or UserPreferenceCategory.VisualStyle)
+            Application.Current?.Dispatcher.BeginInvoke(UpdateTrayIcon);
     }
 
     [DllImport("user32.dll")]
-    static extern bool SetForegroundWindow(IntPtr hwnd);
+    static extern uint GetDpiForSystem();
 
     [DllImport("user32.dll")]
-    static extern bool DestroyIcon(IntPtr handle);
+    static extern bool SetForegroundWindow(IntPtr hwnd);
 }
