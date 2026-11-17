@@ -327,13 +327,42 @@ func TestCheck_UntrustedReleaseURL(t *testing.T) {
 	}
 }
 
-func TestCheck_DevCurrentVersionNeverNewer(t *testing.T) {
-	g := newFakeGitHub(t, "v1.3.0")
-	cfg := g.cfg()
-	cfg.CurrentVersion = "0.0.0-dev"
-	res, err := update.Check(context.Background(), cfg)
-	if err != nil || res.IsNewer {
-		t.Errorf("res=%+v err=%v", res, err)
+func TestCheck_CurrentVersionRules(t *testing.T) {
+	tests := []struct {
+		name       string
+		current    string
+		tag        string
+		wantNewer  bool
+		wantLatest string
+	}{
+		{name: "预发布当前版遇同三段正式版", current: "1.3.0-beta.1", tag: "v1.3.0", wantNewer: true, wantLatest: "1.3.0"},
+		{name: "预发布当前版遇更高正式版", current: "1.3.0-beta.1", tag: "v1.4.0", wantNewer: true, wantLatest: "1.4.0"},
+		{name: "预发布当前版遇更低次版本正式版", current: "1.3.0-beta.1", tag: "v1.2.0"},
+		{name: "预发布当前版遇更低修订正式版", current: "1.3.0-beta.1", tag: "v1.2.9"},
+		{name: "最新标签是预发布而当前是正式版", current: "1.2.0", tag: "v1.3.0-rc.1"},
+		{name: "最新标签与当前同为预发布", current: "1.3.0-beta.1", tag: "v1.3.0-beta.2"},
+		{name: "正式版遇同版本", current: "1.3.0", tag: "v1.3.0"},
+		{name: "开发版遇正式版", current: "0.0.0-dev", tag: "v1.3.0", wantNewer: true, wantLatest: "1.3.0"},
+		{name: "当前版本后缀为空", current: "1.3.0-", tag: "v1.4.0"},
+		{name: "当前版本只有两段", current: "1.3", tag: "v1.4.0"},
+		{name: "当前版本为空串", current: "", tag: "v1.4.0"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			g := newFakeGitHub(t, tt.tag)
+			cfg := g.cfg()
+			cfg.CurrentVersion = tt.current
+			res, err := update.Check(context.Background(), cfg)
+			if err != nil {
+				t.Fatalf("Check: %v", err)
+			}
+			if res.IsNewer != tt.wantNewer {
+				t.Fatalf("IsNewer = %v, want %v", res.IsNewer, tt.wantNewer)
+			}
+			if tt.wantNewer && res.LatestVersion != tt.wantLatest {
+				t.Errorf("LatestVersion = %q, want %q", res.LatestVersion, tt.wantLatest)
+			}
+		})
 	}
 }
 

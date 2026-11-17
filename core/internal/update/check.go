@@ -75,8 +75,8 @@ func Check(ctx context.Context, cfg Config) (Result, error) {
 	if !ok {
 		return Result{}, nil
 	}
-	current, ok := ParseVersion(cfg.CurrentVersion)
-	if !ok || !latest.Newer(current) || !strings.HasPrefix(rel.HTMLURL, releaseURLBase) {
+	current, preRelease, ok := parseCurrent(cfg.CurrentVersion)
+	if !ok || !(latest.Newer(current) || preRelease && latest == current) || !strings.HasPrefix(rel.HTMLURL, releaseURLBase) {
 		return Result{}, nil
 	}
 	return Result{IsNewer: true, LatestVersion: strings.TrimPrefix(rel.TagName, "v"), URL: rel.HTMLURL}, nil

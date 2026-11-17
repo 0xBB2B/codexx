@@ -1,6 +1,6 @@
-.PHONY: test test-core test-macos test-site test-icongen build-core icons
+.PHONY: test test-core test-macos test-site test-releasetag test-icongen build-core icons
 
-test: test-core test-macos test-site test-icongen
+test: test-core test-macos test-site test-releasetag test-icongen
 
 test-core:
 	cd core && go test ./...
@@ -10,6 +10,9 @@ test-macos:
 
 test-site:
 	cd scripts/sitecheck && go test ./...
+
+test-releasetag:
+	cd scripts/releasetag && go test ./...
 
 icons:
 	cd scripts/icongen && go run . ../..

@@ -1,11 +1,48 @@
 name: release
 on:
-  release:
-    types: [released]
+  push:
+    tags: ['v*']
 permissions:
   contents: write
+concurrency:
+  group: release-${{ github.ref_name }}
+  cancel-in-progress: false
+env:
+  GH_TOKEN: ${{ github.token }}
+  GH_REPO: ${{ github.repository }}
 jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.tag.outputs.version }}
+      release_id: ${{ steps.draft.outputs.release_id }}
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v7.0.0
+        with:
+          go-version-file: scripts/releasetag/go.mod
+          cache: false
+      - id: tag
+        working-directory: scripts/releasetag
+        run: go run . "$GITHUB_REF_NAME" origin/main >> "$GITHUB_OUTPUT"
+      - id: draft
+        run: |
+          if OUT="$(gh release view "$GITHUB_REF_NAME" 2>&1)"; then
+            echo "标签 $GITHUB_REF_NAME 已有发布页，不改动它" >&2
+            exit 1
+          elif [ "$OUT" != "release not found" ]; then
+            echo "$OUT" >&2
+            exit 1
+          fi
+          ID="$(gh api "repos/$GH_REPO/releases" \
+            -f tag_name="$GITHUB_REF_NAME" -f name="$GITHUB_REF_NAME" \
+            -F draft=true -F prerelease=${{ steps.tag.outputs.prerelease }} \
+            -F generate_release_notes=true -q .id)"
+          echo "release_id=$ID" >> "$GITHUB_OUTPUT"
   macos:
+    needs: prepare
     runs-on: macos-26
     steps:
       - uses: actions/checkout@v7.0.1
@@ -14,11 +51,10 @@ jobs:
           go-version-file: core/go.mod
           cache-dependency-path: core/go.sum
       - run: make test
-      - run: scripts/package-macos.sh "${GITHUB_REF_NAME#v}" "${{ github.repository }}"
-      - run: gh release upload "$GITHUB_REF_NAME" "dist/model-bridge-${GITHUB_REF_NAME#v}-macos.dmg" --clobber
-        env:
-          GH_TOKEN: ${{ github.token }}
+      - run: scripts/package-macos.sh "${{ needs.prepare.outputs.version }}" "$GH_REPO"
+      - run: gh release upload "$GITHUB_REF_NAME" "dist/model-bridge-${{ needs.prepare.outputs.version }}-macos.dmg"
   windows:
+    needs: prepare
     runs-on: windows-2025
     defaults:
       run:
@@ -33,22 +69,24 @@ jobs:
         with:
           dotnet-version: '10.0.x'
       - run: |
-          VERSION="${GITHUB_REF_NAME#v}"
+          VERSION="${{ needs.prepare.outputs.version }}"
           (cd core && go test ./...)
           dotnet test --solution windows/ModelBridge.sln
-          scripts/package-windows.sh "$VERSION" "${{ github.repository }}"
-          gh release upload "$GITHUB_REF_NAME" "dist/model-bridge-$VERSION-windows-setup.exe" --clobber
-        env:
-          GH_TOKEN: ${{ github.token }}
-  cleanup:
+          scripts/package-windows.sh "$VERSION" "$GH_REPO"
+          gh release upload "$GITHUB_REF_NAME" "dist/model-bridge-$VERSION-windows-setup.exe"
+  publish:
+    needs: [prepare, macos, windows]
     runs-on: ubuntu-latest
-    needs: [macos, windows]
-    if: ${{ failure() || cancelled() }}
+    steps:
+      - run: gh api -X PATCH "repos/$GH_REPO/releases/${{ needs.prepare.outputs.release_id }}" -F draft=false -f make_latest=legacy
+  cleanup:
+    needs: [prepare, macos, windows, publish]
+    if: ${{ (failure() || cancelled()) && needs.prepare.outputs.release_id != '' }}
+    runs-on: ubuntu-latest
     steps:
       - run: |
-          VERSION="${GITHUB_REF_NAME#v}"
-          gh release delete-asset "$GITHUB_REF_NAME" "model-bridge-$VERSION-macos.dmg" --yes --repo "${{ github.repository }}" || true
-          gh release delete-asset "$GITHUB_REF_NAME" "model-bridge-$VERSION-windows-setup.exe" --yes --repo "${{ github.repository }}" || true
+          ID="${{ needs.prepare.outputs.release_id }}"
+          if [ "$(gh api "repos/$GH_REPO/releases/$ID" -q .draft)" = "true" ]; then
+            gh api -X DELETE "repos/$GH_REPO/releases/$ID"
+          fi
           exit 1
-        env:
-          GH_TOKEN: ${{ github.token }}

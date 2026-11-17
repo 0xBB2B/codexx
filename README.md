@@ -42,4 +42,19 @@ dotnet test --solution windows/ModelBridge.sln
 scripts/package-macos.sh 0.0.1 <owner>/<repo>
 ```
 
-产物在 `dist/` 下。Windows 安装包在发布正式版时由 `.github/workflows/release.yml` 构建；拉取请求时只验证打包能跑通，不上传。
+产物在 `dist/` 下。Windows 安装包只在发版时由 `.github/workflows/release.yml` 构建；拉取请求时只验证打包能跑通，不上传。
+
+## 发版
+
+版本号只由标签决定。拉取请求合并到 main 之后，在 main 的提交上打标签并推送：
+
+```
+git switch main && git pull
+git tag v1.2.3
+git push origin v1.2.3
+```
+
+- 标签格式是 `v<主>.<次>.<修订>`，可以带后缀（如 `v1.3.0-beta.1`）。带后缀的发成预发布版，已装正式版的用户收不到它的更新提示。
+- 标签必须打在 main 的提交上。拉取请求用 squash 合并时，功能分支上的提交不在 main 上，所以要合并后再打。
+- 自动流程先建草稿发布页，两端测试、打包、上传都成功后才公开，发布说明由 GitHub 自动生成。中途失败会删掉草稿；修好后删除标签再重推。
+- 重推时如果提示这个标签「已有发布页」，先到 Releases 页面删掉那个发布页（包括没删掉的草稿）再推。

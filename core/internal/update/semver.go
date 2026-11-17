@@ -34,3 +34,12 @@ func (v Version) Newer(o Version) bool {
 	}
 	return false
 }
+
+func parseCurrent(s string) (v Version, prerelease, ok bool) {
+	core, suffix, hasSuffix := strings.Cut(s, "-")
+	if hasSuffix && (suffix == "" || strings.Trim(suffix, "0123456789.abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ") != "") {
+		return Version{}, false, false
+	}
+	v, ok = ParseVersion(core)
+	return v, hasSuffix, ok
+}

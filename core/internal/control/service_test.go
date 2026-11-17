@@ -2020,7 +2020,7 @@ func TestServe_ScheduledCheckFailureWritesLog(t *testing.T) {
 	}
 }
 
-func TestCheckUpdate_DevVersionNeverNewer(t *testing.T) {
+func TestCheckUpdate_DevVersionSeesStableRelease(t *testing.T) {
 	e := newEnv(t, false)
 	g := newGitHubStub(t, "v1.3.0")
 	opts := withUpdate(e.opts, g, nil)
@@ -2029,7 +2029,7 @@ func TestCheckUpdate_DevVersionNeverNewer(t *testing.T) {
 	t.Cleanup(func() { _ = svc.Shutdown(context.Background(), false) })
 
 	res, err := svc.CheckUpdate(context.Background(), true)
-	if err != nil || res.IsNewer {
+	if err != nil || !res.IsNewer {
 		t.Errorf("res=%+v err=%v", res, err)
 	}
 }
