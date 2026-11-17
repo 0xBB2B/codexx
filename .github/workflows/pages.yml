@@ -6,6 +6,9 @@ on:
   workflow_dispatch:
 permissions:
   contents: read
+concurrency:
+  group: pages
+  cancel-in-progress: false
 jobs:
   check:
     timeout-minutes: 10
@@ -23,28 +26,37 @@ jobs:
         with:
           go-version-file: scripts/sitecheck/go.mod
           cache: false
+      - name: Build site
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if OUT="$(gh api "repos/${{ github.repository }}/releases/latest" -q .tag_name 2>&1)"; then
+            VER="${OUT#v}"
+          elif [[ "$OUT" == *"HTTP 404"* ]]; then
+            VER=""
+          else
+            echo "$OUT" >&2
+            exit 1
+          fi
+          cd scripts/sitebuild
+          go run . ../../site ../../_site "$VER"
       - name: Check site
         working-directory: scripts/sitecheck
-        run: go run . ../../site
+        run: go run . ../../_site
+      - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        with:
+          path: _site
   deploy:
     timeout-minutes: 10
     needs: check
     runs-on: ubuntu-latest
-    concurrency:
-      group: pages
-      cancel-in-progress: false
     permissions:
-      contents: read
       pages: write
       id-token: write
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0
-      - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
-        with:
-          path: site
       - id: deployment
         uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1

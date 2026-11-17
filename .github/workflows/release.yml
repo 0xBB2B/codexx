@@ -19,6 +19,7 @@ jobs:
     outputs:
       version: ${{ steps.tag.outputs.version }}
       release_id: ${{ steps.draft.outputs.release_id }}
+      prerelease: ${{ steps.tag.outputs.prerelease }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -109,6 +110,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - run: gh api -X PATCH "repos/$GH_REPO/releases/${{ needs.prepare.outputs.release_id }}" -F draft=false -f make_latest=legacy
+  site:
+    timeout-minutes: 5
+    permissions:
+      actions: write
+    needs: [prepare, publish]
+    if: needs.prepare.outputs.prerelease == 'false'
+    runs-on: ubuntu-latest
+    steps:
+      - run: gh workflow run pages.yml --ref main -R "$GH_REPO"
   cleanup:
     timeout-minutes: 5
     permissions:

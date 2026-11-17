@@ -2,6 +2,8 @@ package main
 
 import (
 	"os"
+	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
@@ -68,7 +70,6 @@ func TestSite_RequiredText(t *testing.T) {
 		{"首次设置", "首次设置"},
 		{"主窗口", "主窗口"},
 		{"菜单栏菜单", "菜单栏菜单"},
-		{"下载按钮", "去 Releases 页面下载"},
 		{"商标声明", "ChatGPT 和 Codex 是各自所有者的商标，本项目与它们的所有者没有隶属关系。"},
 		{"英文界面仅中文", "The app’s interface is available in Chinese only."},
 		{"英文中转标注", "Relay models are labelled “中转” (relay) in the list."},
@@ -486,5 +487,364 @@ func TestSite_FirstRunMockupMatchesApp(t *testing.T) {
 	}
 	if !strings.Contains(block, `<div class="am-help">1~16 个字，不能重名，不能含「·」。</div>`) {
 		t.Error("名字下面的帮助文字应为「1~16 个字，不能重名，不能含「·」。」")
+	}
+}
+
+func cssDeclarations(html string, match func(selector string) bool) []map[string]string {
+	vars := map[string]string{}
+	for _, m := range regexp.MustCompile(`(--[\w-]+):\s*([^;}]+)`).FindAllStringSubmatch(html, -1) {
+		vars[m[1]] = strings.TrimSpace(m[2])
+	}
+	resolve := func(v string) string {
+		return regexp.MustCompile(`var\((--[\w-]+)\)`).ReplaceAllStringFunc(strings.ToLower(v), func(ref string) string {
+			return vars[regexp.MustCompile(`--[\w-]+`).FindString(ref)]
+		})
+	}
+	var out []map[string]string
+	for _, m := range regexp.MustCompile(`([^{}@;]+)\{([^{}]*)\}`).FindAllStringSubmatch(html, -1) {
+		hit := false
+		for _, sel := range strings.Split(m[1], ",") {
+			if match(strings.Join(strings.Fields(sel), " ")) {
+				hit = true
+			}
+		}
+		if !hit {
+			continue
+		}
+		decls := map[string]string{}
+		for _, d := range strings.Split(m[2], ";") {
+			name, value, ok := strings.Cut(d, ":")
+			if ok {
+				decls[strings.TrimSpace(name)] = strings.Join(strings.Fields(resolve(strings.TrimSpace(value))), " ")
+			}
+		}
+		out = append(out, decls)
+	}
+	return out
+}
+
+func declared(rules []map[string]string, name string) string {
+	var got string
+	for _, r := range rules {
+		if v, ok := r[name]; ok {
+			got = v
+		}
+	}
+	return got
+}
+
+func TestSite_TextLinksHoverAndActiveColors(t *testing.T) {
+	t.Parallel()
+	html := readSite(t)
+	links := []struct {
+		name string
+		base string
+	}{
+		{"顶栏 GitHub 链接", ".gh"},
+		{"页脚链接", ".foot-r a"},
+	}
+	states := []struct {
+		pseudo string
+		want   string
+	}{
+		{":hover", "#115e59"},
+		{":active", "#172b3a"},
+	}
+	for _, l := range links {
+		for _, st := range states {
+			t.Run(l.name+st.pseudo, func(t *testing.T) {
+				t.Parallel()
+				rules := cssDeclarations(html, func(sel string) bool { return sel == l.base+st.pseudo })
+				if got := declared(rules, "color"); got != st.want {
+					t.Errorf("%s%s 的 color = %q，want %q", l.base, st.pseudo, got, st.want)
+				}
+			})
+		}
+	}
+}
+
+func TestSite_TextLinksDefaultColorUnchanged(t *testing.T) {
+	t.Parallel()
+	html := readSite(t)
+	rules := cssDeclarations(html, func(sel string) bool { return sel == "a" })
+	if got := declared(rules, "color"); got != "#0f766e" {
+		t.Errorf("a 的默认 color = %q，want #0f766e", got)
+	}
+}
+
+func TestSite_PressedLooksSelected(t *testing.T) {
+	t.Parallel()
+	html := readSite(t)
+	tests := []struct {
+		name     string
+		active   func(sel string) bool
+		selected func(sel string) bool
+		bg       string
+		fg       string
+	}{
+		{
+			"语言切换",
+			func(sel string) bool {
+				return strings.HasPrefix(sel, ".lang button") && strings.HasSuffix(sel, ":active")
+			},
+			func(sel string) bool { return sel == `.lang button[aria-pressed="true"]` },
+			"#e7f2f0", "#0f766e",
+		},
+		{
+			"页签",
+			func(sel string) bool {
+				return strings.HasPrefix(sel, ".tabs button") && strings.HasSuffix(sel, ":active")
+			},
+			func(sel string) bool { return sel == `.tabs button[aria-selected="true"]` },
+			"#0f766e", "#fff",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			active := cssDeclarations(html, tt.active)
+			selected := cssDeclarations(html, tt.selected)
+			if len(active) == 0 {
+				t.Fatal("没有 :active 规则")
+			}
+			for _, prop := range []string{"background", "color"} {
+				if a, s := declared(active, prop), declared(selected, prop); a == "" || a != s {
+					t.Errorf(":active 的 %s = %q，选中样式的 %s = %q，应一致", prop, a, prop, s)
+				}
+			}
+			if got := declared(active, "background"); got != tt.bg {
+				t.Errorf(":active 的 background = %q，want %s", got, tt.bg)
+			}
+			if got := declared(active, "color"); got != tt.fg {
+				t.Errorf(":active 的 color = %q，want %s", got, tt.fg)
+			}
+		})
+	}
+}
+
+func TestSite_FaqSecondAnswer(t *testing.T) {
+	t.Parallel()
+	second := regexp.MustCompile(`(?s)<details\b[^>]*>.*?</details>`).FindAllString(readSite(t), -1)
+	if len(second) < 2 {
+		t.Fatalf("details 数量 = %d", len(second))
+	}
+	answer := second[1]
+	tests := []struct {
+		name string
+		text string
+	}{
+		{"中文回答", `<span data-l="zh">不会，只发给官方服务。请求先到本机的助手，再转给官方服务，官方凭据也只发往官方服务。</span>`},
+		{"英文回答不变", `<span data-l="en">It goes to the official service only. The request reaches ModelBridge on your machine, which passes official-model requests to the official service. Official credentials go there and nowhere else.</span>`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if !strings.Contains(answer, tt.text) {
+				t.Errorf("第 2 问缺少 %s", tt.text)
+			}
+		})
+	}
+	if strings.Contains(answer, "助手再把官方模型的请求转给官方服务") {
+		t.Error("第 2 问仍是旧的中文回答")
+	}
+}
+
+func sectionOf(t *testing.T, html, id string) string {
+	t.Helper()
+	start := strings.Index(html, `id="`+id+`"`)
+	if start < 0 {
+		t.Fatalf("找不到区块 %q", id)
+	}
+	end := strings.Index(html[start:], "</section>")
+	if end < 0 {
+		t.Fatalf("区块 %q 没有闭合", id)
+	}
+	return html[start : start+end]
+}
+
+const disabledButton = `<button class="btn btn-1" type="button" disabled>`
+
+func TestSite_Unreleased_HeroHasOnlyDisabledButton(t *testing.T) {
+	t.Parallel()
+	hero := sectionOf(t, readSite(t), "hero")
+	if n := strings.Count(hero, disabledButton); n != 1 {
+		t.Fatalf("首屏禁用按钮 %s 出现 %d 次，want 1", disabledButton, n)
+	}
+	for _, want := range []string{"暂未发布", "Not released yet"} {
+		if !strings.Contains(hero, want) {
+			t.Errorf("首屏缺少 %q", want)
+		}
+	}
+	if re := regexp.MustCompile(`<a\b[^>]*href="[^"]*/releases[^"]*"`); re.MatchString(hero) {
+		t.Errorf("首屏仍有指向 /releases 的链接: %s", re.FindString(hero))
+	}
+	if regexp.MustCompile(`<a\b[^>]*class="[^"]*\bbtn-1\b`).MatchString(hero) {
+		t.Error("首屏仍有链接形式的主按钮")
+	}
+	btn, src := strings.Index(hero, disabledButton), strings.Index(hero, "查看源码")
+	if src < 0 || src < btn {
+		t.Errorf("「查看源码」应在禁用按钮之后: 按钮 %d，查看源码 %d", btn, src)
+	}
+}
+
+func TestSite_Unreleased_DownloadSection(t *testing.T) {
+	t.Parallel()
+	dl := sectionOf(t, readSite(t), "download")
+	cards := regexp.MustCompile(`(?s)<article class="get">.*?</article>`).FindAllString(dl, -1)
+	if len(cards) != 2 {
+		t.Fatalf("下载卡片 = %d 张，want 2", len(cards))
+	}
+	for i, card := range cards {
+		if n := strings.Count(card, disabledButton); n != 1 {
+			t.Errorf("第 %d 张卡片禁用按钮 %d 个，want 1", i+1, n)
+		}
+		if !strings.Contains(card, "暂未发布") || !strings.Contains(card, "Not released yet") {
+			t.Errorf("第 %d 张卡片缺少「暂未发布」中英文", i+1)
+		}
+		if strings.Contains(card, "<a ") {
+			t.Errorf("第 %d 张卡片里不应有链接", i+1)
+		}
+	}
+	for _, want := range []string{"正式版还没有发布。", "No release has been published yet."} {
+		if !strings.Contains(dl, want) {
+			t.Errorf("下载区缺少说明 %q", want)
+		}
+	}
+	if !strings.Contains(dl, `href="https://github.com/0xBB2B/codexx/releases"`) || !strings.Contains(dl, "查看所有版本") {
+		t.Error("下载区缺少指向 /releases 的「查看所有版本」链接")
+	}
+	if !strings.Contains(dl, "All releases") {
+		t.Error("下载区缺少英文「All releases」")
+	}
+}
+
+func TestSite_NoInstallerFileNameShown(t *testing.T) {
+	t.Parallel()
+	html := readSite(t)
+	if re := regexp.MustCompile(`model-bridge-[^"\s]*-(?:macos\.dmg|windows-setup\.exe)`); re.MatchString(html) {
+		t.Errorf("页面出现安装包文件名: %s", re.FindString(html))
+	}
+	for _, banned := range []string{"文件名", "File name"} {
+		if strings.Contains(html, banned) {
+			t.Errorf("页面仍含 %q", banned)
+		}
+	}
+}
+
+func TestSite_StepOneText(t *testing.T) {
+	t.Parallel()
+	start := sectionOf(t, readSite(t), "start")
+	for _, want := range []string{
+		"先装好 ChatGPT 桌面版，再用本页的下载按钮下载安装包。安装包没有开发者签名，第一次打开要手动放行，步骤写在「下载」一节。",
+		"Install the ChatGPT desktop app first, then get the installer with a download button on this page. The installer is not code-signed, so you approve it by hand the first time. The steps are in the Download section.",
+	} {
+		if !strings.Contains(start, want) {
+			t.Errorf("三步上手缺少第 1 步文字 %q", want)
+		}
+	}
+}
+
+func TestSite_DisabledButtonColors(t *testing.T) {
+	t.Parallel()
+	var found bool
+	for _, m := range regexp.MustCompile(`\{([^{}]*)\}`).FindAllStringSubmatch(readSite(t), -1) {
+		body := strings.ToLower(strings.Join(strings.Fields(m[1]), ""))
+		if strings.Contains(body, "background:#e9edf1") && strings.Contains(body, "color:#586878") {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("没有同时设置 background:#e9edf1 和 color:#586878 的 CSS 规则")
+	}
+}
+
+func TestSite_SitebuildOutputPassesCheck(t *testing.T) {
+	t.Parallel()
+	bin := filepath.Join(t.TempDir(), "sitebuild")
+	cmd := exec.Command("go", "build", "-o", bin, ".")
+	cmd.Dir = "../sitebuild"
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("构建 sitebuild 失败: %v\n%s", err, out)
+	}
+	outDir := filepath.Join(t.TempDir(), "out")
+	if out, err := exec.Command(bin, siteDir, outDir, "1.2.3").CombinedOutput(); err != nil {
+		t.Fatalf("运行 sitebuild 失败: %v\n%s", err, out)
+	}
+	got, err := Check(outDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 0 {
+		t.Errorf("sitebuild 的输出有 %d 处违规: %v", len(got), got)
+	}
+	html, err := os.ReadFile(filepath.Join(outDir, "index.html"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(html), "releases/download/v1.2.3/model-bridge-1.2.3-macos.dmg") {
+		t.Error("输出里没有 macOS 直链，检查通过没有意义")
+	}
+}
+
+func TestSite_DisabledButtonStaysPutOnHoverAndActive(t *testing.T) {
+	t.Parallel()
+	html := readSite(t)
+	for _, pseudo := range []string{":hover", ":active"} {
+		t.Run(pseudo, func(t *testing.T) {
+			t.Parallel()
+			rules := cssDeclarations(html, func(sel string) bool {
+				return strings.Contains(sel, "disabled") && strings.HasSuffix(sel, pseudo)
+			})
+			if len(rules) == 0 {
+				t.Fatalf("没有禁用按钮的 %s 规则", pseudo)
+			}
+			bg := declared(rules, "background")
+			if bg == "" {
+				bg = declared(rules, "background-color")
+			}
+			if bg != "#e9edf1" {
+				t.Errorf("background = %q，want #e9edf1", bg)
+			}
+			if got := declared(rules, "color"); got != "#586878" {
+				t.Errorf("color = %q，want #586878", got)
+			}
+			if got := declared(rules, "transform"); got != "none" {
+				t.Errorf("transform = %q，want none", got)
+			}
+		})
+	}
+}
+
+func TestSite_AllReleasesLinkHoverAndActiveColors(t *testing.T) {
+	t.Parallel()
+	html := readSite(t)
+	for pseudo, want := range map[string]string{":hover": "#115e59", ":active": "#172b3a"} {
+		t.Run(pseudo, func(t *testing.T) {
+			t.Parallel()
+			rules := cssDeclarations(html, func(sel string) bool { return sel == ".more a"+pseudo })
+			if got := declared(rules, "color"); got != want {
+				t.Errorf(".more a%s 的 color = %q，want %q", pseudo, got, want)
+			}
+		})
+	}
+}
+
+func TestSite_ButtonGrowsWhenTextWraps(t *testing.T) {
+	t.Parallel()
+	html := readSite(t)
+	rules := cssDeclarations(html, func(sel string) bool { return sel == ".btn" })
+	if got := declared(rules, "min-height"); got != "48px" {
+		t.Errorf(".btn 的 min-height = %q，want 48px", got)
+	}
+	if got := declared(rules, "white-space"); got == "nowrap" {
+		t.Error(".btn 不能设 white-space:nowrap，文字要能折行")
+	}
+	for _, r := range cssDeclarations(html, func(sel string) bool {
+		fields := strings.Fields(sel)
+		return len(fields) > 0 && strings.HasPrefix(fields[len(fields)-1], ".btn")
+	}) {
+		if h, ok := r["height"]; ok {
+			t.Errorf("按钮规则不能用固定 height（%s），应改用 min-height", h)
+		}
 	}
 }
