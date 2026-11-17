@@ -11,8 +11,8 @@ var icnsTypes = []struct {
 	size int
 	typ  string
 }{
-	{16, "icp4"}, {32, "icp5"}, {64, "icp6"}, {128, "ic07"},
-	{256, "ic08"}, {512, "ic09"}, {1024, "ic10"},
+	{16, "icp4"}, {32, "ic11"}, {32, "icp5"}, {64, "ic12"}, {128, "ic07"},
+	{256, "ic13"}, {256, "ic08"}, {512, "ic14"}, {512, "ic09"}, {1024, "ic10"},
 }
 
 func WriteICNS(w io.Writer, pngs map[int][]byte) error {

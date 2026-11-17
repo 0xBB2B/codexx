@@ -5,8 +5,67 @@ import (
 	"encoding/binary"
 	"image"
 	"image/png"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"slices"
 	"testing"
 )
+
+var wantIconset = map[string]int{
+	"icon_16x16.png":      16,
+	"icon_16x16@2x.png":   32,
+	"icon_32x32.png":      32,
+	"icon_32x32@2x.png":   64,
+	"icon_128x128.png":    128,
+	"icon_128x128@2x.png": 256,
+	"icon_256x256.png":    256,
+	"icon_256x256@2x.png": 512,
+	"icon_512x512.png":    512,
+	"icon_512x512@2x.png": 1024,
+}
+
+func requireIconset(t *testing.T, icns string) {
+	t.Helper()
+	if _, err := exec.LookPath("iconutil"); err != nil {
+		t.Skip("iconutil 不存在")
+	}
+	dir := filepath.Join(t.TempDir(), "x.iconset")
+	if out, err := exec.Command("iconutil", "-c", "iconset", icns, "-o", dir).CombinedOutput(); err != nil {
+		t.Fatalf("iconutil: %v\n%s", err, out)
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]bool{}
+	for _, e := range entries {
+		got[e.Name()] = true
+		want, ok := wantIconset[e.Name()]
+		if !ok {
+			t.Errorf("多出文件 %s", e.Name())
+			continue
+		}
+		f, err := os.Open(filepath.Join(dir, e.Name()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		cfg, err := png.DecodeConfig(f)
+		f.Close()
+		if err != nil {
+			t.Errorf("%s: %v", e.Name(), err)
+			continue
+		}
+		if cfg.Width != want || cfg.Height != want {
+			t.Errorf("%s 像素 = %dx%d, want %d", e.Name(), cfg.Width, cfg.Height, want)
+		}
+	}
+	for name := range wantIconset {
+		if !got[name] {
+			t.Errorf("缺少文件 %s", name)
+		}
+	}
+}
 
 var pngSignature = []byte{0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n'}
 
@@ -52,10 +111,10 @@ func TestWriteICNS(t *testing.T) {
 		}
 	})
 
-	t.Run("条目数等于尺寸数且长度自洽", func(t *testing.T) {
+	t.Run("条目类型码按苹果约定且长度自洽", func(t *testing.T) {
 		t.Parallel()
-		count := 0
-		for off := 8; off < len(out); count++ {
+		var types []string
+		for off := 8; off < len(out); {
 			if off+8 > len(out) {
 				t.Fatalf("条目头越界 off=%d", off)
 			}
@@ -63,11 +122,24 @@ func TestWriteICNS(t *testing.T) {
 			if n < 8 || off+n > len(out) {
 				t.Fatalf("条目长度非法 off=%d n=%d", off, n)
 			}
+			types = append(types, string(out[off:off+4]))
 			off += n
 		}
-		if count != len(sizes) {
-			t.Errorf("条目数 = %d, want %d", count, len(sizes))
+		want := []string{"icp4", "ic11", "icp5", "ic12", "ic07", "ic13", "ic08", "ic14", "ic09", "ic10"}
+		slices.Sort(types)
+		slices.Sort(want)
+		if !slices.Equal(types, want) {
+			t.Errorf("类型码 = %v, want %v", types, want)
 		}
+	})
+
+	t.Run("iconutil 解出 10 个文件", func(t *testing.T) {
+		t.Parallel()
+		path := filepath.Join(t.TempDir(), "a.icns")
+		if err := os.WriteFile(path, out, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		requireIconset(t, path)
 	})
 
 	t.Run("每张 PNG 原样打包", func(t *testing.T) {
@@ -78,6 +150,11 @@ func TestWriteICNS(t *testing.T) {
 			}
 		}
 	})
+}
+
+func TestCommittedAppIcon(t *testing.T) {
+	t.Parallel()
+	requireIconset(t, filepath.Join("..", "..", "macos", "Resources", "AppIcon.icns"))
 }
 
 func TestWriteICNS_Deterministic(t *testing.T) {

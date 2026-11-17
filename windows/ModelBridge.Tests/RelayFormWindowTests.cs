@@ -36,7 +36,7 @@ public class RelayFormWindowTests
     [TestMethod]
     public async Task Add_Is520Wide_HeaderIcon24AndTitle()
     {
-        await WithFormAsync(h => h.Model.BeginAddRelay(), (_, _, window) =>
+        await WithFormAsync(h => Editors.Add(h.Model), (_, _, window) =>
         {
             Assert.IsTrue(window.ActualWidth == 520 || UiHost.All<FrameworkElement>(window).Any(e => Math.Abs(e.ActualWidth - 520) < 0.5), "width 520");
             var title = UiHost.FindText(window, "添加配置");
@@ -50,7 +50,7 @@ public class RelayFormWindowTests
     [TestMethod]
     public async Task Edit_ShowsEditTitleAndExistingName()
     {
-        await WithFormAsync(h => h.Model.BeginEditRelay("1"), (_, _, window) =>
+        await WithFormAsync(h => Editors.Edit(h.Model, "1"), (_, _, window) =>
         {
             Assert.IsNotNull(UiHost.FindText(window, "编辑配置"));
             Assert.IsTrue(UiHost.All<TextBox>(window).Any(t => t.Text == "中转"));
@@ -61,7 +61,7 @@ public class RelayFormWindowTests
     [TestMethod]
     public async Task Form_ThreeRequiredFields_WithHelpTexts_AndButtons()
     {
-        await WithFormAsync(h => h.Model.BeginAddRelay(), (_, _, window) =>
+        await WithFormAsync(h => Editors.Add(h.Model), (_, _, window) =>
         {
             Assert.AreEqual(3, UiHost.Texts(window).Count(t => t == "必填"));
             foreach (var label in new[] { "名字", "Base URL", "API Key" })
@@ -77,7 +77,7 @@ public class RelayFormWindowTests
     [TestMethod]
     public async Task Error_ReplacesHelpInPlace_HeightUnchanged()
     {
-        await WithFormAsync(h => h.Model.BeginAddRelay(), async (_, editor, window) =>
+        await WithFormAsync(h => Editors.Add(h.Model), async (_, editor, window) =>
         {
             var help = UiHost.FindText(window, NameHelp)!;
             var helpY = UiHost.PositionIn(window, help).Y;
@@ -98,7 +98,7 @@ public class RelayFormWindowTests
     [TestMethod]
     public async Task Saving_ShowsProgressText_DisablesFieldsAndCancel()
     {
-        await WithFormAsync(h => h.Model.BeginAddRelay(), async (h, editor, window) =>
+        await WithFormAsync(h => Editors.Add(h.Model), async (h, editor, window) =>
         {
             var gate = new TaskCompletionSource<JsonElement>();
             h.Core.OnAsync("save_relay", _ => gate.Task);
@@ -135,7 +135,7 @@ public class RelayFormWindowTests
         if (seedLongName != null) h.Seed("2", seedLongName, "https://relay2.example.com/v1", "sk-example-0002");
         await h.Model.StartAsync();
         h.Push();
-        var editor = h.Model.BeginAddRelay();
+        var editor = Editors.Add(h.Model);
         editor.NameInput = "B家";
         editor.BaseUrlInput = "https://relay3.example.com/v1";
         editor.ApiKeyInput = "sk-example-0003";
@@ -187,7 +187,7 @@ public class RelayFormWindowTests
     [TestMethod]
     public async Task ApiKey_MaskedByDefault_VisibleAfterShow_BaseUrlMonospace()
     {
-        await WithFormAsync(h => h.Model.BeginEditRelay("1"), async (_, _, window) =>
+        await WithFormAsync(h => Editors.Edit(h.Model, "1"), async (_, _, window) =>
         {
             const string key = "sk-example-0001";
             var masked = UiHost.All<PasswordBox>(window).FirstOrDefault(p => p.IsVisible);
@@ -211,7 +211,7 @@ public class RelayFormWindowTests
     [TestMethod]
     public async Task Saving_CloseIsCancelled_WindowStaysVisible()
     {
-        await WithFormAsync(h => h.Model.BeginAddRelay(), async (h, editor, window) =>
+        await WithFormAsync(h => Editors.Add(h.Model), async (h, editor, window) =>
         {
             var gate = new TaskCompletionSource<JsonElement>();
             h.Core.OnAsync("save_relay", _ => gate.Task);

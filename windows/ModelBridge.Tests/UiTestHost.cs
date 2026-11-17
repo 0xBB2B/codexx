@@ -101,3 +101,20 @@ static class UiHost
         throw new DirectoryNotFoundException("ModelBridge.App");
     }
 }
+
+static class Editors
+{
+    public static ModelBridge.UI.RelayEditorModel Add(ModelBridge.UI.AppModel model)
+    {
+        var editor = model.BeginAddRelay();
+        Microsoft.VisualStudio.TestTools.UnitTesting.Assert.IsNotNull(editor);
+        return editor;
+    }
+
+    public static ModelBridge.UI.RelayEditorModel Edit(ModelBridge.UI.AppModel model, string id)
+    {
+        var editor = model.BeginEditRelay(id);
+        Microsoft.VisualStudio.TestTools.UnitTesting.Assert.IsNotNull(editor);
+        return editor;
+    }
+}

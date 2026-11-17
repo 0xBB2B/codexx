@@ -262,7 +262,7 @@ public class MultiRelayTests
         var h = new MultiHarness();
         await h.StartWithTwoAsync();
 
-        var editor = h.Model.BeginAddRelay();
+        var editor = Editors.Add(h.Model);
 
         Assert.AreEqual("添加配置", editor.Title);
         Assert.AreEqual("保存在系统凭据管理器中。", editor.ApiKeyHelp);
@@ -274,7 +274,7 @@ public class MultiRelayTests
     {
         var h = new MultiHarness();
         await h.StartWithTwoAsync();
-        var editor = h.Model.BeginAddRelay();
+        var editor = Editors.Add(h.Model);
         Fill(editor, name: "   ");
 
         Assert.IsFalse(await editor.SaveAsync());
@@ -288,7 +288,7 @@ public class MultiRelayTests
     {
         var h = new MultiHarness();
         await h.StartWithTwoAsync();
-        var editor = h.Model.BeginAddRelay();
+        var editor = Editors.Add(h.Model);
         var name = new string('名', 17);
         Fill(editor, name: name);
 
@@ -305,7 +305,7 @@ public class MultiRelayTests
     {
         var h = new MultiHarness();
         await h.StartWithTwoAsync();
-        var editor = h.Model.BeginAddRelay();
+        var editor = Editors.Add(h.Model);
         Fill(editor, name: new string('名', 16));
 
         Assert.IsTrue(await editor.SaveAsync());
@@ -318,7 +318,7 @@ public class MultiRelayTests
     {
         var h = new MultiHarness();
         await h.StartWithTwoAsync();
-        var editor = h.Model.BeginAddRelay();
+        var editor = Editors.Add(h.Model);
         Fill(editor, name: "  " + new string('名', 16) + "  ");
 
         Assert.IsTrue(await editor.SaveAsync());
@@ -329,7 +329,7 @@ public class MultiRelayTests
     {
         var h = new MultiHarness();
         await h.StartWithTwoAsync();
-        var editor = h.Model.BeginAddRelay();
+        var editor = Editors.Add(h.Model);
         Fill(editor, name: "中转·主力");
 
         await editor.SaveAsync();
@@ -343,7 +343,7 @@ public class MultiRelayTests
     {
         var h = new MultiHarness();
         await h.StartWithTwoAsync();
-        var editor = h.Model.BeginAddRelay();
+        var editor = Editors.Add(h.Model);
         Fill(editor, name: "a家");
 
         await editor.SaveAsync();
@@ -357,7 +357,7 @@ public class MultiRelayTests
     {
         var h = new MultiHarness();
         await h.StartWithTwoAsync();
-        var editor = h.Model.BeginAddRelay();
+        var editor = Editors.Add(h.Model);
         Fill(editor, url: "");
 
         await editor.SaveAsync();
@@ -372,7 +372,7 @@ public class MultiRelayTests
     {
         var h = new MultiHarness();
         await h.StartWithTwoAsync();
-        var editor = h.Model.BeginAddRelay();
+        var editor = Editors.Add(h.Model);
         Fill(editor, url: "http://relay3.example.com");
 
         await editor.SaveAsync();
@@ -386,7 +386,7 @@ public class MultiRelayTests
     {
         var h = new MultiHarness();
         await h.StartWithTwoAsync();
-        var editor = h.Model.BeginAddRelay();
+        var editor = Editors.Add(h.Model);
         Fill(editor, key: " ");
 
         await editor.SaveAsync();
@@ -400,7 +400,7 @@ public class MultiRelayTests
     {
         var h = new MultiHarness();
         await h.StartWithTwoAsync();
-        var editor = h.Model.BeginAddRelay();
+        var editor = Editors.Add(h.Model);
 
         await editor.SaveAsync();
 
@@ -414,7 +414,7 @@ public class MultiRelayTests
     {
         var h = new MultiHarness();
         await h.StartWithTwoAsync();
-        var editor = h.Model.BeginAddRelay();
+        var editor = Editors.Add(h.Model);
         await editor.SaveAsync();
 
         editor.NameInput = "B家";
@@ -430,7 +430,7 @@ public class MultiRelayTests
     {
         var h = new MultiHarness();
         await h.StartWithTwoAsync();
-        var editor = h.Model.BeginAddRelay();
+        var editor = Editors.Add(h.Model);
         Fill(editor, name: "  B家  ");
 
         Assert.IsTrue(await editor.SaveAsync());
@@ -449,7 +449,7 @@ public class MultiRelayTests
         await h.StartWithTwoAsync();
         h.Core.NextId = "3";
         h.Log.Clear();
-        var editor = h.Model.BeginAddRelay();
+        var editor = Editors.Add(h.Model);
         Fill(editor);
 
         await editor.SaveAsync();
@@ -467,7 +467,7 @@ public class MultiRelayTests
         var h = new MultiHarness();
         await h.StartWithTwoAsync();
         h.Core.NextId = "3";
-        var editor = h.Model.BeginAddRelay();
+        var editor = Editors.Add(h.Model);
         Fill(editor);
 
         await editor.SaveAsync();
@@ -484,7 +484,7 @@ public class MultiRelayTests
         var h = new MultiHarness();
         await h.StartWithTwoAsync();
         h.Core.Fail("save_relay", "relay_401");
-        var editor = h.Model.BeginAddRelay();
+        var editor = Editors.Add(h.Model);
         Fill(editor);
 
         Assert.IsFalse(await editor.SaveAsync());
@@ -506,7 +506,7 @@ public class MultiRelayTests
         var h = new MultiHarness();
         await h.StartWithTwoAsync();
         h.Core.Fail("save_relay", "relay_401");
-        var editor = h.Model.BeginAddRelay();
+        var editor = Editors.Add(h.Model);
         Fill(editor);
 
         await editor.SaveAsync();
@@ -521,7 +521,7 @@ public class MultiRelayTests
         var h = new MultiHarness();
         await h.StartWithTwoAsync();
         h.Core.Fail("save_relay", "name_duplicate", "A家");
-        var editor = h.Model.BeginAddRelay();
+        var editor = Editors.Add(h.Model);
         Fill(editor, name: "B家");
 
         await editor.SaveAsync();
@@ -537,7 +537,7 @@ public class MultiRelayTests
         await h.StartWithTwoAsync();
         var gate = new TaskCompletionSource<JsonElement>();
         h.Core.OnAsync("save_relay", _ => gate.Task);
-        var editor = h.Model.BeginAddRelay();
+        var editor = Editors.Add(h.Model);
         Fill(editor);
 
         var saving = editor.SaveAsync();
@@ -563,7 +563,7 @@ public class MultiRelayTests
         await h.StartWithTwoAsync();
         h.Core.NextId = "3";
         h.Settings.SaveException = new IOException("disk full");
-        var editor = h.Model.BeginAddRelay();
+        var editor = Editors.Add(h.Model);
         Fill(editor);
 
         Assert.IsFalse(await editor.SaveAsync());
@@ -581,7 +581,7 @@ public class MultiRelayTests
         await h.StartWithTwoAsync();
         h.Core.NextId = "3";
         h.Vault.SaveException = new IOException("denied");
-        var editor = h.Model.BeginAddRelay();
+        var editor = Editors.Add(h.Model);
         Fill(editor);
 
         Assert.IsFalse(await editor.SaveAsync());
@@ -599,7 +599,7 @@ public class MultiRelayTests
         var h = new MultiHarness();
         await h.StartWithTwoAsync();
 
-        var editor = h.Model.BeginEditRelay("2");
+        var editor = Editors.Edit(h.Model, "2");
 
         Assert.AreEqual("编辑配置", editor.Title);
         Assert.AreEqual("A家", editor.NameInput);
@@ -612,7 +612,7 @@ public class MultiRelayTests
     {
         var h = new MultiHarness();
         await h.StartWithTwoAsync();
-        var editor = h.Model.BeginEditRelay("2");
+        var editor = Editors.Edit(h.Model, "2");
         editor.NameInput = "a家";
 
         Assert.IsTrue(await editor.SaveAsync());
@@ -624,7 +624,7 @@ public class MultiRelayTests
     {
         var h = new MultiHarness();
         await h.StartWithTwoAsync();
-        var editor = h.Model.BeginEditRelay("1");
+        var editor = Editors.Edit(h.Model, "1");
         editor.NameInput = "主线路";
 
         Assert.IsTrue(await editor.SaveAsync());
@@ -644,7 +644,7 @@ public class MultiRelayTests
         var h = new MultiHarness();
         await h.StartWithTwoAsync();
         h.Settings.SaveException = new IOException("disk full");
-        var editor = h.Model.BeginEditRelay("2");
+        var editor = Editors.Edit(h.Model, "2");
         editor.ApiKeyInput = "sk-example-9999";
 
         Assert.IsFalse(await editor.SaveAsync());
@@ -769,7 +769,7 @@ public class MultiRelayTests
         await h.StartWithTwoAsync();
         h.Core.NextId = "3";
         h.Settings.SaveException = new IOException("disk full");
-        var editor = h.Model.BeginAddRelay();
+        var editor = Editors.Add(h.Model);
         Fill(editor);
 
         await editor.SaveAsync();
@@ -786,7 +786,7 @@ public class MultiRelayTests
         h.Core.NextId = "3";
         h.Settings.SaveException = new IOException("disk full");
         h.Core.Fail("delete_relay", "internal_error");
-        var editor = h.Model.BeginAddRelay();
+        var editor = Editors.Add(h.Model);
         Fill(editor);
 
         Assert.IsFalse(await editor.SaveAsync());
@@ -804,7 +804,7 @@ public class MultiRelayTests
         var h = new MultiHarness();
         await h.StartWithTwoAsync();
         h.Settings.SaveException = new IOException("disk full");
-        var editor = h.Model.BeginEditRelay("2");
+        var editor = Editors.Edit(h.Model, "2");
         editor.NameInput = "新名字";
         editor.BaseUrlInput = "https://new.example.com/v1";
         editor.ApiKeyInput = "sk-example-9999";
@@ -830,7 +830,7 @@ public class MultiRelayTests
         h.Core.OnAsync("save_relay", _ => ++calls == 1
             ? Task.FromResult(RelayJson.Parse("""{"id":"2","name":"新名字","model_count":3,"models_changed":true}"""))
             : Task.FromException<JsonElement>(new CoreCallException("internal_error", [])));
-        var editor = h.Model.BeginEditRelay("2");
+        var editor = Editors.Edit(h.Model, "2");
         editor.NameInput = "新名字";
 
         await editor.SaveAsync();
@@ -846,7 +846,7 @@ public class MultiRelayTests
         await h.StartWithTwoAsync();
         h.Vault.Keys.Remove("2");
         h.Settings.SaveException = new IOException("disk full");
-        var editor = h.Model.BeginEditRelay("2");
+        var editor = Editors.Edit(h.Model, "2");
         editor.ApiKeyInput = "sk-example-9999";
 
         await editor.SaveAsync();

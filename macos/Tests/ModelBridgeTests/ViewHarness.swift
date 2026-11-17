@@ -63,6 +63,14 @@ final class RenderedView {
 
     func close() { window.orderOut(nil) }
 
+    func snapshot() -> PixelSnapshot? {
+        window.setContentSize(host.fittingSize)
+        host.layoutSubtreeIfNeeded()
+        guard let rep = host.bitmapImageRepForCachingDisplay(in: host.bounds) else { return nil }
+        host.cacheDisplay(in: host.bounds, to: rep)
+        return PixelSnapshot(rep: rep, scale: CGFloat(rep.pixelsWide) / host.bounds.width)
+    }
+
     func frame(ofText text: String) -> NSRect? {
         let match = elements.first { element in
             ["accessibilityLabel", "accessibilityValue"].contains { element.axString($0)?.contains(text) == true }
@@ -185,4 +193,44 @@ func hideOffscreen(_ window: NSWindow) {
     window.ignoresMouseEvents = true
     window.makeKeyAndOrderFront(nil)
     window.setFrameOrigin(NSPoint(x: -20000, y: -20000))
+}
+
+struct PixelSnapshot {
+    let rep: NSBitmapImageRep
+    let scale: CGFloat
+
+    enum Kind { case primary, darkText }
+
+    func matches(_ kind: Kind, x: Int, y: Int) -> Bool {
+        guard x >= 0, y >= 0, x < rep.pixelsWide, y < rep.pixelsHigh,
+              let c = rep.colorAt(x: x, y: y)?.usingColorSpace(.sRGB), c.alphaComponent > 0.9 else { return false }
+        let r = c.redComponent * 255, g = c.greenComponent * 255, b = c.blueComponent * 255
+        switch kind {
+        case .primary: return r < 90 && g < 200 && g - r > 60 && b - r > 55
+        case .darkText: return max(r, g, b) < 130 && g - r < 45
+        }
+    }
+
+    func pixels(_ kind: Kind, inPoints rect: CGRect) -> [(x: Int, y: Int)] {
+        var result: [(x: Int, y: Int)] = []
+        for y in Int(rect.minY * scale)..<Int(rect.maxY * scale) {
+            for x in Int(rect.minX * scale)..<Int(rect.maxX * scale) where matches(kind, x: x, y: y) {
+                result.append((x, y))
+            }
+        }
+        return result
+    }
+
+    func bounds(_ kind: Kind, inPoints rect: CGRect) -> CGRect? {
+        let hits = pixels(kind, inPoints: rect)
+        guard let minX = hits.map(\.x).min(), let maxX = hits.map(\.x).max(),
+              let minY = hits.map(\.y).min(), let maxY = hits.map(\.y).max() else { return nil }
+        return CGRect(x: CGFloat(minX) / scale, y: CGFloat(minY) / scale,
+                      width: CGFloat(maxX - minX + 1) / scale, height: CGFloat(maxY - minY + 1) / scale)
+    }
+
+    func fillRatio(_ kind: Kind, inPoints rect: CGRect) -> Double {
+        guard let box = bounds(kind, inPoints: rect) else { return 0 }
+        return Double(pixels(kind, inPoints: rect).count) / Double(box.width * box.height * scale * scale)
+    }
 }

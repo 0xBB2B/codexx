@@ -39,7 +39,7 @@
             <Grid>
                 <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                     <TextBlock x:Name="VersionText" Style="{StaticResource StatusText}" FontFamily="Consolas" />
-                    <Ellipse x:Name="StatusDot" Width="8" Height="8" Margin="12,0,8,0" />
+                    <Ellipse x:Name="StatusDot" Width="8" Height="8" Margin="16,0,8,0" />
                     <TextBlock x:Name="CoreText" Style="{StaticResource StatusText}" />
                     <StackPanel Orientation="Horizontal" Margin="16,0,0,0" VerticalAlignment="Center">
                         <TextBlock x:Name="ChatGptGlyph" Style="{StaticResource StatusGlyph}" Visibility="Visible" />

@@ -337,7 +337,7 @@
 
 ```html
 <div class="menu" role="menu" aria-label="模型接入助手">
-  <div class="menu-head"><svg class="ico">…</svg><div><strong>模型接入助手</strong><div class="mi-sub">转发已开启 · 后台运行中</div></div></div>
+  <div class="menu-head"><svg class="app-icon" width="16" height="16">…</svg><div><strong>模型接入助手</strong><div class="mi-sub">转发已开启 · 后台运行中</div></div></div>
   <div class="menu-sep"></div>
   <div class="menu-item" role="menuitemcheckbox" aria-checked="true"><span class="mi-check"><svg class="si">…</svg></span><span class="mi-label">使用中转</span></div>
   <div class="menu-item" role="menuitem"><span class="mi-check"></span><span class="mi-label">打开配置…</span><span class="kbd">⌘,</span></div>
@@ -345,6 +345,7 @@
 ```
 
 - 宽 286px，内边距 4px，背景 surface，边框 1px border，圆角 12px，阴影 0 16px 48px #172b3a29；在平台入口旁边弹出（macOS 菜单栏图标下方，Windows 托盘图标上方）；分组之间用 1px border 分隔线（左右缩进 8px）
+- 头部（两端相同）：内边距 12px；左边是 16px 的应用图标，8px 之后是两行文字：标题 13px、字重 600、text 色，状态 12px、text-muted 色
 - 菜单项：最小高度 44px，左 8px、右 12px，圆角 8px，字号 13px；左侧 16px 的位置放勾选图标（勾选菜单项打勾，普通项留空对齐）
 - 分组顺序：标题与状态 / 转发、打开配置 / 登录时启动、检查更新 / 卸载、退出
 
@@ -384,7 +385,7 @@
   - macOS：1024×1024px 画布上，底板 824×824px 居中（四周各留 100px），圆角 184px，其余尺寸按比例缩小；32px 的四周留 2px，16px 的四周留 1px；图形缩到底板大小，放在底板正中
   - Windows：底板铺满画布，256×256px 画布上圆角 48px，其余尺寸按比例缩小；图形缩到画布的 88%，放在正中
   - 提供的尺寸：macOS 16、32、64、128、256、512、1024px；Windows 16、24、32、48、256px
-- 窗口里用应用图标的地方：主窗口「转发总览」左边 48px（线宽 9%）；弹窗头部标题左边 24px（线宽 9%）；Windows 标题栏标题左边 16px（线宽 12%，只留两个箭头）。底板圆角按所在平台的比例
+- 窗口里用应用图标的地方：主窗口「转发总览」左边 48px（线宽 9%）；弹窗头部标题左边 24px（线宽 9%）；Windows 标题栏标题左边 16px（线宽 12%，只留两个箭头）；两端菜单面板头部标题左边 16px（线宽 12%，只留两个箭头）。底板圆角按所在平台的比例
 - 菜单栏 / 托盘单色图标：同一个图形，没有底板；18px 及以上线宽 9%、图形放大到 1.2 倍放在画布正中；16px 按上表 16px 规则（线宽 12%、只留两个箭头），不放大
   - macOS 菜单栏：18×18px，只画形状不带颜色，颜色由系统按菜单栏深浅自动换成深色或白色
   - Windows 托盘：16×16px，浅色任务栏用 text #172b3a（对 #ffffff 14.55:1），深色任务栏用 #ffffff

@@ -300,7 +300,7 @@ public class MainWindowLayoutTests
         var h = await StartAsync(3);
         var gate = new TaskCompletionSource<System.Text.Json.JsonElement>();
         h.Core.OnAsync("save_relay", _ => gate.Task);
-        var editor = h.Model.BeginEditRelay("1");
+        var editor = Editors.Edit(h.Model, "1");
         editor.NameInput = "改名";
 
         var saving = editor.SaveAsync();
@@ -384,6 +384,21 @@ public class MainWindowLayoutTests
     }
 
     [TestMethod]
+    public async Task StatusRow_VersionToDotGapIs16px()
+    {
+        var h = await StartAsync(3);
+
+        await WithWindowAsync(h, window =>
+        {
+            var version = UiHost.FindText(window, h.Model.Version)!;
+            var dot = UiHost.Sized(window, 8, 8).OfType<System.Windows.Shapes.Ellipse>().First();
+            var gap = UiHost.PositionIn(window, dot).X - (UiHost.PositionIn(window, version).X + version.ActualWidth);
+            Assert.AreEqual(16, gap, 0.5);
+            return Task.CompletedTask;
+        });
+    }
+
+    [TestMethod]
     public async Task FormOpen_DialogsCurrentIsSet()
     {
         var h = await StartAsync(3);
@@ -411,7 +426,7 @@ public class MainWindowLayoutTests
         var h = await StartAsync(3);
         var gate = new TaskCompletionSource<System.Text.Json.JsonElement>();
         h.Core.OnAsync("save_relay", _ => gate.Task);
-        var editor = h.Model.BeginEditRelay("1");
+        var editor = Editors.Edit(h.Model, "1");
         editor.NameInput = "改名";
 
         var saving = editor.SaveAsync();

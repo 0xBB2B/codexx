@@ -139,15 +139,10 @@ public partial class TrayPanelWindow : Window
         var grid = new Grid { Margin = new Thickness(12) };
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         grid.ColumnDefinitions.Add(new ColumnDefinition());
-        grid.Children.Add(new Path
+        grid.Children.Add(new AppIcon
         {
-            Data = Geometry.Parse("M3,13 C5,8 15,8 17,13 M6,13 L6,16 M14,13 L14,16 M3,16 L17,16"),
-            Width = 20,
-            Height = 20,
-            Stroke = AlertView.Brush("PrimaryBrush"),
-            StrokeThickness = 1.6,
-            StrokeStartLineCap = PenLineCap.Round,
-            StrokeEndLineCap = PenLineCap.Round,
+            Width = 16,
+            Height = 16,
             Margin = new Thickness(0, 0, 8, 0),
             VerticalAlignment = VerticalAlignment.Center,
         });

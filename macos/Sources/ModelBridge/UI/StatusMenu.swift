@@ -29,7 +29,7 @@ struct MenuPanel: View {
 
     private func header(_ panel: MenuPanelModel) -> some View {
         HStack(spacing: 8) {
-            Image(systemName: "arrow.left.arrow.right.circle").font(.system(size: 16)).foregroundColor(Palette.primary)
+            AppIconView(size: 16)
             VStack(alignment: .leading, spacing: 0) {
                 Text(panel.title).font(Fonts.label).foregroundColor(Palette.text)
                 Text(panel.subtitle).font(Fonts.caption).foregroundColor(Palette.textMuted)
