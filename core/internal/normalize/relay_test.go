@@ -129,6 +129,52 @@ func TestForRelay_Tools(t *testing.T) {
 	}
 }
 
+func TestForRelay_ToolChoice(t *testing.T) {
+	t.Parallel()
+	const (
+		fnShell = `{"type":"function","name":"shell"}`
+		webTool = `{"type":"web_search"}`
+	)
+	tests := []struct {
+		name       string
+		tools      string
+		toolChoice string
+		wantKept   bool
+	}{
+		{"指向被删掉的 web_search 工具", `[` + fnShell + `,` + webTool + `]`, `{"type":"web_search"}`, false},
+		{"tools 变空且 required", `[` + webTool + `]`, `"required"`, false},
+		{"tools 变空且指定某个函数", `[` + webTool + `]`, `{"type":"function","name":"shell"}`, false},
+		{"tools 变空但 auto 保持不变", `[` + webTool + `]`, `"auto"`, true},
+		{"tools 变空但 none 保持不变", `[` + webTool + `]`, `"none"`, true},
+		{"指向保留下来的函数保持不变", `[` + fnShell + `,` + webTool + `]`, `{"type":"function","name":"shell"}`, true},
+		{"tools 还剩函数时 required 保持不变", `[` + fnShell + `,` + webTool + `]`, `"required"`, true},
+		{"没有被过滤的工具时 required 保持不变", `[` + fnShell + `]`, `"required"`, true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			body := `{"model":"relay-model-a","input":[],"tools":` + tc.tools + `,"tool_choice":` + tc.toolChoice + `}`
+			out, err := normalize.ForRelay([]byte(body))
+			if err != nil {
+				t.Fatalf("返回错误：%v", err)
+			}
+			got, has := decodeMap(t, out)["tool_choice"]
+			if has != tc.wantKept {
+				t.Fatalf("tool_choice 保留 = %v，期望 %v\n%s", has, tc.wantKept, out)
+			}
+			if has {
+				gb, _ := json.Marshal(got)
+				var want any
+				_ = json.Unmarshal([]byte(tc.toolChoice), &want)
+				wb, _ := json.Marshal(want)
+				if string(gb) != string(wb) {
+					t.Fatalf("tool_choice = %s，期望原样 %s", gb, wb)
+				}
+			}
+		})
+	}
+}
+
 func TestForRelay_KeepsFunctionToolFields(t *testing.T) {
 	t.Parallel()
 	out, err := normalize.ForRelay([]byte(`{"input":[],"tools":[{"type":"function","name":"shell","parameters":{"type":"object"}},{"type":"web_search"}]}`))

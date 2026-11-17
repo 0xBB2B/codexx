@@ -1323,3 +1323,323 @@ func TestEnable_EmptyDefaultModelWritesNoModel(t *testing.T) {
 		t.Fatal("DefaultModel 为空时不应写 model")
 	}
 }
+
+func TestRestore_AfterInterruptedEnable(t *testing.T) {
+	const orig = "openai_base_url = \"" + relayURL + "\"\nsandbox = \"read-only\"\n\n[mcp_servers.x]\ncommand = \"foo\"\n"
+	input := func(c Config, model string) EnableInput {
+		return EnableInput{CatalogPath: catalogPath(c), DefaultModel: model, Efforts: []string{"none", "high"}}
+	}
+	tests := []struct {
+		name  string
+		build func(t *testing.T) (Config, string)
+	}{
+		{"首次启用：状态文件已写、配置还是旧的", func(t *testing.T) (Config, string) {
+			c, cfg := newFixture(t, sample{content: orig})
+			if _, err := Enable(c, input(c, "relay-a")); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(cfg, []byte(orig), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			return c, cfg
+		}},
+		{"再次启用：状态文件已是新的、配置还是上一次的", func(t *testing.T) (Config, string) {
+			c, cfg := newFixture(t, sample{content: orig})
+			if _, err := Enable(c, input(c, "relay-a")); err != nil {
+				t.Fatal(err)
+			}
+			first := readFile(t, cfg)
+			if _, err := Enable(c, input(c, "relay-b")); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(cfg, []byte(first), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			return c, cfg
+		}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name+"：还原回到原值", func(t *testing.T) {
+			c, cfg := tc.build(t)
+			if err := Restore(c); err != nil {
+				t.Fatalf("Restore 错误: %v", err)
+			}
+			if got := readFile(t, cfg); got != orig {
+				t.Fatalf("还原后 = %q, 期望 %q", got, orig)
+			}
+			if _, err := os.Stat(statePath(c)); !os.IsNotExist(err) {
+				t.Fatalf("access-state.json 应被删除: %v", err)
+			}
+		})
+		t.Run(tc.name+"：再次启用后还原回到原值", func(t *testing.T) {
+			c, cfg := tc.build(t)
+			if _, err := Enable(c, input(c, "relay-c")); err != nil {
+				t.Fatalf("Enable 错误: %v", err)
+			}
+			if err := Restore(c); err != nil {
+				t.Fatalf("Restore 错误: %v", err)
+			}
+			if got := readFile(t, cfg); got != orig {
+				t.Fatalf("还原后 = %q, 期望 %q", got, orig)
+			}
+		})
+	}
+}
+
+func TestRestore_ReinsertedLineWithoutTrailingNewlineStaysOwnLine(t *testing.T) {
+	tests := []struct {
+		name string
+		orig string
+	}{
+		{"原行是唯一一行", `model_provider = "relay"`},
+		{"原行是最后一行", "a = 1\n" + `model_provider = "relay"`},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			c, cfg := newFixture(t, sample{content: tc.orig})
+			if _, err := Enable(c, fullInput(c)); err != nil {
+				t.Fatal(err)
+			}
+			f, err := os.OpenFile(cfg, os.O_APPEND|os.O_WRONLY, 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := f.WriteString("extra = 1\n"); err != nil {
+				t.Fatal(err)
+			}
+			f.Close()
+
+			if err := Restore(c); err != nil {
+				t.Fatalf("Restore 错误: %v", err)
+			}
+			got := readFile(t, cfg)
+			m := parseConfig(t, got)
+			if m["model_provider"] != "relay" || m["extra"] != int64(1) {
+				t.Fatalf("还原后不是合法 TOML 或值不对: %q -> %v", got, m)
+			}
+			lines := strings.Split(got, "\n")
+			for _, want := range []string{`model_provider = "relay"`, "extra = 1"} {
+				if !slices.Contains(lines, want) {
+					t.Fatalf("%q 应独占一行: %q", want, got)
+				}
+			}
+		})
+	}
+}
+
+func TestEnableRestore_EmptyOrNullStateEntryDoesNotPanic(t *testing.T) {
+	const orig = "sandbox = \"read-only\"\nopenai_base_url = \"" + relayURL + "\"\n"
+	states := []struct{ name, content string }{
+		{"空对象", `{}`},
+		{"entries 为 null", `{"entries":null}`},
+		{"某个条目为 null", `{"entries":{"openai_base_url":null}}`},
+	}
+	ops := []struct {
+		name string
+		run  func(c Config) error
+	}{
+		{"CheckTampered", func(c Config) error { _, err := CheckTampered(c); return err }},
+		{"Restore", Restore},
+		{"RestoreAll", RestoreAll},
+		{"Enable", func(c Config) error { _, err := Enable(c, fullInput(c)); return err }},
+	}
+	for _, st := range states {
+		for _, op := range ops {
+			t.Run(st.name+"/"+op.name, func(t *testing.T) {
+				c, _ := newFixture(t, sample{content: orig})
+				if err := os.WriteFile(statePath(c), []byte(st.content), 0o644); err != nil {
+					t.Fatal(err)
+				}
+				defer func() {
+					if r := recover(); r != nil {
+						t.Fatalf("panic: %v", r)
+					}
+				}()
+				_ = op.run(c)
+			})
+		}
+		t.Run(st.name+"/Enable 成功后还原回到原值", func(t *testing.T) {
+			c, cfg := newFixture(t, sample{content: orig})
+			if err := os.WriteFile(statePath(c), []byte(st.content), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			defer func() {
+				if r := recover(); r != nil {
+					t.Fatalf("panic: %v", r)
+				}
+			}()
+			if _, err := Enable(c, fullInput(c)); err != nil {
+				return
+			}
+			if err := Restore(c); err != nil {
+				t.Fatalf("Restore 错误: %v", err)
+			}
+			if got := readFile(t, cfg); got != orig {
+				t.Fatalf("还原后 = %q, 期望 %q", got, orig)
+			}
+		})
+	}
+}
+
+const interruptOrig = "openai_base_url = \"" + relayURL + "\"\nmodel_provider = \"relay\"\nmodel = \"gpt-x\"\nsandbox = \"read-only\"\n\n[desktop]\nenabled-reasoning-efforts = [\"low\", \"high\"]\ntheme = \"dark\"\n\n[model_providers.relay]\nbase_url = \"" + relayURL + "\"\n"
+
+func TestRestore_RepeatedInterruptedEnable(t *testing.T) {
+	inputs := []func(c Config) EnableInput{
+		func(c Config) EnableInput {
+			return EnableInput{CatalogPath: catalogPath(c), DefaultModel: "relay-a", Efforts: []string{"none"}}
+		},
+		func(c Config) EnableInput {
+			return EnableInput{CatalogPath: catalogPath(c), DefaultModel: "relay-b", Efforts: []string{"none", "ultra"}}
+		},
+		func(c Config) EnableInput {
+			return EnableInput{CatalogPath: catalogPath(c), Efforts: []string{"max"}}
+		},
+	}
+	for _, startEnabled := range []bool{false, true} {
+		name := "从未启用过"
+		if startEnabled {
+			name = "已经启用过"
+		}
+		t.Run(name, func(t *testing.T) {
+			c, cfg := newFixture(t, sample{content: interruptOrig})
+			if startEnabled {
+				if _, err := Enable(c, inputs[0](c)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			stale := readFile(t, cfg)
+			for _, in := range inputs[1:] {
+				if _, err := Enable(c, in(c)); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(cfg, []byte(stale), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			if err := Restore(c); err != nil {
+				t.Fatalf("Restore 错误: %v", err)
+			}
+			if got := readFile(t, cfg); got != interruptOrig {
+				t.Fatalf("还原后 = %q, 期望 %q", got, interruptOrig)
+			}
+			if _, err := os.Stat(statePath(c)); !os.IsNotExist(err) {
+				t.Fatalf("access-state.json 应被删除: %v", err)
+			}
+		})
+	}
+}
+
+func TestRestore_AfterInterruptedModeSwitch(t *testing.T) {
+	tests := []struct {
+		name          string
+		first, second func(c Config) EnableInput
+	}{
+		{"官方加中转切到只用中转", fullInput, relayOnlyInput},
+		{"只用中转切到官方加中转", relayOnlyInput, fullInput},
+	}
+	for _, tc := range tests {
+		build := func(t *testing.T) (Config, string) {
+			c, cfg := newFixture(t, sample{content: interruptOrig})
+			if _, err := Enable(c, tc.first(c)); err != nil {
+				t.Fatal(err)
+			}
+			before := readFile(t, cfg)
+			if _, err := Enable(c, tc.second(c)); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(cfg, []byte(before), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			return c, cfg
+		}
+		t.Run(tc.name+"：还原回到原值", func(t *testing.T) {
+			c, cfg := build(t)
+			if err := Restore(c); err != nil {
+				t.Fatalf("Restore 错误: %v", err)
+			}
+			if got := readFile(t, cfg); got != interruptOrig {
+				t.Fatalf("还原后 = %q, 期望 %q", got, interruptOrig)
+			}
+		})
+		t.Run(tc.name+"：再次启用后还原回到原值", func(t *testing.T) {
+			c, cfg := build(t)
+			if _, err := Enable(c, tc.second(c)); err != nil {
+				t.Fatalf("Enable 错误: %v", err)
+			}
+			if err := Restore(c); err != nil {
+				t.Fatalf("Restore 错误: %v", err)
+			}
+			if got := readFile(t, cfg); got != interruptOrig {
+				t.Fatalf("还原后 = %q, 期望 %q", got, interruptOrig)
+			}
+		})
+	}
+}
+
+func stripToLegacyState(t *testing.T, c Config) {
+	t.Helper()
+	var top map[string]any
+	if err := json.Unmarshal([]byte(readFile(t, statePath(c))), &top); err != nil {
+		t.Fatal(err)
+	}
+	keep := func(m map[string]any, keys ...string) {
+		for k := range m {
+			if !slices.Contains(keys, k) {
+				delete(m, k)
+			}
+		}
+	}
+	keep(top, "entries", "config_missing", "relay_only")
+	entries, _ := top["entries"].(map[string]any)
+	for _, v := range entries {
+		keep(v.(map[string]any), "had_original", "original", "original_raw", "written", "taken_over", "line")
+	}
+	b, err := json.Marshal(top)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(statePath(c), b, 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestCheckTamperedAndRestore_UserDeletedManagedKey(t *testing.T) {
+	for _, legacy := range []bool{false, true} {
+		name := "新格式状态文件"
+		if legacy {
+			name = "旧格式状态文件"
+		}
+		t.Run(name, func(t *testing.T) {
+			c, cfg := newFixture(t, sample{content: interruptOrig})
+			if _, err := Enable(c, fullInput(c)); err != nil {
+				t.Fatal(err)
+			}
+			if legacy {
+				stripToLegacyState(t, c)
+			}
+			var kept []string
+			for _, line := range strings.Split(readFile(t, cfg), "\n") {
+				if !strings.HasPrefix(line, "model = ") {
+					kept = append(kept, line)
+				}
+			}
+			if err := os.WriteFile(cfg, []byte(strings.Join(kept, "\n")), 0o644); err != nil {
+				t.Fatal(err)
+			}
+
+			bad, err := CheckTampered(c)
+			if err != nil || !slices.Contains(bad, "model") {
+				t.Fatalf("CheckTampered = %v, %v, 应报出 model", bad, err)
+			}
+			err = Restore(c)
+			var ce *Error
+			if !errors.As(err, &ce) || ce.Code != CodeRestoreBlocked || !slices.Contains(ce.Keys, "model") {
+				t.Fatalf("Restore 应返回 restore_blocked 并列出 model, 得到 %v", err)
+			}
+			if got := parseConfig(t, readFile(t, cfg)); got["model"] != nil {
+				t.Fatalf("Restore 不该把 model 原值插回去: %v", got["model"])
+			}
+		})
+	}
+}

@@ -165,6 +165,14 @@ final class DialogPresenter {
         }
     }
 
+    static func showNoticeDetail(title: String, message: String) {
+        _ = run(InfoDialogModel(
+            title: title,
+            message: message,
+            buttons: [DialogButton(label: "知道了", action: .dismiss, style: .primary, isDefaultFocus: true)]
+        ))
+    }
+
     private func present(_ confirmation: Confirmation) async {
         guard !presenting else { return }
         presenting = true

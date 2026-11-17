@@ -79,6 +79,7 @@ func SummaryRequest(body []byte) ([]byte, error) {
 
 func SummaryFromResponse(body []byte) (string, error) {
 	var v struct {
+		Status *string `json:"status"`
 		Output []struct {
 			Type    string `json:"type"`
 			Content []struct {
@@ -89,6 +90,9 @@ func SummaryFromResponse(body []byte) (string, error) {
 	}
 	if err := json.Unmarshal(body, &v); err != nil {
 		return "", err
+	}
+	if v.Status != nil && *v.Status != "completed" {
+		return "", errors.New("response not completed")
 	}
 	var sb strings.Builder
 	for _, o := range v.Output {

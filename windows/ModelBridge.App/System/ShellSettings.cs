@@ -2,12 +2,19 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Runtime.ExceptionServices;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 
 namespace ModelBridge.Services;
 
 public sealed record RelayConfig(string Id, string Name, string BaseUrl);
+
+public sealed class SettingsUnreadableException(string filePath, Exception inner)
+    : Exception($"设置文件读不出来：{filePath}", inner)
+{
+    public string FilePath { get; } = filePath;
+}
 
 public sealed class ShellSettings(string directory)
 {
@@ -20,10 +27,13 @@ public sealed class ShellSettings(string directory)
         {
             using var doc = JsonDocument.Parse(File.ReadAllText(FilePath));
             var root = doc.RootElement;
-            if (root.ValueKind != JsonValueKind.Object) return [];
+            if (root.ValueKind != JsonValueKind.Object) throw new JsonException("根节点不是对象");
 
-            if (root.TryGetProperty("relays", out var array) && array.ValueKind == JsonValueKind.Array)
-                return array.EnumerateArray().Select(Parse).OfType<RelayConfig>().ToList();
+            if (root.TryGetProperty("relays", out var array))
+            {
+                if (array.ValueKind != JsonValueKind.Array) throw new JsonException("relays 不是数组");
+                return array.EnumerateArray().Select(Parse).ToList();
+            }
 
             if (root.TryGetProperty("base_url", out var legacy) && legacy.ValueKind == JsonValueKind.String && legacy.GetString() is { } url)
             {
@@ -37,11 +47,27 @@ public sealed class ShellSettings(string directory)
                 }
                 return migrated;
             }
+            throw new JsonException("缺少 relays 和 base_url");
         }
-        catch (JsonException)
+        catch (Exception ex) when (ex is JsonException or IOException or UnauthorizedAccessException)
         {
+            throw new SettingsUnreadableException(FilePath, ex);
         }
-        return [];
+    }
+
+    string BackupPath => FilePath + ".bak";
+
+    public string? TryBackUp()
+    {
+        try
+        {
+            File.Move(FilePath, BackupPath, overwrite: true);
+            return BackupPath;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return null;
+        }
     }
 
     public void SaveRelays(IReadOnlyList<RelayConfig> relays)
@@ -65,16 +91,30 @@ public sealed class ShellSettings(string directory)
 
     public void DeleteAll()
     {
-        if (File.Exists(FilePath)) File.Delete(FilePath);
+        Exception? first = null;
+        foreach (var path in new[] { FilePath, BackupPath })
+        {
+            try
+            {
+                if (File.Exists(path)) File.Delete(path);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                first ??= ex;
+            }
+        }
+        if (first != null) ExceptionDispatchInfo.Capture(first).Throw();
     }
 
-    static RelayConfig? Parse(JsonElement e)
+    public bool HasBackup() => File.Exists(BackupPath);
+
+    static RelayConfig Parse(JsonElement e)
     {
-        if (e.ValueKind != JsonValueKind.Object) return null;
-        var id = Text(e, "id");
-        var name = Text(e, "name");
-        var url = Text(e, "base_url");
-        return id == null || name == null || url == null ? null : new RelayConfig(id, name, url);
+        if (e.ValueKind != JsonValueKind.Object) throw new JsonException("条目不是对象");
+        return new RelayConfig(
+            Text(e, "id") ?? throw new JsonException("缺少 id"),
+            Text(e, "name") ?? throw new JsonException("缺少 name"),
+            Text(e, "base_url") ?? throw new JsonException("缺少 base_url"));
     }
 
     static string? Text(JsonElement e, string name) =>

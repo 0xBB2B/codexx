@@ -119,6 +119,9 @@ func Build(ctx context.Context, opts BuildOptions) (*Result, error) {
 
 func loadCached(store *Store, id string, r *RelayResult) []string {
 	ids, at, ok, err := store.LoadRelayModels(id)
+	if err != nil && r.Err == nil {
+		r.Err = err
+	}
 	if err != nil || !ok {
 		return nil
 	}

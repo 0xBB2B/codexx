@@ -95,8 +95,8 @@ final class MultiRelayStorageTests: XCTestCase {
         defer { try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: dir.path) }
         let log = CallLog()
         let keychain = RelayFakeKeychain(log: log, entries: ["1": "sk-old-0000"])
-        let params = CoreInitParams.load(settings: settings, keychain: keychain, chatgptDir: nil)
-        XCTAssertEqual(params.relays, [CoreRelayInit(id: "1", name: "中转", baseURL: "https://old.example.com", apiKey: "sk-old-0000")])
+        let initRelays = StoredRelays.read(settings: settings, keychain: keychain).initRelays
+        XCTAssertEqual(initRelays, [CoreRelayInit(id: "1", name: "中转", baseURL: "https://old.example.com", apiKey: "sk-old-0000")])
         let model = AppModel(
             core: FakeCore(log: log), keychain: keychain, settings: settings,
             loginItem: FakeLoginItem(log: log), chatGPT: FakeChatGPT(running: false)
@@ -108,10 +108,10 @@ final class MultiRelayStorageTests: XCTestCase {
     func testMigration_InitCarriesOriginalKeyUnderAccountRelayApiKey() throws {
         try writeRaw(#"{"base_url":"https://old.example.com"}"#)
         let log = CallLog()
-        let params = CoreInitParams.load(
-            settings: settings, keychain: RelayFakeKeychain(log: log, entries: ["1": "sk-old-0000"]), chatgptDir: nil
-        )
-        XCTAssertEqual(params.relays, [CoreRelayInit(id: "1", name: "中转", baseURL: "https://old.example.com", apiKey: "sk-old-0000")])
+        let initRelays = StoredRelays.read(
+            settings: settings, keychain: RelayFakeKeychain(log: log, entries: ["1": "sk-old-0000"])
+        ).initRelays
+        XCTAssertEqual(initRelays, [CoreRelayInit(id: "1", name: "中转", baseURL: "https://old.example.com", apiKey: "sk-old-0000")])
     }
 
     func testDeleteAll_RemovesFile() throws {

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"mime"
 	"net"
 	"net/http"
 	"net/http/httputil"
@@ -22,6 +23,7 @@ const DefaultListenAddr = "127.0.0.1:47311"
 var (
 	ResponseHeaderTimeout        = 60 * time.Second
 	SummaryResponseHeaderTimeout = 10 * time.Minute
+	SummaryBodyTimeout           = 2 * time.Minute
 )
 
 type Config struct {
@@ -261,7 +263,9 @@ func (s *Server) takeOverCompaction(w http.ResponseWriter, r *http.Request, rt r
 		return
 	}
 	defer resp.Body.Close()
+	bodyTimer := time.AfterFunc(SummaryBodyTimeout, func() { _ = resp.Body.Close() })
 	respBody, err := io.ReadAll(io.LimitReader(resp.Body, maxBodySize))
+	bodyTimer.Stop()
 	if err != nil {
 		writeUnreachable(w)
 		return
@@ -311,10 +315,14 @@ func (s *Server) forward(w http.ResponseWriter, r *http.Request, rt route, body 
 		rp.ModifyResponse = func(resp *http.Response) error {
 			if resp.StatusCode < 400 {
 				if opts.tapReasoning {
+					tap := normalize.TapReasoningIDs
+					if mt, _, _ := mime.ParseMediaType(resp.Header.Get("Content-Type")); mt == "application/json" {
+						tap = normalize.TapReasoningJSON
+					}
 					resp.Body = struct {
 						io.Reader
 						io.Closer
-					}{normalize.TapReasoningIDs(resp.Body, s.reasoningIDs), resp.Body}
+					}{tap(resp.Body, s.reasoningIDs), resp.Body}
 				}
 				return nil
 			}

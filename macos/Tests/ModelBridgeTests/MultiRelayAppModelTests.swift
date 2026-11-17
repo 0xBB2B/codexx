@@ -183,20 +183,17 @@ final class MultiRelayAppModelTests: XCTestCase {
         let log = CallLog()
         let settings = RelayFakeSettings(log: log, relays: [relayOne, relayTwo])
         let keychain = RelayFakeKeychain(log: log, entries: ["1": "sk-a", "2": "sk-b"])
-        let params = CoreInitParams.load(settings: settings, keychain: keychain, chatgptDir: "/Applications/ChatGPT.app")
-        XCTAssertEqual(params.relays, [
+        let initRelays = StoredRelays.read(settings: settings, keychain: keychain).initRelays
+        XCTAssertEqual(initRelays, [
             CoreRelayInit(id: "1", name: "中转", baseURL: "https://a.example.com", apiKey: "sk-a"),
             CoreRelayInit(id: "2", name: "备用", baseURL: "https://b.example.com", apiKey: "sk-b"),
         ])
-        XCTAssertEqual(params.chatgptDir, "/Applications/ChatGPT.app")
     }
 
     func testInitParams_NoRelaysIsEmptyArray() {
         let log = CallLog()
-        let params = CoreInitParams.load(
-            settings: RelayFakeSettings(log: log), keychain: RelayFakeKeychain(log: log), chatgptDir: nil
-        )
-        XCTAssertEqual(params.relays, [])
+        let initRelays = StoredRelays.read(settings: RelayFakeSettings(log: log), keychain: RelayFakeKeychain(log: log)).initRelays
+        XCTAssertEqual(initRelays, [])
     }
 
     // MARK: 本地校验

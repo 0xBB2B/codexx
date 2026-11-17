@@ -64,6 +64,7 @@ final class AppWindowController {
     private(set) var setupWindow: NSWindow?
     private var setupCloseObserver: NSObjectProtocol?
     private var subscription: AnyCancellable?
+    private var connectingSubscription: AnyCancellable?
 
     init(model: AppModel, present: @escaping (NSWindow) -> Void) {
         self.model = model
@@ -81,12 +82,17 @@ final class AppWindowController {
 
     func showMainWindow() {
         if model.needsSetup {
-            if model.showSetup, let setupWindow { present(setupWindow) } else { model.showSetup = true }
+            if model.showSetup, let setupWindow { presentRestored(setupWindow) } else { model.showSetup = true }
             return
         }
         let window = mainWindow ?? AppWindows.makeMain(model: model)
         if mainWindow == nil { _ = RelaySheetController(model: model, window: window) }
         mainWindow = window
+        presentRestored(window)
+    }
+
+    private func presentRestored(_ window: NSWindow) {
+        if window.isMiniaturized { window.deminiaturize(nil) }
         present(window)
     }
 
@@ -94,6 +100,9 @@ final class AppWindowController {
         if setupWindow == nil {
             let window = AppWindows.makeSetup(model: model)
             setupWindow = window
+            connectingSubscription = model.$setupPhase.map { $0 == .connecting }.removeDuplicates().sink { [weak window] connecting in
+                window?.standardWindowButton(.closeButton)?.isEnabled = !connecting
+            }
             setupCloseObserver = NotificationCenter.default.addObserver(
                 forName: NSWindow.willCloseNotification, object: window, queue: .main
             ) { [weak self] _ in

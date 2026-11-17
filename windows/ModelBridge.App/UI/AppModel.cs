@@ -20,6 +20,7 @@ public enum BannerAction { Retry, ShowDetail, Redetect }
 public sealed record AppNotice(string Title, string Detail = "", AppSeverity Severity = AppSeverity.Danger)
 {
     public Guid Id { get; } = Guid.NewGuid();
+    public bool DetailInDialog { get; init; }
 }
 
 public sealed record AppBanner(string Title, string Detail, AppSeverity Severity, IReadOnlyList<BannerAction> Actions)
@@ -72,6 +73,8 @@ public interface ICredentialVault
 public interface IShellSettingsStore
 {
     IReadOnlyList<RelayConfig> ReadRelays();
+    string? TryBackUp() => null;
+    bool HasBackup() => false;
     void SaveRelays(IReadOnlyList<RelayConfig> relays);
     void DeleteAll();
 }
@@ -99,6 +102,8 @@ public sealed class AppModel : IRelayFields
     public const string ActivationFailedMessage = "模型接入助手已在运行，但无法切换到它，请从任务栏通知区域打开";
 
     const string NoSave = "没有保存";
+    public const string SettingsBackedUp = "原来的设置读不出来，已备份原文件";
+    public const string SettingsUnreadable = "原来的设置读不出来";
     const string CredentialWriteFailed = "无法写入系统凭据管理器";
     const string SettingsWriteFailed = "无法保存设置";
     const string CoreStartFailed = "后台服务没能启动，请退出后重新打开";
@@ -465,7 +470,7 @@ public sealed class AppModel : IRelayFields
 
             configs = [config];
             RebuildRelays();
-            RemoveNotices(NoSave);
+            RemoveNotices(NoSave, SettingsBackedUp, SettingsUnreadable);
             var problems = new List<string>();
             try
             {
@@ -873,6 +878,7 @@ public sealed class AppModel : IRelayFields
 
     public async Task QuitAsync()
     {
+        if (RejectWhileConnecting()) return;
         if (busy) return;
 
         IsBusy = true;
@@ -927,9 +933,9 @@ public sealed class AppModel : IRelayFields
     {
         try
         {
-            return settings.ReadRelays().Count == 0 && !vault.Any() && !login.IsEnabled();
+            return settings.ReadRelays().Count == 0 && !settings.HasBackup() && !vault.Any() && !login.IsEnabled();
         }
-        catch (Exception ex) when (IsSystemFault(ex))
+        catch (Exception ex) when (IsSystemFault(ex) || ex is SettingsUnreadableException)
         {
             return false;
         }
@@ -939,9 +945,16 @@ public sealed class AppModel : IRelayFields
 
     public Task<int> RecheckUninstallAsync() => RunUninstallAsync(false);
 
+    bool RejectWhileConnecting()
+    {
+        if (!isConnecting) return false;
+        ShowMainWindowRequested?.Invoke();
+        return true;
+    }
+
     async Task<int> RunUninstallAsync(bool askFirst)
     {
-        if (busy) return 1;
+        if (RejectWhileConnecting() || busy) return 1;
 
         IsBusy = true;
         try
@@ -1115,10 +1128,25 @@ public sealed class AppModel : IRelayFields
         {
             return settings.ReadRelays();
         }
+        catch (SettingsUnreadableException ex)
+        {
+            WarnSettingsUnreadable(ex.FilePath);
+            return [];
+        }
         catch (Exception ex) when (IsSystemFault(ex))
         {
             return [];
         }
+    }
+
+    void WarnSettingsUnreadable(string filePath)
+    {
+        const string reason = "保存中转名字和地址的设置文件读不出来，可能是文件坏了、正被别的程序占用，或者格式认不出来。";
+        const string noKey = "这个文件里只有中转的名字和地址，没有 API Key。";
+        var backup = settings.TryBackUp();
+        AddNotice(backup != null
+            ? new AppNotice(SettingsBackedUp, string.Join("\n\n", reason, "原文件已经改名备份到：", backup, noKey + "重新填写并完成设置后就能照常使用。"), AppSeverity.Warning) { DetailInDialog = true }
+            : new AppNotice(SettingsUnreadable, string.Join("\n\n", reason, "没能备份这个文件，它还在原处：", filePath, "完成设置后，它会被新的设置覆盖。想留着原文件的话，请先自己复制一份。", noKey), AppSeverity.Warning) { DetailInDialog = true });
     }
 
     internal static (string? Name, string? BaseUrl, string? ApiKey) ValidateRelay(

@@ -206,28 +206,48 @@ func (s *Service) Init(ctx context.Context, p InitParams) (Status, error) {
 	s.chatgptDir = deref(p.ChatGPTDir)
 	s.takenOver, _ = codexconfig.TakenOverKeys(s.configCfg())
 	s.restoreBlocked = nil
-	if !s.forwarding {
-		s.restoreBlocked, _ = codexconfig.CheckTampered(s.configCfg())
-	}
-
 	if s.forwarding {
 		s.accessMode = modeBoth
 		if set.AccessMode != nil && *set.AccessMode == modeRelay {
 			s.accessMode = modeRelay
 		}
-		_ = s.activate(ctx)
-		_ = s.detect(ctx)
-	} else {
-		_, err := s.locateCodex()
-		s.chatgptFound, s.chatgptErr = err == nil, errCode(err)
 	}
+	restartCtx, cancel := context.WithTimeout(ctx, RestartTimeout)
+	defer cancel()
+	s.redetect(restartCtx)
 	s.notifyLocked()
 	return s.statusLocked(), nil
 }
 
-func (s *Service) Status() Status {
+func (s *Service) redetect(ctx context.Context) {
+	if s.forwarding {
+		_ = s.activate(ctx)
+		_ = s.detect(ctx)
+		return
+	}
+	s.restoreBlocked, _ = codexconfig.CheckTampered(s.configCfg())
+	_, err := s.locateCodex()
+	s.chatgptFound, s.chatgptErr = err == nil, errCode(err)
+}
+
+var RestartTimeout = 30 * time.Second
+
+func (s *Service) Status() Status { return s.StatusContext(context.Background()) }
+
+func (s *Service) StatusContext(ctx context.Context) Status {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	switch {
+	case s.forwarding && s.proxy == nil:
+		ctx, cancel := context.WithTimeout(ctx, RestartTimeout)
+		defer cancel()
+		if s.activate(ctx) == nil {
+			_ = s.detect(ctx)
+		}
+		s.notifyLocked()
+	case !s.forwarding:
+		s.redetect(ctx)
+	}
 	return s.statusLocked()
 }
 
@@ -532,15 +552,33 @@ func (s *Service) activate(ctx context.Context) error {
 	s.chatgptErr, s.proxyErr, s.restoreFailed = "", "", false
 	err := s.tryActivate(ctx)
 	if err == nil {
+		err = ctx.Err()
+	}
+	if err == nil {
 		return nil
 	}
 	s.stopProxy()
+	s.restoreAfterFailedStart()
 	if code := errCode(err); strings.HasPrefix(code, "chatgpt_") {
 		s.chatgptErr = code
 	} else {
 		s.proxyErr = code
 	}
 	return err
+}
+
+func (s *Service) restoreAfterFailedStart() {
+	cfg := s.configCfg()
+	err := codexconfig.Restore(cfg)
+	if err == nil {
+		s.takenOver = nil
+		return
+	}
+	s.takenOver, _ = codexconfig.TakenOverKeys(cfg)
+	var ce *codexconfig.Error
+	if errors.As(err, &ce) && ce.Code == codexconfig.CodeRestoreBlocked {
+		s.restoreBlocked = ce.Keys
+	}
 }
 
 func (s *Service) tryActivate(ctx context.Context) error {
@@ -581,6 +619,9 @@ func (s *Service) enable() error {
 }
 
 func (s *Service) refreshRelay(ctx context.Context, plan relayPlan) error {
+	if s.forwarding && s.proxy == nil {
+		return s.activate(ctx)
+	}
 	if !s.forwarding || s.proxy == nil {
 		return s.probe(ctx, plan)
 	}
@@ -681,7 +722,11 @@ func (s *Service) probe(ctx context.Context, plan relayPlan) error {
 		info := relayInfo{}
 		var ids []string
 		fromCache := func() {
-			if cached, at, ok, err := store.LoadRelayModels(r.id); err == nil && ok {
+			cached, at, ok, err := store.LoadRelayModels(r.id)
+			if err != nil && info.err == "" {
+				info.err = errCode(err)
+			}
+			if err == nil && ok {
 				ids, info.fetchedAt = cached, at
 			}
 		}
@@ -697,8 +742,8 @@ func (s *Service) probe(ctx context.Context, plan relayPlan) error {
 				ids, info.fetchedAt = fetched, time.Now()
 			}
 		default:
-			fromCache()
 			info.err = s.relayInfos[r.id].err
+			fromCache()
 		}
 		if info.err == "" && !info.fetchedAt.IsZero() && plan.mode[r.id] != catalog.CacheOnly {
 			_ = store.SaveRelayModels(r.id, ids, info.fetchedAt)
@@ -752,7 +797,7 @@ func (s *Service) rebuild(ctx context.Context, plan relayPlan) error {
 	infos := make(map[string]relayInfo, len(res.Relays))
 	for _, r := range res.Relays {
 		info := relayInfo{err: errCode(r.Err), fetchedAt: trimTime(r.FetchedAt)}
-		if plan.mode[r.ID] == catalog.CacheOnly {
+		if plan.mode[r.ID] == catalog.CacheOnly && info.err == "" {
 			info.err = s.relayInfos[r.ID].err
 		}
 		for _, slug := range res.RelayShown {

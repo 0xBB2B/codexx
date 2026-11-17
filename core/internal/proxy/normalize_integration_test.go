@@ -104,6 +104,29 @@ func TestNormalize_RelayStreamPassthroughAndRecorded(t *testing.T) {
 	}
 }
 
+func TestNormalize_RelayJSONResponseRecorded(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	e := newNormalizeEnv(t, dir, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"id":"resp_1","status":"completed","output":[{"type":"reasoning","id":"rs_relay_json","summary":[]},{"type":"message","content":[{"type":"output_text","text":"好"}]}]}`)
+	})
+	e.do(t, http.MethodPost, "/v1/responses", jsonHdr, []byte(`{"model":"`+relayModel+`","stream":false,"input":[]}`))
+
+	file := filepath.Join(dir, "relay-reasoning-ids.json")
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		b, _ := os.ReadFile(file)
+		if strings.Contains(string(b), "rs_relay_json") {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("2 秒内 %s 里没有 rs_relay_json，内容：%q", file, b)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
 func TestNormalize_RelayErrorResponseNotRecorded(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
@@ -259,6 +282,87 @@ func TestCompactionTakeover_EmptySummaryIsRelayError(t *testing.T) {
 	}
 	if err := json.Unmarshal(got, &m); err != nil || m.Error.Type != "model_bridge_error" || m.Error.Code == "" {
 		t.Fatalf("应返回中性错误体，实际 %q", got)
+	}
+}
+
+func TestCompactionTakeover_IncompleteSummaryIsRelayError(t *testing.T) {
+	t.Parallel()
+	incomplete := func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"status":"incomplete","incomplete_details":{"reason":"max_output_tokens"},"output":[{"type":"message","content":[{"type":"output_text","text":"`+nSecretText+`"}]}]}`)
+	}
+	tests := []struct{ name, path, body string }{
+		{"压缩触发", "/v1/responses", `{"model":"` + relayModel + `","input":[` + nVisibleMsg + `,{"type":"compaction_trigger"}]}`},
+		{"compact 端点", "/v1/responses/compact", `{"model":"` + relayModel + `","input":[` + nVisibleMsg + `]}`},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			e := newNormalizeEnv(t, t.TempDir(), incomplete)
+			resp, got := e.do(t, http.MethodPost, tc.path, jsonHdr, []byte(tc.body))
+			if resp.StatusCode < 400 {
+				t.Fatalf("状态码 = %d，status 不是 completed 应按中转错误处理，响应 %q", resp.StatusCode, got)
+			}
+			if strings.Contains(string(got), nSecretText) {
+				t.Fatalf("截断的摘要不该返回给客户端：%q", got)
+			}
+		})
+	}
+}
+
+func TestCompactionTakeover_SummaryBodyTimeout(t *testing.T) {
+	old := proxy.SummaryBodyTimeout
+	proxy.SummaryBodyTimeout = time.Second
+	t.Cleanup(func() { proxy.SummaryBodyTimeout = old })
+
+	tests := []struct {
+		name string
+		body func(w http.ResponseWriter, r *http.Request)
+	}{
+		{"响应头发完后正文挂住", func(_ http.ResponseWriter, r *http.Request) { <-r.Context().Done() }},
+		{"响应头发完后正文持续滴灌", func(w http.ResponseWriter, r *http.Request) {
+			for {
+				select {
+				case <-r.Context().Done():
+					return
+				case <-time.After(200 * time.Millisecond):
+					_, _ = io.WriteString(w, " ")
+					w.(http.Flusher).Flush()
+				}
+			}
+		}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newNormalizeEnv(t, t.TempDir(), func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusOK)
+				w.(http.Flusher).Flush()
+				tc.body(w, r)
+			})
+			body := `{"model":"` + relayModel + `","input":[` + nVisibleMsg + `,{"type":"compaction_trigger"}]}`
+			req, err := http.NewRequest(http.MethodPost, e.front.URL+"/v1/responses", strings.NewReader(body))
+			if err != nil {
+				t.Fatal(err)
+			}
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("Authorization", officialKey)
+			client := &http.Client{Timeout: 10 * time.Second}
+
+			start := time.Now()
+			resp, err := client.Do(req)
+			if err != nil {
+				t.Fatalf("代理应在超时后返回错误响应，实际客户端等待 %v 后出错：%v", time.Since(start), err)
+			}
+			defer resp.Body.Close()
+			_, _ = io.Copy(io.Discard, resp.Body)
+			if elapsed := time.Since(start); elapsed > 5*time.Second {
+				t.Errorf("耗时 %v，正文超时后应尽快返回", elapsed)
+			}
+			if resp.StatusCode < 400 {
+				t.Errorf("状态码 = %d，正文超时应按中转错误处理", resp.StatusCode)
+			}
+		})
 	}
 }
 

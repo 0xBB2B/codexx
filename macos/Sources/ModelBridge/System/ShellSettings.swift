@@ -11,6 +11,11 @@ struct RelayConfig: Codable, Sendable, Equatable, Identifiable {
     }
 }
 
+enum SettingsRecovery: Sendable, Equatable {
+    case backedUp(URL)
+    case backupFailed(URL)
+}
+
 struct ShellSettings: Sendable {
     private struct Stored: Codable {
         var relays: [RelayConfig]
@@ -50,14 +55,31 @@ struct ShellSettings: Sendable {
         return migrated
     }
 
+    var backupURL: URL {
+        directory.appendingPathComponent("shell-settings.json.bak")
+    }
+
+    func recoverUnreadable() -> SettingsRecovery? {
+        do {
+            try? FileManager.default.removeItem(at: backupURL)
+            try FileManager.default.moveItem(at: fileURL, to: backupURL)
+            return .backedUp(backupURL)
+        } catch {
+            return .backupFailed(fileURL)
+        }
+    }
+
     func saveRelays(_ relays: [RelayConfig]) throws {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         try JSONEncoder().encode(Stored(relays: relays)).write(to: fileURL, options: .atomic)
     }
 
     func deleteAll() throws {
-        guard FileManager.default.fileExists(atPath: fileURL.path) else { return }
-        try FileManager.default.removeItem(at: fileURL)
+        var failure: Error?
+        for url in [fileURL, backupURL] where FileManager.default.fileExists(atPath: url.path) {
+            do { try FileManager.default.removeItem(at: url) } catch { failure = error }
+        }
+        if let failure { throw failure }
     }
 }
 
@@ -65,6 +87,11 @@ protocol SettingsStoring: Sendable {
     func loadRelays() throws -> [RelayConfig]
     func saveRelays(_ relays: [RelayConfig]) throws
     func deleteAll() throws
+    func recoverUnreadable() -> SettingsRecovery?
+}
+
+extension SettingsStoring {
+    func recoverUnreadable() -> SettingsRecovery? { nil }
 }
 
 extension ShellSettings: SettingsStoring {}

@@ -1612,3 +1612,91 @@ func TestServe_SaveRelay_UnreadableCacheNotDeletedOnFailure(t *testing.T) {
 		t.Errorf("缓存应是合法 JSON 且 ids 不变: %+v (%v), 原 %+v", got, err, want)
 	}
 }
+
+func TestServe_EOFStillProcessesQueuedRequests(t *testing.T) {
+	e := newEnv(t, true)
+	var in strings.Builder
+	for i, req := range []map[string]any{
+		{"id": 1, "method": "init", "params": initParams(e)},
+		{"id": 2, "method": "status"},
+		{"id": 3, "method": "shutdown", "params": map[string]any{"restore": true}},
+	} {
+		line, err := json.Marshal(req)
+		if err != nil {
+			t.Fatalf("请求 %d: %v", i, err)
+		}
+		in.Write(line)
+		in.WriteByte('\n')
+	}
+	var out bytes.Buffer
+
+	if err := control.Serve(context.Background(), e.opts, strings.NewReader(in.String()), &out); err != nil {
+		t.Fatalf("Serve: %v", err)
+	}
+
+	answered := map[int]bool{}
+	for _, line := range strings.Split(out.String(), "\n") {
+		var m struct {
+			ID    *int            `json:"id"`
+			Error json.RawMessage `json:"error"`
+		}
+		if json.Unmarshal([]byte(line), &m) == nil && m.ID != nil && m.Error == nil {
+			answered[*m.ID] = true
+		}
+	}
+	for _, id := range []int{1, 2, 3} {
+		if !answered[id] {
+			t.Errorf("id=%d 的请求没有得到成功响应，输出：%s", id, out.String())
+		}
+	}
+	if got := e.config(t); got != originalConfig {
+		t.Errorf("shutdown restore:true 应还原配置，实际 %q", got)
+	}
+}
+
+func TestServe_EOFEndsInFlightSlowRequestWithinGrace(t *testing.T) {
+	e := newEnv(t, false)
+	hang := newHangingRelay(t)
+	var in strings.Builder
+	for _, req := range []map[string]any{
+		{"id": 1, "method": "init", "params": hangingInitParams(hang)},
+		{"id": 2, "method": "refresh_models"},
+	} {
+		line, err := json.Marshal(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		in.Write(line)
+		in.WriteByte('\n')
+	}
+	var out bytes.Buffer
+
+	start := time.Now()
+	_ = control.Serve(context.Background(), e.opts, strings.NewReader(in.String()), &out)
+	if elapsed := time.Since(start); elapsed > 5*time.Second {
+		t.Errorf("Serve 在 EOF 后 %v 才结束, 应在约 2 秒宽限期加余量内结束", elapsed)
+	}
+}
+
+func TestServe_EOFAfterStatusCancelsRestartAndRunsShutdown(t *testing.T) {
+	addr, release := holdPort(t)
+	e := newEnv(t, true, func(e *env) { e.listenAddr = addr })
+	hang := newHangingRelay(t)
+	c := startServe(t, e.opts)
+	c.result("init", hangingInitParams(hang))
+	release()
+
+	start := time.Now()
+	if _, err := c.in.Write([]byte(`{"id":100,"method":"status"}` + "\n" + `{"id":101,"method":"shutdown","params":{"restore":false}}` + "\n")); err != nil {
+		t.Fatal(err)
+	}
+	_ = c.in.Close()
+	_ = c.waitExit()
+	if elapsed := time.Since(start); elapsed > 5*time.Second {
+		t.Errorf("EOF 后 %v 才处理完, status 的重启应被宽限期取消", elapsed)
+	}
+	out := c.output()
+	if !strings.Contains(out, `"id":101`) {
+		t.Errorf("排队的 shutdown 应得到响应, 输出：%s", out)
+	}
+}

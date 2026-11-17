@@ -1,7 +1,10 @@
 package codexconfig
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -26,6 +29,33 @@ type State struct {
 	ConfigMissing bool `json:"config_missing,omitempty"`
 	// RelayOnly 记录写入时用的方式；缺省视为官方加中转
 	RelayOnly bool `json:"relay_only,omitempty"`
+	// PriorSum 是本次 Enable 写配置之前配置文本的摘要，Previous 是那时生效的状态。
+	// 先存状态后写配置，被打断时配置还是旧文本，摘要对得上就按 Previous 还原
+	PriorSum string `json:"prior_sum,omitempty"`
+	Previous *State `json:"previous,omitempty"`
+}
+
+func sumOf(text string) string {
+	h := sha256.Sum256([]byte(text))
+	return hex.EncodeToString(h[:])
+}
+
+func effective(text string, st *State) *State {
+	if st != nil && st.PriorSum != "" && st.PriorSum == sumOf(text) {
+		return st.Previous
+	}
+	return st
+}
+
+func cloneState(st *State) *State {
+	if st == nil {
+		return nil
+	}
+	b, _ := json.Marshal(st)
+	var out State
+	_ = json.Unmarshal(b, &out)
+	out.PriorSum, out.Previous = "", nil
+	return &out
 }
 
 func stateFilePath(c Config) string { return filepath.Join(c.DataDir, stateFileName) }
@@ -42,6 +72,10 @@ func LoadState(c Config) (*State, error) {
 	if err := json.Unmarshal(b, &st); err != nil {
 		return nil, err
 	}
+	if st.Entries == nil {
+		st.Entries = map[string]*entry{}
+	}
+	maps.DeleteFunc(st.Entries, func(_ string, e *entry) bool { return e == nil })
 	return &st, nil
 }
 

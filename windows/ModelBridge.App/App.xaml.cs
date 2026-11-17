@@ -91,8 +91,7 @@ public partial class App : Application
                 if (!exiting && model!.Page == AppPage.Main) ShowMainWindow();
             };
         }
-        setupWindow.Show();
-        setupWindow.Activate();
+        setupWindow.BringToFront();
     }
 
     async Task<int> RunHeadlessUninstallAsync()
@@ -140,7 +139,7 @@ public partial class App : Application
         tray?.Dispose();
         singleInstance?.Dispose();
         try { Process.Start(new ProcessStartInfo(uninstaller, "/SILENT") { UseShellExecute = false })?.Dispose(); }
-        catch (Win32Exception) { }
+        catch (Win32Exception) { Dialogs.Show(DialogModel.ForUninstallLaunchFailed()); }
         ExitApp();
     }
 

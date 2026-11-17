@@ -327,4 +327,78 @@ public class CoreProcessTests
         await Assert.ThrowsExactlyAsync<CoreProcessExitedException>(() => core.CallAsync("status"));
         await Assert.ThrowsExactlyAsync<CoreProcessExitedException>(() => pending.WaitAsync(TimeSpan.FromSeconds(5)));
     }
+
+
+    object Field(string name) =>
+        typeof(CoreProcess).GetField(name, BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(core)!;
+
+    int PendingCount() => ((System.Collections.ICollection)Field("pending")).Count;
+
+    [TestMethod]
+    public async Task Call_ParametersCannotBeSerialized_ThrowsAndLeavesNoPendingEntry()
+    {
+        await NewCore(Options()).StartAsync();
+        var cyclic = new Dictionary<string, object?>();
+        cyclic["self"] = cyclic;
+
+        await Assert.ThrowsAsync<Exception>(() => core!.CallAsync("echo", cyclic));
+
+        Assert.AreEqual(0, PendingCount());
+        var status = await core!.CallAsync("status").WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.AreEqual("1.0.0", status.GetProperty("version").GetString());
+    }
+
+    [TestMethod]
+    public async Task Start_InitFails_CoreProcessIsStoppedBeforeThrowing()
+    {
+        File.WriteAllText(Path.Combine(stateDir, "init-fail"), "");
+
+        await Assert.ThrowsExactlyAsync<CoreCallException>(() => NewCore(Options()).StartAsync());
+
+        await Assert.ThrowsExactlyAsync<CoreProcessExitedException>(() => core!.CallAsync("status"));
+        await Task.Delay(600);
+        Assert.AreEqual(1, Launches());
+    }
+
+    [TestMethod]
+    public async Task Call_WriteToOldGenerationFailsAfterRestart_NewGenerationPendingCallSurvives()
+    {
+        await NewCore(Options()).StartAsync();
+        var oldProcess = (System.Diagnostics.Process)Field("process");
+        var writeGate = Field("writeGate");
+        var held = new ManualResetEventSlim();
+        var release = new ManualResetEventSlim();
+        var holder = Task.Factory.StartNew(() =>
+        {
+            lock (writeGate)
+            {
+                held.Set();
+                release.Wait();
+            }
+        }, TaskCreationOptions.LongRunning);
+        held.Wait();
+
+        try
+        {
+            var staleCall = Task.Run(() => core!.CallAsync("status"));
+            await WaitUntil(() => PendingCount() == 1);
+            oldProcess.Kill(true);
+            await WaitUntil(() => Launches() == 2 && PendingCount() == 1);
+
+            release.Set();
+            await holder;
+
+            await Assert.ThrowsExactlyAsync<CoreProcessExitedException>(() => staleCall.WaitAsync(TimeSpan.FromSeconds(5)));
+            await WaitUntil(() => ReadLines("init.log").Length == 2);
+            await Task.Delay(500);
+            Assert.IsFalse(core!.HasFailed);
+            Assert.AreEqual(2, Launches());
+            var status = await core.CallAsync("status").WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.AreEqual(Key, status.GetProperty("echo_api_key").GetString());
+        }
+        finally
+        {
+            release.Set();
+        }
+    }
 }

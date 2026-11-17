@@ -149,6 +149,47 @@ func (t *reasoningTap) scan() {
 	}
 }
 
+const maxJSONTapBytes = 32 << 20
+
+type reasoningJSONTap struct {
+	src io.Reader
+	ids *ReasoningIDs
+	buf []byte
+}
+
+func TapReasoningJSON(r io.Reader, ids *ReasoningIDs) io.Reader {
+	return &reasoningJSONTap{src: r, ids: ids}
+}
+
+func (t *reasoningJSONTap) Read(p []byte) (int, error) {
+	n, err := t.src.Read(p)
+	if len(t.buf)+n <= maxJSONTapBytes {
+		t.buf = append(t.buf, p[:n]...)
+	}
+	if err == io.EOF {
+		t.collect()
+	}
+	return n, err
+}
+
+func (t *reasoningJSONTap) collect() {
+	var v struct {
+		Output []itemHead `json:"output"`
+	}
+	if json.Unmarshal(t.buf, &v) != nil {
+		return
+	}
+	var found []string
+	for _, it := range v.Output {
+		if it.Type == "reasoning" && it.ID != "" {
+			found = append(found, it.ID)
+		}
+	}
+	if len(found) > 0 {
+		_ = t.ids.Add(found...)
+	}
+}
+
 func nextEventEnd(b []byte) (idx, sepLen int) {
 	lf := bytes.Index(b, []byte("\n\n"))
 	crlf := bytes.Index(b, []byte("\r\n\r\n"))

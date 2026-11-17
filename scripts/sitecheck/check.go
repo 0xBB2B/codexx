@@ -77,7 +77,7 @@ func checkLine(line string) []string {
 		if loc == nil {
 			break
 		}
-		raw, end, ok := scanURL(rest[loc[0]:])
+		raw, end, ok := scanURL(rest[loc[0]:], isAttrValue(rest[:loc[0]]))
 		rest = rest[loc[0]+end:]
 		if !ok || !allowedURL(strings.TrimRight(raw, trailingPunct)) {
 			reasons = append(reasons, "网址不在白名单内")
@@ -91,13 +91,23 @@ func checkLine(line string) []string {
 	return reasons
 }
 
+func isAttrValue(prefix string) bool {
+	prefix = strings.TrimRight(prefix, " \t")
+	if strings.HasSuffix(prefix, `"`) || strings.HasSuffix(prefix, "'") {
+		prefix = strings.TrimRight(prefix[:len(prefix)-1], " \t")
+	}
+	return strings.HasSuffix(prefix, "=")
+}
+
 // 返回网址文本、网址在 s 中的结束位置；ok 为 false 表示网址里混入了非标点的非 ASCII 字符。
-func scanURL(s string) (raw string, end int, ok bool) {
+// inAttr 为真时网址在 HTML 属性值里，中文字符和中文标点都不算网址结束，一直读到引号、空白或 >。
+func scanURL(s string, inAttr bool) (raw string, end int, ok bool) {
 	for i, r := range s {
 		switch {
 		case r == ' ' || r == '\t' || r == '\r' || r == '"' || r == '\'' || r == '<' || r == '>' || unicode.IsSpace(r):
 			return s[:i], i, true
 		case r < utf8.RuneSelf:
+		case inAttr:
 		case !strings.ContainsRune(cjkPunct, r):
 			return s, len(s), false
 		default:

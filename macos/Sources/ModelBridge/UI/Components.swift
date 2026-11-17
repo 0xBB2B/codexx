@@ -311,7 +311,14 @@ struct NoticeStack: View {
 
     var body: some View {
         ForEach(model.notices) { notice in
-            AlertBar(tone: tone(notice.kind), title: notice.title, detail: notice.detail, onClose: { model.dismissNotice(notice.id) })
+            if let dialogTitle = notice.detailDialogTitle {
+                AlertBar(tone: tone(notice.kind), title: notice.title, onClose: { model.dismissNotice(notice.id) }) {
+                    Button("查看详情") { DialogPresenter.showNoticeDetail(title: dialogTitle, message: notice.detail ?? "") }
+                        .secondaryAction(compact: true)
+                }
+            } else {
+                AlertBar(tone: tone(notice.kind), title: notice.title, detail: notice.detail, onClose: { model.dismissNotice(notice.id) })
+            }
         }
     }
 

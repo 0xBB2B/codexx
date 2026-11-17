@@ -72,6 +72,18 @@ public sealed class TrayMenu : IDisposable
 
     async void Run(TrayMenuCommand command)
     {
+        try
+        {
+            await RunCommandAsync(command);
+        }
+        catch (Exception)
+        {
+            Dialogs.Show(DialogModel.ForUnexpectedError());
+        }
+    }
+
+    async Task RunCommandAsync(TrayMenuCommand command)
+    {
         switch (command)
         {
             case TrayMenuCommand.ToggleForwarding:
@@ -110,7 +122,8 @@ public sealed class TrayMenu : IDisposable
     {
         var size = TaskbarTheme.IconSizeFor(GetDpiForSystem());
         var uri = new Uri($"pack://application:,,,/Assets/{TaskbarTheme.IconFor(TaskbarTheme.IsLight())}");
-        var next = new Icon(Application.GetResourceStream(uri).Stream, new System.Drawing.Size(size, size));
+        using var stream = Application.GetResourceStream(uri).Stream;
+        var next = new Icon(stream, new System.Drawing.Size(size, size));
         icon.Icon = next;
         iconImage?.Dispose();
         iconImage = next;

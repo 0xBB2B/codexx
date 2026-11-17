@@ -17,11 +17,11 @@
 | 方法 | params | result |
 |---|---|---|
 | init | {"relays": [{"id": 字符串, "name": 字符串, "base_url": 字符串, "api_key": 字符串}], "chatgpt_dir": 字符串或 null} | Status |
-| status | {} | Status |
+| status | {} | Status（重新检测：转发关时重新查找 ChatGPT、重新检查配置能否还原；转发开但本机转发服务没在运行时重试启动，最长 30 秒） |
 | save_relay | {"id": 字符串或 null, "name": 字符串, "base_url": 字符串, "api_key": 字符串} | {"id": 字符串, "name": 字符串, "model_count": 整数, "models_changed": 布尔}（id 为 null 表示新增；name 是去掉首尾空格后的名字） |
 | delete_relay | {"id": 字符串} | Status |
 | set_forwarding | {"enabled": 布尔} | Status |
-| refresh_models | {"id": 字符串或 null} | Status（id 为 null 刷新全部配置） |
+| refresh_models | {"id": 字符串或 null} | Status（id 为 null 刷新全部配置；转发开但本机转发服务没在运行时先重试启动） |
 | detect_access | {} | Status（只检测登录状态，更新 access.target 和 access.detect，不改 Codex 配置） |
 | apply_access | {} | Status（转发开着且 access.target 与 access.mode 不同时，按 target 切换接入方式；否则不改动） |
 | check_update | {"manual": 布尔} | {"latest_version": 字符串或 null, "url": 字符串或 null, "is_newer": 布尔} |

@@ -66,6 +66,13 @@ struct Notice: Equatable, Identifiable, Sendable {
     let title: String
     var detail: String?
     var kind: Kind = .info
+    var detailDialogTitle: String?
+}
+
+private struct DraftSnapshot {
+    let name: String
+    let baseURL: String
+    let apiKey: String
 }
 
 struct Confirmation: Equatable, Sendable {
@@ -214,6 +221,8 @@ final class AppModel: ObservableObject {
     private let appURL: URL
     private static let detectFailedTitle = "没能检测 ChatGPT 登录状态"
     private static let keychainDeniedTitle = "无法读取已保存的 API Key，请重新输入"
+    private static let settingsBackedUpTitle = "原来的设置读不出来，已备份原文件"
+    private static let settingsUnreadableTitle = "原来的设置读不出来"
     private static let updateFailedTitle = "暂时无法检查更新，请稍后再试"
     private var noticeTimers: [UUID: Task<Void, Never>] = [:]
     private var startupAligned = false
@@ -416,6 +425,7 @@ final class AppModel: ObservableObject {
     func start(stored: StoredRelays? = nil) async {
         let stored = stored ?? StoredRelays.load(settings: settings, keychain: keychain)
         relays = stored.relays
+        if let recovery = stored.recovery { addSettingsRecoveryNotice(recovery) }
         let denied = stored.keys.values.contains {
             if case .failure(KeychainError.accessDenied) = $0 { return true }
             return false
@@ -443,6 +453,26 @@ final class AppModel: ObservableObject {
         }
     }
 
+    private func addSettingsRecoveryNotice(_ recovery: SettingsRecovery) {
+        let cause = "保存中转名字和地址的设置文件读不出来，可能是文件坏了、正被别的程序占用，或者格式认不出来。"
+        switch recovery {
+        case .backedUp(let backup):
+            addNotice(Notice(
+                title: Self.settingsBackedUpTitle,
+                detail: [cause, "原文件已经改名备份到：", backup.path, "这个文件里只有中转的名字和地址，没有 API Key。重新填写并完成设置后就能照常使用。"].joined(separator: "\n\n"),
+                kind: .warning,
+                detailDialogTitle: Self.settingsUnreadableTitle
+            ))
+        case .backupFailed(let original):
+            addNotice(Notice(
+                title: Self.settingsUnreadableTitle,
+                detail: [cause, "没能备份这个文件，它还在原处：", original.path, "完成设置后，它会被新的设置覆盖。想留着原文件的话，请先自己复制一份。", "这个文件里只有中转的名字和地址，没有 API Key。"].joined(separator: "\n\n"),
+                kind: .warning,
+                detailDialogTitle: Self.settingsUnreadableTitle
+            ))
+        }
+    }
+
     func coreDidFail() {
         coreRunning = false
         addNotice(Notice(title: "后台服务没能启动，请退出后重新打开", kind: .error))
@@ -455,22 +485,24 @@ final class AppModel: ObservableObject {
     func completeSetup() async {
         if setupPhase == .connecting { return }
         guard validateDraft() else { return }
+        let draft = snapshotDraft()
         setupPhase = .connecting
         setupFollowUpIssues = []
         let saved: SaveResult
         do {
-            saved = try await saveToCore()
+            saved = try await saveToCore(draft)
         } catch {
             let message = CoreFailure(error).message
             setupPhase = .failed(title: SetupCopy.failedTitle, detail: message.hasSuffix("。") ? message : message + "。")
             return
         }
         do {
-            try await persistDraft(saved)
+            try await persistDraft(saved, draft)
         } catch {
             setupPhase = .failed(title: "没有保存", detail: (error as? PersistError)?.message ?? "")
             return
         }
+        removeNotices(titled: Self.settingsBackedUpTitle, Self.settingsUnreadableTitle)
         var issues: [String] = []
         var forwardingOn = true
         do {
@@ -568,12 +600,13 @@ final class AppModel: ObservableObject {
     func saveRelay() async {
         if isSavingRelay { return }
         guard validateDraft() else { return }
+        let draft = snapshotDraft()
         isSavingRelay = true
         defer { isSavingRelay = false }
         relaySaveAlert = nil
         let saved: SaveResult
         do {
-            saved = try await saveToCore()
+            saved = try await saveToCore(draft)
         } catch {
             let failure = CoreFailure(error)
             let suffix = failure.code == "relay_401" ? "。已填的内容都还在，改好后再保存。" : ""
@@ -582,7 +615,7 @@ final class AppModel: ObservableObject {
         }
         let adding = editingRelayID == nil
         do {
-            try await persistDraft(saved)
+            try await persistDraft(saved, draft)
         } catch {
             relaySaveAlert = DialogAlert(title: "没有保存", message: (error as? PersistError)?.message ?? "", severity: .danger)
             return
@@ -629,7 +662,7 @@ final class AppModel: ObservableObject {
     }
 
     func quit() async {
-        guard !isDeletingRelay else { mainWindowRequested = true; return }
+        guard !isDeletingRelay, setupPhase != .connecting else { mainWindowRequested = true; return }
         if forwardingEnabled {
             pendingConfirmation = Confirmation(
                 kind: .quit,
@@ -644,7 +677,7 @@ final class AppModel: ObservableObject {
     }
 
     func uninstall() async {
-        guard !isDeletingRelay else { mainWindowRequested = true; return }
+        guard !isDeletingRelay, setupPhase != .connecting else { mainWindowRequested = true; return }
         pendingConfirmation = Confirmation(
             kind: .uninstall,
             title: "卸载模型接入助手？",
@@ -884,24 +917,32 @@ final class AppModel: ObservableObject {
         return errors.isEmpty
     }
 
-    private func saveToCore() async throws -> SaveResult {
+    private func snapshotDraft() -> DraftSnapshot {
+        DraftSnapshot(
+            name: draftName.trimmingCharacters(in: .whitespaces),
+            baseURL: draftBaseURL.trimmingCharacters(in: .whitespaces),
+            apiKey: draftAPIKey
+        )
+    }
+
+    private func saveToCore(_ draft: DraftSnapshot) async throws -> SaveResult {
         let data = try await core.call(
             "save_relay",
             params: SaveRelayParams(
                 id: editingRelayID,
-                name: draftName.trimmingCharacters(in: .whitespaces),
-                baseURL: draftBaseURL.trimmingCharacters(in: .whitespaces),
-                apiKey: draftAPIKey
+                name: draft.name,
+                baseURL: draft.baseURL,
+                apiKey: draft.apiKey
             )
         )
         return try JSONDecoder.snakeCase.decode(SaveResult.self, from: data)
     }
 
-    private func persistDraft(_ saved: SaveResult) async throws {
+    private func persistDraft(_ saved: SaveResult, _ draft: DraftSnapshot) async throws {
         let previous = relays.first { $0.id == saved.id }
         let previousKey = (try? keychain.load(relayID: saved.id)) ?? nil
         do {
-            try persistDraftLocally(saved, previousKey: previousKey)
+            try persistDraftLocally(saved, draft, previousKey: previousKey)
         } catch {
             let revoked = await revokeCore(saved, previous: previous, previousKey: previousKey)
             throw PersistError(failure: error as? StorageFailure ?? .settings, revoked: revoked)
@@ -925,9 +966,9 @@ final class AppModel: ObservableObject {
         }
     }
 
-    private func persistDraftLocally(_ saved: SaveResult, previousKey: String?) throws {
-        let config = RelayConfig(id: saved.id, name: saved.name, baseURL: draftBaseURL.trimmingCharacters(in: .whitespaces))
-        do { try keychain.save(draftAPIKey, relayID: saved.id) } catch { throw StorageFailure.keychain }
+    private func persistDraftLocally(_ saved: SaveResult, _ draft: DraftSnapshot, previousKey: String?) throws {
+        let config = RelayConfig(id: saved.id, name: saved.name, baseURL: draft.baseURL)
+        do { try keychain.save(draft.apiKey, relayID: saved.id) } catch { throw StorageFailure.keychain }
         var list = relays
         if let index = list.firstIndex(where: { $0.id == saved.id }) { list[index] = config } else { list.append(config) }
         do {

@@ -35,24 +35,32 @@ struct CoreInitParams: Codable, Sendable, Equatable {
         try c.encode(relays, forKey: .relays)
         try c.encode(chatgptDir, forKey: .chatgptDir)
     }
-
-    static func load(settings: any SettingsStoring, keychain: any KeyStoring, chatgptDir: String?) -> CoreInitParams {
-        CoreInitParams(
-            relays: StoredRelays.load(settings: settings, keychain: keychain).initRelays,
-            chatgptDir: chatgptDir
-        )
-    }
 }
 
 struct StoredRelays: Sendable {
     var relays: [RelayConfig]
     var keys: [String: Result<String?, Error>]
+    var recovery: SettingsRecovery?
+    var readFailed = false
 
     static func load(settings: any SettingsStoring, keychain: any KeyStoring) -> StoredRelays {
-        let relays = (try? settings.loadRelays()) ?? []
+        var stored = read(settings: settings, keychain: keychain)
+        if stored.readFailed { stored.recovery = settings.recoverUnreadable() }
+        return stored
+    }
+
+    static func read(settings: any SettingsStoring, keychain: any KeyStoring) -> StoredRelays {
+        let relays: [RelayConfig]
+        var readFailed = false
+        do {
+            relays = try settings.loadRelays()
+        } catch {
+            relays = []
+            readFailed = true
+        }
         var keys: [String: Result<String?, Error>] = [:]
         for relay in relays { keys[relay.id] = Result { try keychain.load(relayID: relay.id) } }
-        return StoredRelays(relays: relays, keys: keys)
+        return StoredRelays(relays: relays, keys: keys, readFailed: readFailed)
     }
 
     var initRelays: [CoreRelayInit] {

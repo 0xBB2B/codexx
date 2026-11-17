@@ -70,7 +70,15 @@ public sealed class CoreProcess(CoreProcessOptions options, Func<CoreInitParams>
     public async Task StartAsync()
     {
         Launch(null);
-        await InitAsync();
+        try
+        {
+            await InitAsync();
+        }
+        catch
+        {
+            await StopAsync();
+            throw;
+        }
     }
 
     public Task StopAsync() => StopCoreAsync(false, "");
@@ -80,27 +88,28 @@ public sealed class CoreProcess(CoreProcessOptions options, Func<CoreInitParams>
         var tcs = new TaskCompletionSource<JsonElement>(TaskCreationOptions.RunContinuationsAsynchronously);
         Process p;
         long id;
+        string line;
         lock (gate)
         {
             if (stopped || process == null) throw new CoreProcessExitedException();
             p = process;
             id = ++nextId;
+            line = JsonSerializer.Serialize(new Dictionary<string, object?>
+            {
+                ["id"] = id,
+                ["method"] = method,
+                ["params"] = parameters ?? new Dictionary<string, object?>(),
+            }) + "\n";
             pending[id] = tcs;
         }
 
-        var line = JsonSerializer.Serialize(new Dictionary<string, object?>
-        {
-            ["id"] = id,
-            ["method"] = method,
-            ["params"] = parameters ?? new Dictionary<string, object?>(),
-        }) + "\n";
         try
         {
             lock (writeGate) p.StandardInput.Write(line);
         }
         catch (Exception ex) when (ex is IOException or ObjectDisposedException or InvalidOperationException)
         {
-            lock (gate) FailPending();
+            lock (gate) pending.Remove(id);
             throw new CoreProcessExitedException();
         }
         return await tcs.Task;

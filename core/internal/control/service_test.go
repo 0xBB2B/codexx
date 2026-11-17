@@ -2070,3 +2070,422 @@ func TestServe_ConcurrentAutoAndManualCheck(t *testing.T) {
 		return up["latest_version"] == "1.3.0"
 	})
 }
+
+func withMissingCodex(e *env) {
+	e.codexPath = filepath.Join(filepath.Dir(e.configPath), "no-such-codex")
+}
+
+func installCodex(t *testing.T, e *env) {
+	t.Helper()
+	script, err := os.ReadFile(writeFakeCodex(t, officialJSON, 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(e.codexPath, script, 0o755); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func holdPort(t *testing.T) (addr string, release func()) {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+	return ln.Addr().String(), func() { _ = ln.Close() }
+}
+
+func nested(t *testing.T, res map[string]any, key, field string) any {
+	t.Helper()
+	obj, ok := res[key].(map[string]any)
+	if !ok {
+		t.Fatalf("结果缺少 %s 对象: %v", key, res)
+	}
+	return obj[field]
+}
+
+func TestStatus_ForwardingOff_RedetectsChatGPT(t *testing.T) {
+	e := newEnv(t, false, withMissingCodex)
+	c := startServe(t, e.opts)
+	c.result("init", initParams(e))
+	first := c.result("status", nil)
+	if nested(t, first, "chatgpt", "found") != false || nested(t, first, "chatgpt", "error") != "chatgpt_not_found" {
+		t.Fatalf("装上之前 chatgpt = %v", first["chatgpt"])
+	}
+
+	installCodex(t, e)
+	st := c.result("status", nil)
+	if nested(t, st, "chatgpt", "found") != true || nested(t, st, "chatgpt", "error") != nil {
+		t.Errorf("装上之后 chatgpt = %v, want found=true error=null", st["chatgpt"])
+	}
+}
+
+func TestStatus_ForwardingOff_RedetectsRestoreBlocked(t *testing.T) {
+	e := newEnv(t, true)
+	e.initRelay(t)
+	e.shutDown = true
+	if err := e.svc.Shutdown(context.Background(), false); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(e.dataDir, "settings.json"), []byte(`{"forwarding":false}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	enabledText := e.config(t)
+
+	c := startServe(t, e.opts)
+	c.result("init", initParams(e))
+	blocked := func() []any {
+		res := c.result("status", nil)
+		list, _ := res["restore_blocked"].([]any)
+		return list
+	}
+	if got := blocked(); len(got) != 0 {
+		t.Fatalf("没改过配置时 restore_blocked = %v", got)
+	}
+
+	e.handEditBaseURL(t)
+	if got := blocked(); !reflect.DeepEqual(got, []any{"openai_base_url"}) {
+		t.Errorf("手改之后 restore_blocked = %v, want [openai_base_url]", got)
+	}
+
+	if err := os.WriteFile(e.configPath, []byte(enabledText), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := blocked(); len(got) != 0 {
+		t.Errorf("改回去之后 restore_blocked = %v, want 空", got)
+	}
+}
+
+func TestForwardingOn_ProxyNotRunning_MethodRestartsProxy(t *testing.T) {
+	causes := []struct {
+		name  string
+		setup func(t *testing.T) (mod func(*env), fix func(e *env))
+	}{
+		{"端口被占用", func(t *testing.T) (func(*env), func(*env)) {
+			addr, release := holdPort(t)
+			return func(e *env) { e.listenAddr = addr }, func(*env) { release() }
+		}},
+		{"启动时没找到 ChatGPT", func(t *testing.T) (func(*env), func(*env)) {
+			return withMissingCodex, func(e *env) { installCodex(t, e) }
+		}},
+	}
+	for _, method := range []string{"status", "refresh_models"} {
+		for _, cause := range causes {
+			t.Run(method+"/"+cause.name, func(t *testing.T) {
+				mod, fix := cause.setup(t)
+				e := newEnv(t, true, mod)
+				c := startServe(t, e.opts)
+				first := c.result("init", initParams(e))
+				if nested(t, first, "proxy", "running") != false {
+					t.Fatalf("初始状态应是转发服务没运行: %v", first)
+				}
+				fix(e)
+
+				st := c.result(method, nil)
+				if st["forwarding"] != true || nested(t, st, "proxy", "running") != true || nested(t, st, "proxy", "error") != nil {
+					t.Errorf("proxy = %v, forwarding = %v, want 运行中且无错误", st["proxy"], st["forwarding"])
+				}
+				if nested(t, st, "chatgpt", "found") != true || nested(t, st, "chatgpt", "error") != nil {
+					t.Errorf("chatgpt = %v, want found=true error=null", st["chatgpt"])
+				}
+				if !proxyReachable(e.listenAddr) {
+					t.Error("转发服务应已在监听")
+				}
+				if !strings.Contains(e.config(t), proxyURLInConfig) {
+					t.Errorf("配置应已接管: %q", e.config(t))
+				}
+			})
+		}
+	}
+}
+
+func TestStartFailure_RestoresPreviouslyTakenOverConfig(t *testing.T) {
+	ctx := context.Background()
+	prepare := func(t *testing.T, forwardingAfter bool) *env {
+		e := newEnv(t, true)
+		e.initRelay(t)
+		e.shutDown = true
+		if err := e.svc.Shutdown(ctx, false); err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(e.config(t), proxyURLInConfig) {
+			t.Fatalf("上次会话应留下接管后的配置: %q", e.config(t))
+		}
+		if !forwardingAfter {
+			if err := os.WriteFile(filepath.Join(e.dataDir, "settings.json"), []byte(`{"forwarding":false}`), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return e
+	}
+	requireRestored := func(t *testing.T, e *env, st control.Status, wantCode string) {
+		t.Helper()
+		if got := e.config(t); got != originalConfig {
+			t.Errorf("配置应还原, 实际 %q", got)
+		}
+		if st.Proxy.Running || st.Proxy.Error == nil || *st.Proxy.Error != wantCode {
+			t.Errorf("Proxy = %+v, want 未运行且 error=%s", st.Proxy, wantCode)
+		}
+	}
+
+	t.Run("Init 时转发服务启动失败", func(t *testing.T) {
+		e := prepare(t, true)
+		addr, _ := holdPort(t)
+		e.opts.ListenAddr = addr
+		svc := control.NewService(e.opts)
+		t.Cleanup(func() { _ = svc.Shutdown(ctx, false) })
+		st, err := svc.Init(ctx, initParamsOf(t, initParams(e)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		requireRestored(t, e, st, "proxy_port_in_use")
+	})
+
+	t.Run("开启转发时转发服务启动失败", func(t *testing.T) {
+		e := prepare(t, false)
+		addr, _ := holdPort(t)
+		e.opts.ListenAddr = addr
+		svc := control.NewService(e.opts)
+		t.Cleanup(func() { _ = svc.Shutdown(ctx, false) })
+		if _, err := svc.Init(ctx, initParamsOf(t, initParams(e))); err != nil {
+			t.Fatal(err)
+		}
+		_, err := svc.SetForwarding(ctx, true)
+		requireCode(t, err, "proxy_port_in_use")
+		requireRestored(t, e, svc.Status(), "proxy_port_in_use")
+	})
+
+	t.Run("生成目录失败", func(t *testing.T) {
+		e := prepare(t, true)
+		if err := os.Remove(e.catalogPath()); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Mkdir(e.catalogPath(), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		svc := control.NewService(e.opts)
+		t.Cleanup(func() { _ = svc.Shutdown(ctx, false) })
+		st, err := svc.Init(ctx, initParamsOf(t, initParams(e)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := e.config(t); got != originalConfig {
+			t.Errorf("配置应还原, 实际 %q", got)
+		}
+		if st.Proxy.Error == nil {
+			t.Errorf("Proxy.Error 应带失败原因: %+v", st.Proxy)
+		}
+	})
+}
+
+func leaveTakenOverConfig(t *testing.T, e *env, forwardingAfter bool) {
+	t.Helper()
+	e.initRelay(t)
+	e.shutDown = true
+	if err := e.svc.Shutdown(context.Background(), false); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(e.config(t), proxyURLInConfig) {
+		t.Fatalf("上次会话应留下接管后的配置: %q", e.config(t))
+	}
+	if !forwardingAfter {
+		if err := os.WriteFile(filepath.Join(e.dataDir, "settings.json"), []byte(`{"forwarding":false}`), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func TestStartFailure_ConfigWithNothingTakenOverIsRestored(t *testing.T) {
+	ctx := context.Background()
+	const plain = "sandbox = \"read-only\"\n"
+	withPlainConfig := func(e *env) {
+		if err := os.WriteFile(e.configPath, []byte(plain), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	tests := []struct {
+		name            string
+		forwardingAfter bool
+		start           func(t *testing.T, svc *control.Service, e *env) control.Status
+	}{
+		{"Init 时转发服务启动失败", true, func(t *testing.T, svc *control.Service, e *env) control.Status {
+			st, err := svc.Init(ctx, initParamsOf(t, initParams(e)))
+			if err != nil {
+				t.Fatal(err)
+			}
+			return st
+		}},
+		{"开启转发时转发服务启动失败", false, func(t *testing.T, svc *control.Service, e *env) control.Status {
+			if _, err := svc.Init(ctx, initParamsOf(t, initParams(e))); err != nil {
+				t.Fatal(err)
+			}
+			_, err := svc.SetForwarding(ctx, true)
+			requireCode(t, err, "proxy_port_in_use")
+			return svc.Status()
+		}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newEnv(t, true, withPlainConfig)
+			leaveTakenOverConfig(t, e, tc.forwardingAfter)
+			addr, _ := holdPort(t)
+			e.opts.ListenAddr = addr
+			svc := control.NewService(e.opts)
+			t.Cleanup(func() { _ = svc.Shutdown(ctx, false) })
+
+			st := tc.start(t, svc, e)
+			if got := e.config(t); got != plain {
+				t.Errorf("配置应恢复成原样, 实际 %q", got)
+			}
+			if st.Proxy.Running || st.Proxy.Error == nil || *st.Proxy.Error != "proxy_port_in_use" {
+				t.Errorf("Proxy = %+v, want 未运行且 error=proxy_port_in_use", st.Proxy)
+			}
+		})
+	}
+}
+
+func TestStartFailure_RestoreBlockedIsListedInStatus(t *testing.T) {
+	ctx := context.Background()
+	e := newEnv(t, true)
+	leaveTakenOverConfig(t, e, true)
+	e.handEditBaseURL(t)
+	addr, _ := holdPort(t)
+	e.opts.ListenAddr = addr
+	svc := control.NewService(e.opts)
+	t.Cleanup(func() { _ = svc.Shutdown(ctx, false) })
+
+	st, err := svc.Init(ctx, initParamsOf(t, initParams(e)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.Proxy.Error == nil || *st.Proxy.Error != "proxy_port_in_use" {
+		t.Errorf("Proxy = %+v, want error=proxy_port_in_use", st.Proxy)
+	}
+	if !reflect.DeepEqual(st.RestoreBlocked, []string{"openai_base_url"}) {
+		t.Errorf("RestoreBlocked = %v, want [openai_base_url]", st.RestoreBlocked)
+	}
+}
+
+func twoRelayParams(e *env, second *fakeRelay) map[string]any {
+	return initParamsFor(
+		relayJSON("1", "中转", e.relay.baseURL(), keyA),
+		relayJSON("2", "备用", second.baseURL(), keyA),
+	)
+}
+
+func TestRefreshModels_RestartingProxyDoesNotFetchRelaysTwice(t *testing.T) {
+	addr, release := holdPort(t)
+	e := newEnv(t, true, func(e *env) { e.listenAddr = addr })
+	second := newFakeRelay(t, []string{"deepseek-flash"}, keyA)
+	c := startServe(t, e.opts)
+	c.result("init", twoRelayParams(e, second))
+	release()
+	before1, before2 := e.relay.hits(), second.hits()
+
+	st := c.result("refresh_models", nil)
+	if nested(t, st, "proxy", "running") != true {
+		t.Fatalf("转发服务应已重启: %v", st["proxy"])
+	}
+	if got := e.relay.hits() - before1; got != 1 {
+		t.Errorf("中转 1 被拉取 %d 次, want 1", got)
+	}
+	if got := second.hits() - before2; got != 1 {
+		t.Errorf("中转 2 被拉取 %d 次, want 1", got)
+	}
+}
+
+func TestRefreshModels_CorruptCacheShowsErrorOnThatRelay(t *testing.T) {
+	for _, forwarding := range []bool{false, true} {
+		name := "转发关着"
+		if forwarding {
+			name = "转发开着"
+		}
+		t.Run(name, func(t *testing.T) {
+			e := newEnv(t, forwarding)
+			second := newFakeRelay(t, []string{"deepseek-flash"}, keyA)
+			c := startServe(t, e.opts)
+			c.result("init", twoRelayParams(e, second))
+			if err := os.WriteFile(filepath.Join(e.dataDir, "relay-models-2.json"), []byte("{not json"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+
+			res := c.result("refresh_models", map[string]any{"id": "1"})
+			for _, where := range []struct {
+				name string
+				res  map[string]any
+			}{{"refresh_models", res}, {"之后的 status", c.result("status", nil)}} {
+				relays := relayList(t, where.res)
+				if len(relays) != 2 {
+					t.Fatalf("%s relays = %v", where.name, relays)
+				}
+				if relays[1]["error"] == nil {
+					t.Errorf("%s: 缓存损坏的中转 2 应带错误: %v", where.name, relays[1])
+				}
+				if relays[0]["error"] != nil {
+					t.Errorf("%s: 中转 1 不该带错误: %v", where.name, relays[0])
+				}
+			}
+		})
+	}
+}
+
+func newHangingRelay(t *testing.T) string {
+	t.Helper()
+	done := make(chan struct{})
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		select {
+		case <-r.Context().Done():
+		case <-done:
+		}
+	}))
+	t.Cleanup(srv.Close)
+	trustCert(t, srv)
+	t.Cleanup(func() { close(done) })
+	return srv.URL + "/v1"
+}
+
+func hangingInitParams(hangURL string) map[string]any {
+	return initParamsFor(relayJSON("1", "中转", hangURL, keyA))
+}
+
+func setRestartTimeout(t *testing.T, d time.Duration) {
+	t.Helper()
+	old := control.RestartTimeout
+	control.RestartTimeout = d
+	t.Cleanup(func() { control.RestartTimeout = old })
+}
+
+func TestStatus_RestartIsLimitedByRestartTimeout(t *testing.T) {
+	setRestartTimeout(t, time.Second)
+	addr, release := holdPort(t)
+	e := newEnv(t, true, func(e *env) { e.listenAddr = addr })
+	hang := newHangingRelay(t)
+	c := startServe(t, e.opts)
+	c.result("init", hangingInitParams(hang))
+	release()
+
+	start := time.Now()
+	st := c.result("status", nil)
+	if elapsed := time.Since(start); elapsed > 5*time.Second {
+		t.Errorf("status 耗时 %v, 重启应在 RestartTimeout(1 秒)后放弃", elapsed)
+	}
+	if nested(t, st, "proxy", "running") != false {
+		t.Errorf("上游挂住时转发服务不该显示运行中: %v", st["proxy"])
+	}
+}
+
+func TestInit_UpstreamHangIsLimitedByRestartTimeout(t *testing.T) {
+	setRestartTimeout(t, time.Second)
+	e := newEnv(t, true)
+	hang := newHangingRelay(t)
+
+	start := time.Now()
+	_, err := e.svc.Init(context.Background(), initParamsOf(t, hangingInitParams(hang)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if elapsed := time.Since(start); elapsed > 5*time.Second {
+		t.Errorf("Init 耗时 %v, 上游挂住时应在 RestartTimeout(1 秒)后返回", elapsed)
+	}
+}

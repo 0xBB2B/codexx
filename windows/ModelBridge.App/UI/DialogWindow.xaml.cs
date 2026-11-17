@@ -85,7 +85,7 @@ public partial class DialogWindow : Window
         }
     }
 
-    static StackPanel BusyContent(string text)
+    internal static StackPanel BusyContent(string text)
     {
         var panel = new StackPanel { Orientation = Orientation.Horizontal };
         panel.Children.Add(new Spinner { Margin = new Thickness(0, 0, 8, 0), VerticalAlignment = VerticalAlignment.Center });

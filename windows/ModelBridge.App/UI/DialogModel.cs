@@ -92,6 +92,19 @@ public sealed record DialogModel(
             0);
     }
 
+    public static DialogModel ForUninstallLaunchFailed() => new(
+        520,
+        "没能自动删除程序文件",
+        "卸载程序没能启动，本助手的程序文件还留在电脑上。Codex 配置已经还原。\n\n"
+        + "请打开「设置 > 应用 > 已安装的应用」（有的系统里叫「应用和功能」），找到「模型接入助手」，点「卸载」。\n\n"
+        + "点「退出」后本助手会关闭。",
+        [new("退出", DialogButtonRole.Primary, IsDefault: true)],
+        0);
+
+    public static DialogModel ForUnexpectedError() => ForInfo(
+        "操作没有完成",
+        "出了点意外，这次操作没有完成。请再试一次；还是不行的话，退出本助手再重新打开。");
+
     public static DialogModel ForInfo(string title, string message) => new(
         520,
         title,

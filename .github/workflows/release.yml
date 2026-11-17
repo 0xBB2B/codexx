@@ -3,7 +3,7 @@ on:
   push:
     tags: ['v*']
 permissions:
-  contents: write
+  contents: read
 concurrency:
   group: release-${{ github.ref_name }}
   cancel-in-progress: false
@@ -12,15 +12,18 @@ env:
   GH_REPO: ${{ github.repository }}
 jobs:
   prepare:
+    timeout-minutes: 10
+    permissions:
+      contents: write
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.tag.outputs.version }}
       release_id: ${{ steps.draft.outputs.release_id }}
     steps:
-      - uses: actions/checkout@v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
-      - uses: actions/setup-go@v7.0.0
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: scripts/releasetag/go.mod
           cache: false
@@ -42,30 +45,37 @@ jobs:
             -F generate_release_notes=true -q .id)"
           echo "release_id=$ID" >> "$GITHUB_OUTPUT"
   macos:
+    timeout-minutes: 45
     needs: prepare
     runs-on: macos-26
     steps:
-      - uses: actions/checkout@v7.0.1
-      - uses: actions/setup-go@v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: core/go.mod
           cache-dependency-path: core/go.sum
       - run: make test
       - run: scripts/package-macos.sh "${{ needs.prepare.outputs.version }}" "$GH_REPO"
-      - run: gh release upload "$GITHUB_REF_NAME" "dist/model-bridge-${{ needs.prepare.outputs.version }}-macos.dmg"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: macos-dmg
+          path: dist/model-bridge-${{ needs.prepare.outputs.version }}-macos.dmg
+          if-no-files-found: error
+          retention-days: 1
   windows:
+    timeout-minutes: 45
     needs: prepare
     runs-on: windows-2025
     defaults:
       run:
         shell: bash
     steps:
-      - uses: actions/checkout@v7.0.1
-      - uses: actions/setup-go@v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: core/go.mod
           cache-dependency-path: core/go.sum
-      - uses: actions/setup-dotnet@v6.1.0
+      - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
         with:
           dotnet-version: '10.0.x'
       - run: |
@@ -73,14 +83,37 @@ jobs:
           (cd core && go test ./...)
           dotnet test --solution windows/ModelBridge.sln
           scripts/package-windows.sh "$VERSION" "$GH_REPO"
-          gh release upload "$GITHUB_REF_NAME" "dist/model-bridge-$VERSION-windows-setup.exe"
-  publish:
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: windows-exe
+          path: dist/model-bridge-${{ needs.prepare.outputs.version }}-windows-setup.exe
+          if-no-files-found: error
+          retention-days: 1
+  upload:
+    timeout-minutes: 10
+    permissions:
+      contents: write
     needs: [prepare, macos, windows]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          path: dist
+          merge-multiple: true
+      - run: gh release upload "$GITHUB_REF_NAME" "dist/model-bridge-${{ needs.prepare.outputs.version }}-macos.dmg" "dist/model-bridge-${{ needs.prepare.outputs.version }}-windows-setup.exe"
+  publish:
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    needs: [prepare, upload]
     runs-on: ubuntu-latest
     steps:
       - run: gh api -X PATCH "repos/$GH_REPO/releases/${{ needs.prepare.outputs.release_id }}" -F draft=false -f make_latest=legacy
   cleanup:
-    needs: [prepare, macos, windows, publish]
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    needs: [prepare, macos, windows, upload, publish]
     if: ${{ (failure() || cancelled()) && needs.prepare.outputs.release_id != '' }}
     runs-on: ubuntu-latest
     steps:

@@ -169,6 +169,9 @@ func splice(text string, off int, raw, eol string) string {
 	if off == len(text) && text != "" && !strings.HasSuffix(text, "\n") {
 		return text + eol + strings.TrimSuffix(raw, eol)
 	}
+	if off < len(text) && !strings.HasSuffix(raw, "\n") {
+		raw += eol
+	}
 	return text[:off] + raw + text[off:]
 }
 

@@ -6,7 +6,11 @@ import (
 	"encoding/json"
 	"io"
 	"sync"
+	"time"
 )
+
+// stdin 关闭后，还在处理的请求最多再跑这么久；排在后面的请求各自同样计时
+const eofGrace = 2 * time.Second
 
 const maxLineBytes = 1 << 20
 
@@ -63,8 +67,9 @@ func Serve(ctx context.Context, opts Options, in io.Reader, out io.Writer) error
 
 	lines := make(chan []byte, 16)
 	scanErr := make(chan error, 1)
+	eof := make(chan struct{})
 	go func() {
-		defer cancel()
+		defer close(eof)
 		defer close(lines)
 		sc := bufio.NewScanner(in)
 		sc.Buffer(make([]byte, 0, 64*1024), maxLineBytes)
@@ -90,7 +95,7 @@ func Serve(ctx context.Context, opts Options, in io.Reader, out io.Writer) error
 			stopLoop()
 			<-loopDone
 		}
-		result, err := dispatch(ctx, svc, req)
+		result, err := dispatchUntilEOFGrace(ctx, eof, svc, req)
 		if err != nil {
 			w.send(response{ID: req.ID, Error: toError(err)})
 		} else {
@@ -108,6 +113,30 @@ func Serve(ctx context.Context, opts Options, in io.Reader, out io.Writer) error
 	}
 }
 
+func dispatchUntilEOFGrace(ctx context.Context, eof <-chan struct{}, svc *Service, req request) (any, error) {
+	reqCtx, cancelReq := context.WithCancel(ctx)
+	done := make(chan struct{})
+	defer func() {
+		close(done)
+		cancelReq()
+	}()
+	go func() {
+		select {
+		case <-eof:
+		case <-done:
+			return
+		}
+		t := time.NewTimer(eofGrace)
+		defer t.Stop()
+		select {
+		case <-t.C:
+			cancelReq()
+		case <-done:
+		}
+	}()
+	return dispatch(reqCtx, svc, req)
+}
+
 func dispatch(ctx context.Context, svc *Service, req request) (any, error) {
 	switch req.Method {
 	case "init":
@@ -117,7 +146,7 @@ func dispatch(ctx context.Context, svc *Service, req request) (any, error) {
 		}
 		return svc.Init(ctx, p)
 	case "status":
-		return svc.Status(), nil
+		return svc.StatusContext(ctx), nil
 	case "save_relay":
 		var p SaveRelayParams
 		if err := decode(req.Params, &p); err != nil {

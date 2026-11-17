@@ -184,6 +184,8 @@ func Enable(c Config, in EnableInput) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
+	st = effective(orig, st)
+	previous := cloneState(st)
 	badSet := map[string]bool{}
 	var modelEntry *entry
 	configMissing := !existed
@@ -264,6 +266,9 @@ func Enable(c Config, in EnableInput) ([]string, error) {
 			if text, l, removed, err = removeKey(text, keyProvider); err != nil {
 				return nil, err
 			}
+			if !strings.HasSuffix(removed, "\n") && text != "" && !strings.HasSuffix(text, "\n") {
+				text += eol
+			}
 			line = &l
 		}
 		record(keyProvider, origStr(it, had), removed, had, nil, had, line)
@@ -320,6 +325,7 @@ func Enable(c Config, in EnableInput) ([]string, error) {
 		}
 	}
 
+	st.PriorSum, st.Previous = sumOf(orig), previous
 	if err := SaveState(c, st); err != nil {
 		return nil, err
 	}
@@ -342,21 +348,23 @@ func tampered(text string, st *State) ([]string, error) {
 		if err != nil {
 			return nil, err
 		}
-		var ok bool
-		switch w := e.Written.(type) {
-		case nil:
-			ok = !present
-		case string:
-			ok = present && it.isStr && it.str == w
-		default:
-			ok = present && it.isArr && slices.Equal(it.strs, strsOf(w))
-		}
-		if !ok {
+		if !writtenMatches(e.Written, it, present) {
 			bad = append(bad, key)
 		}
 	}
 	slices.Sort(bad)
 	return bad, nil
+}
+
+func writtenMatches(w any, it item, present bool) bool {
+	switch w := w.(type) {
+	case nil:
+		return !present
+	case string:
+		return present && it.isStr && it.str == w
+	default:
+		return present && it.isArr && slices.Equal(it.strs, strsOf(w))
+	}
 }
 
 func strsOf(v any) []string {
@@ -385,6 +393,9 @@ func CheckTampered(c Config) ([]string, error) {
 	}
 	if err := Validate(text); err != nil {
 		return nil, err
+	}
+	if st = effective(text, st); st == nil {
+		return nil, nil
 	}
 	return tampered(text, st)
 }
@@ -443,6 +454,9 @@ func restore(c Config, all bool) error {
 	}
 	if err := Validate(orig); err != nil {
 		return err
+	}
+	if st = effective(orig, st); st == nil {
+		return removeState(c)
 	}
 	text, bad, err := restoreText(orig, st)
 	if err != nil {

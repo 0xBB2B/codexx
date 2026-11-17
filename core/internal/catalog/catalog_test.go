@@ -1021,3 +1021,40 @@ func TestBuild_FetchRemoteRelaysAreFetchedConcurrently(t *testing.T) {
 		}
 	}
 }
+
+func TestBuild_CacheOnly_UnusableCacheFile_CarriesError(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name  string
+		setup func(t *testing.T, path string)
+	}{
+		{"缓存 JSON 解码失败", func(t *testing.T, path string) {
+			if err := os.WriteFile(path, []byte("{not json"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"缓存文件读取失败", func(t *testing.T, path string) {
+			if err := os.Mkdir(path, 0o755); err != nil {
+				t.Fatal(err)
+			}
+		}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			codex, _ := writeFakeCodex(t, officialJSON, 0)
+			a, _ := twoStubs(t)
+			dataDir := t.TempDir()
+			tc.setup(t, filepath.Join(dataDir, "relay-models-1.json"))
+
+			res := build(t, buildOpts(t, codex, dataDir, sourceMode("1", "主力", a.URL, catalog.CacheOnly, nil)))
+
+			if a.hits.Load() != 0 {
+				t.Errorf("请求次数 = %d, want 0", a.hits.Load())
+			}
+			if r := relayResult(t, res, "1"); r.Err == nil {
+				t.Errorf("缓存不可用时配置 1 应带错误, 得到 %+v", r)
+			}
+		})
+	}
+}

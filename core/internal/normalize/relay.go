@@ -100,20 +100,37 @@ func ForRelay(body []byte) ([]byte, error) {
 			return nil, err
 		}
 		kept := make([]json.RawMessage, 0, len(tools))
+		names := map[string]bool{}
 		for _, t := range tools {
 			var h itemHead
 			_ = json.Unmarshal(t, &h)
 			if h.Type == "function" {
 				kept = append(kept, t)
+				names[h.Name] = true
 			}
 		}
 		if len(kept) != len(tools) {
 			changed = true
 			top["tools"], _ = json.Marshal(kept)
+			if toolChoiceUnusable(top["tool_choice"], names) {
+				delete(top, "tool_choice")
+			}
 		}
 	}
 	if !changed {
 		return body, nil
 	}
 	return json.Marshal(top)
+}
+
+func toolChoiceUnusable(raw json.RawMessage, names map[string]bool) bool {
+	var s string
+	if json.Unmarshal(raw, &s) == nil {
+		return s == "required" && len(names) == 0
+	}
+	var h itemHead
+	if json.Unmarshal(raw, &h) != nil {
+		return false
+	}
+	return h.Type != "function" || !names[h.Name]
 }

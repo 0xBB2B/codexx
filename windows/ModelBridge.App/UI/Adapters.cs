@@ -65,6 +65,8 @@ public sealed class VaultAdapter : ICredentialVault
 public sealed class SettingsAdapter(ShellSettings settings) : IShellSettingsStore
 {
     public IReadOnlyList<RelayConfig> ReadRelays() => settings.ReadRelays();
+    public string? TryBackUp() => settings.TryBackUp();
+    public bool HasBackup() => settings.HasBackup();
     public void SaveRelays(IReadOnlyList<RelayConfig> relays) => settings.SaveRelays(relays);
     public void DeleteAll() => settings.DeleteAll();
 }

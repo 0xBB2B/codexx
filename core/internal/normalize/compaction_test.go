@@ -123,6 +123,9 @@ func TestSummaryFromResponse(t *testing.T) {
 		{"单段文字", `{"output":[{"type":"message","content":[{"type":"output_text","text":"总结正文"}]}]}`, "总结正文", false},
 		{"忽略非 output_text 与 reasoning", `{"output":[{"type":"reasoning","summary":[]},{"type":"message","content":[{"type":"refusal","text":"x"},{"type":"output_text","text":"总结正文"}]}]}`, "总结正文", false},
 		{"空文字", `{"output":[{"type":"message","content":[{"type":"output_text","text":""}]}]}`, "", true},
+		{"status 为 completed", `{"status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"总结正文"}]}]}`, "总结正文", false},
+		{"status 为 incomplete 视为失败", `{"status":"incomplete","incomplete_details":{"reason":"max_output_tokens"},"output":[{"type":"message","content":[{"type":"output_text","text":"截断的总结"}]}]}`, "", true},
+		{"status 为 failed 视为失败", `{"status":"failed","output":[{"type":"message","content":[{"type":"output_text","text":"x"}]}]}`, "", true},
 		{"没有 output", `{}`, "", true},
 		{"非法 JSON", `nope`, "", true},
 	}

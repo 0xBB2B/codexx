@@ -138,4 +138,73 @@ public class ChatGPTAppTests
         Assert.IsTrue(first.Disposed);
         Assert.IsTrue(second.Disposed);
     }
+
+    sealed class SessionGoneProcess : IChatGptProcess
+    {
+        public bool Disposed;
+        public int SessionId => throw new InvalidOperationException("进程已退出");
+        public string? ExecutablePath => null;
+        public void Dispose() => Disposed = true;
+    }
+
+    [TestMethod]
+    public void IsRunning_ProcessExitsWhileReadingSessionId_SkipsItAndKeepsOthers()
+    {
+        var first = new FakeProcess(MySession, null);
+        var gone = new SessionGoneProcess();
+        var last = new FakeProcess(MySession, null);
+
+        Assert.IsTrue(new ChatGptApp(() => new IChatGptProcess[] { first, gone, last }, MySession).IsRunning());
+        Assert.IsTrue(first.Disposed);
+        Assert.IsTrue(gone.Disposed);
+        Assert.IsTrue(last.Disposed);
+    }
+
+    [TestMethod]
+    public void IsRunning_OnlyProcessExitedWhileReadingSessionId_ReturnsFalse()
+    {
+        var gone = new SessionGoneProcess();
+
+        Assert.IsFalse(new ChatGptApp(() => new IChatGptProcess[] { gone }, MySession).IsRunning());
+        Assert.IsTrue(gone.Disposed);
+    }
+
+    [TestMethod]
+    public void Locate_ProcessExitsWhileReadingSessionId_SkipsItAndReturnsOwnPath()
+    {
+        var ownPath = Touch("Elsewhere/Codex.exe");
+        var gone = new SessionGoneProcess();
+        var own = new FakeProcess(MySession, ownPath);
+
+        Assert.AreEqual(ownPath, new ChatGptApp(() => new IChatGptProcess[] { gone, own }, MySession).Locate());
+        Assert.IsTrue(gone.Disposed);
+        Assert.IsTrue(own.Disposed);
+    }
+
+    [TestMethod]
+    public void Find_MultipleVersionDirs_PicksHighestByVersionNotByString()
+    {
+        Touch("Programs/ChatGPT/app-1.9.0/ChatGPT.exe");
+        var newest = Touch("Programs/ChatGPT/app-1.10.0/ChatGPT.exe");
+
+        Assert.AreEqual(newest, Locator().Find());
+    }
+
+    [TestMethod]
+    public void Find_VersionDirsDifferInMajor_PicksHighestMajor()
+    {
+        Touch("OpenAI Codex/app-9.0.0/Codex.exe");
+        var newest = Touch("OpenAI Codex/app-10.0.0/Codex.exe");
+
+        Assert.AreEqual(newest, Locator().Find());
+    }
+
+    [TestMethod]
+    public void Find_UnparsableVersionDirs_FallBackToDescendingStringOrder()
+    {
+        Touch("Programs/ChatGPT/app-alpha/ChatGPT.exe");
+        var last = Touch("Programs/ChatGPT/app-zeta/ChatGPT.exe");
+
+        Assert.AreEqual(last, Locator().Find());
+    }
 }

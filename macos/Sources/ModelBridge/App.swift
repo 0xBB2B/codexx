@@ -4,13 +4,31 @@ import SwiftUI
 
 private let fallbackBundleID = "io.github.modelbridge.app"
 
-private final class StartupConnection: @unchecked Sendable {
+final class StartupConnection: @unchecked Sendable {
     private let lock = NSLock()
     private var value: StoredRelays?
+    private var lastParams: CoreInitParams?
 
     func set(_ connection: StoredRelays) {
         lock.lock()
         value = connection
+        lock.unlock()
+    }
+
+    // 重启时读不出设置文件就沿用上一次成功的参数，避免把 core 初始化成空列表
+    func restartParams(settings: any SettingsStoring, keychain: any KeyStoring) -> CoreInitParams {
+        let stored = StoredRelays.read(settings: settings, keychain: keychain)
+        lock.lock()
+        defer { lock.unlock() }
+        if stored.readFailed, let lastParams { return lastParams }
+        let params = CoreInitParams(relays: stored.initRelays, chatgptDir: nil)
+        lastParams = params
+        return params
+    }
+
+    func remember(_ params: CoreInitParams) {
+        lock.lock()
+        lastParams = params
         lock.unlock()
     }
 
@@ -45,9 +63,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             arguments: CoreProcess.arguments(dataDir: CoreProcess.defaultDataDirectory),
             initParams: {
                 if let stored = startup.take() {
-                    return CoreInitParams(relays: stored.initRelays, chatgptDir: nil)
+                    let params = CoreInitParams(relays: stored.initRelays, chatgptDir: nil)
+                    startup.remember(params)
+                    return params
                 }
-                return CoreInitParams.load(settings: settings, keychain: keychain, chatgptDir: nil)
+                return startup.restartParams(settings: settings, keychain: keychain)
             }
         )
         model = AppModel(core: core, keychain: keychain, settings: settings, loginItem: loginItem, chatGPT: ChatGPTApp())
@@ -96,6 +116,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
 
     func showMainWindow() { windows?.showMainWindow() }
+
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        showMainWindow()
+        return true
+    }
 
     private func observeModel() {
         model.$mainWindowRequested.filter { $0 }.sink { [weak self] _ in

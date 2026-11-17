@@ -21,6 +21,9 @@ public sealed class ChatGptLocator(string localAppData, Func<IEnumerable<string>
 
     static readonly string[] ExeNames = ["ChatGPT.exe", "Codex.exe"];
 
+    static Version? VersionOf(string dir) =>
+        Version.TryParse(Path.GetFileName(dir)["app-".Length..], out var version) ? version : null;
+
     public string? Find()
     {
         foreach (var path in runningPaths())
@@ -31,7 +34,9 @@ public sealed class ChatGptLocator(string localAppData, Func<IEnumerable<string>
             var dir = Path.Combine([localAppData, .. parts]);
             if (!Directory.Exists(dir)) continue;
             var searchDirs = new[] { dir }.Concat(
-                Directory.EnumerateDirectories(dir, "app-*").OrderByDescending(d => d, StringComparer.Ordinal));
+                Directory.EnumerateDirectories(dir, "app-*")
+                    .OrderByDescending(VersionOf)
+                    .ThenByDescending(d => d, StringComparer.Ordinal));
             foreach (var searchDir in searchDirs)
                 foreach (var exe in ExeNames)
                 {
@@ -106,10 +111,16 @@ public sealed class ChatGptApp
         var mine = new List<IChatGptProcess>();
         foreach (var p in processSource())
         {
-            if (p.SessionId == sessionId) mine.Add(p);
+            if (IsInSession(p)) mine.Add(p);
             else p.Dispose();
         }
         return mine;
+    }
+
+    bool IsInSession(IChatGptProcess p)
+    {
+        try { return p.SessionId == sessionId; }
+        catch (InvalidOperationException) { return false; }
     }
 
     List<string> RunningPaths()

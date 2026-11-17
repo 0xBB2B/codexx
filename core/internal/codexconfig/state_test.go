@@ -176,3 +176,23 @@ func TestTakenOverKeys(t *testing.T) {
 		t.Fatalf("TakenOverKeys = %v, %v", keys, err)
 	}
 }
+
+func TestTakenOverKeys_EmptyOrNullStateEntryDoesNotPanic(t *testing.T) {
+	for _, content := range []string{`{}`, `{"entries":null}`, `{"entries":{"openai_base_url":null}}`} {
+		t.Run(content, func(t *testing.T) {
+			c, _ := newFixture(t, sample{content: "a = 1\n"})
+			if err := os.WriteFile(statePath(c), []byte(content), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			defer func() {
+				if r := recover(); r != nil {
+					t.Fatalf("panic: %v", r)
+				}
+			}()
+			keys, err := TakenOverKeys(c)
+			if err == nil && len(keys) != 0 {
+				t.Fatalf("没有记录的条目不该算接管: %v", keys)
+			}
+		})
+	}
+}
