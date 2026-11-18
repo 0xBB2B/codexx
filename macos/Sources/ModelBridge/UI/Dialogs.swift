@@ -71,8 +71,39 @@ extension Confirmation.Kind {
 }
 
 private final class DialogResult {
-    var action: DialogAction
-    init(_ action: DialogAction) { self.action = action }
+    var action: DialogAction?
+    init(_ action: DialogAction?) { self.action = action }
+}
+
+private final class FreshFittingHostingView<Content: View>: NSHostingView<Content> {
+    override var fittingSize: NSSize {
+        layoutSubtreeIfNeeded()
+        return super.fittingSize
+    }
+}
+
+private struct UninstallDialogHost: View {
+    @ObservedObject var model: AppModel
+    let onAction: (DialogAction) -> Void
+    let onClosed: () -> Void
+    let onContentChanged: () -> Void
+
+    private var contentKey: String {
+        guard let content = model.uninstallDialogContent else { return "" }
+        return content.title + content.message + content.buttons.map(\.label).joined()
+    }
+
+    var body: some View {
+        Group {
+            if let content = model.uninstallDialogContent {
+                DialogView(model: content, onAction: onAction)
+            }
+        }
+        .onChange(of: model.uninstallDialogContent == nil) { closed in
+            if closed { onClosed() }
+        }
+        .onChange(of: contentKey) { _ in onContentChanged() }
+    }
 }
 
 struct DialogView: View {
@@ -104,8 +135,16 @@ struct DialogView: View {
             HStack(spacing: 12) {
                 Spacer(minLength: 0)
                 ForEach(Array(model.buttons.enumerated()), id: \.offset) { index, button in
-                    Button(button.label) { onAction(button.action) }
-                        .buttonStyle(AppButtonStyle(kind: button.style == .primary ? .primary : .secondary))
+                    Button {
+                        onAction(button.action)
+                    } label: {
+                        HStack(spacing: 8) {
+                            if button.showsSpinner { Spinner() }
+                            Text(button.label)
+                        }
+                    }
+                    .buttonStyle(AppButtonStyle(kind: button.style == .primary ? .primary : .secondary))
+                    .disabled(!button.isEnabled)
                         .focusable()
                         .focused($focusedIndex, equals: index)
                 }
@@ -117,8 +156,9 @@ struct DialogView: View {
         .shadow(color: Color(hex: 0x172b3a).opacity(0.16), radius: 24, x: 0, y: 16)
         .padding(48)
         .background {
-            Button("") { onAction(model.escapeAction) }
+            Button("") { if let escape = model.escapeAction { onAction(escape) } }
                 .keyboardShortcut(.cancelAction)
+                .disabled(model.escapeAction == nil)
                 .opacity(0)
                 .accessibilityHidden(true)
         }
@@ -140,8 +180,11 @@ final class DialogPresenter {
 
     init(model: AppModel) {
         self.model = model
-        model.$pendingConfirmation.compactMap { $0 }.filter { !$0.kind.isDeleteRelay }.sink { [weak self] value in
+        model.$pendingConfirmation.compactMap { $0 }.filter { !$0.kind.isDeleteRelay && $0.kind != .uninstall }.sink { [weak self] value in
             Task { @MainActor in await self?.present(value) }
+        }.store(in: &subscriptions)
+        model.$pendingConfirmation.compactMap { $0 }.filter { $0.kind == .uninstall }.sink { [weak self] _ in
+            Task { @MainActor in await self?.presentUninstall() }
         }.store(in: &subscriptions)
         model.onTrashFailure = { path in
             _ = Self.run(InfoDialogModel.trashFailure(path: path))
@@ -183,19 +226,8 @@ final class DialogPresenter {
 
     private func present(_ phase: UninstallPhase) async {
         switch phase {
-        case .paused(let keys, let configPath):
-            guard !presenting else { return }
-            presenting = true
-            while true {
-                let choice = Self.run(UninstallPausedDialogModel(keys: keys, configPath: configPath))
-                if choice == .revealFolder {
-                    MainWindow.reveal(configPath)
-                    continue
-                }
-                presenting = false
-                if choice == .recheck { await model.recheckUninstall() } else { model.cancelUninstall() }
-                return
-            }
+        case .paused:
+            await presentUninstall()
         case .finished:
             guard !presenting else { return }
             presenting = true
@@ -208,13 +240,54 @@ final class DialogPresenter {
         }
     }
 
-    fileprivate static func run(_ content: DialogContent) -> DialogAction {
-        let result = DialogResult(content.escapeAction)
+    private func presentUninstall() async {
+        guard !presenting, model.uninstallDialogContent != nil else { return }
+        presenting = true
+        let panel = Self.makeUninstallPanel(
+            model: model,
+            onAction: { [model] action in
+                switch action {
+                case .cancel: model.cancelPending()
+                case .confirm: Task { await model.confirmPending() }
+                case .cancelUninstall: model.cancelUninstall()
+                case .revealFolder:
+                    if case .paused(_, let path) = model.uninstallPhase { MainWindow.reveal(path) }
+                case .recheck: Task { await model.recheckUninstall() }
+                case .dismiss: break
+                }
+            },
+            onClosed: { NSApp.stopModal() }
+        )
+        NSApp.activate(ignoringOtherApps: true)
+        NSApp.runModal(for: panel)
+        panel.orderOut(nil)
+        presenting = false
+        if model.uninstallPhase == .finished { await present(.finished) }
+    }
+
+    static func makeUninstallPanel(
+        model: AppModel, onAction: @escaping (DialogAction) -> Void, onClosed: @escaping () -> Void
+    ) -> DialogPanel {
         let panel = DialogPanel(contentRect: .zero, styleMask: [.borderless], backing: .buffered, defer: false)
-        let host = NSHostingView(rootView: DialogView(model: content) { action in
-            result.action = action
-            NSApp.stopModal()
-        })
+        let host = FreshFittingHostingView(rootView: UninstallDialogHost(
+            model: model, onAction: onAction, onClosed: onClosed,
+            onContentChanged: { [weak panel] in
+                DispatchQueue.main.async {
+                    guard let panel, let content = panel.contentView else { return }
+                    let size = content.fittingSize
+                    let center = NSPoint(x: panel.frame.midX, y: panel.frame.midY)
+                    panel.setFrame(
+                        NSRect(x: center.x - size.width / 2, y: center.y - size.height / 2, width: size.width, height: size.height),
+                        display: true
+                    )
+                }
+            }
+        ))
+        configure(panel, host: host)
+        return panel
+    }
+
+    private static func configure(_ panel: DialogPanel, host: NSView) {
         panel.contentView = host
         panel.setContentSize(host.fittingSize)
         panel.isOpaque = false
@@ -222,9 +295,19 @@ final class DialogPresenter {
         panel.hasShadow = false
         panel.isReleasedWhenClosed = false
         panel.center()
+    }
+
+    fileprivate static func run(_ content: DialogContent) -> DialogAction {
+        let result = DialogResult(content.escapeAction)
+        let panel = DialogPanel(contentRect: .zero, styleMask: [.borderless], backing: .buffered, defer: false)
+        let host = NSHostingView(rootView: DialogView(model: content) { action in
+            result.action = action
+            NSApp.stopModal()
+        })
+        configure(panel, host: host)
         NSApp.activate(ignoringOtherApps: true)
         NSApp.runModal(for: panel)
         panel.orderOut(nil)
-        return result.action
+        return result.action ?? content.escapeAction ?? .dismiss
     }
 }

@@ -48,6 +48,61 @@ static class Dialogs
         Show(dialog);
     }
 
+    public static Task<int> ShowUninstall(AppModel model, bool headless)
+    {
+        if (!model.TryBeginUninstall()) return Task.FromResult(1);
+
+        var request = model.UninstallConfirmRequest();
+        var dialog = new DialogWindow(DialogModel.ForConfirm(request));
+        UninstallPause? pause = null;
+        var code = 1;
+
+        async Task RunAsync(bool startCore)
+        {
+            pause = null;
+            code = await model.RunHeldUninstallAsync(startCore);
+            if (code == 2)
+            {
+                pause = model.UninstallPause!;
+                dialog.Apply(DialogModel.ForUninstallPause(pause));
+                return;
+            }
+            dialog.ForceClose();
+        }
+
+        dialog.ButtonHandler = async index =>
+        {
+            if (pause == null)
+            {
+                if (index == 0)
+                {
+                    dialog.Close();
+                    return;
+                }
+                dialog.Apply(DialogModel.ForConfirm(request, busy: true));
+                await RunAsync(headless);
+                return;
+            }
+
+            if (index == 0)
+            {
+                dialog.Close();
+                return;
+            }
+            if (index == 1)
+            {
+                ExternalOpen.FolderOf(pause.ConfigPath);
+                return;
+            }
+            dialog.Apply(DialogModel.ForUninstallPause(pause, busy: true));
+            await RunAsync(false);
+        };
+
+        try { Show(dialog); }
+        finally { model.ReleaseUninstall(); }
+        return Task.FromResult(pause != null ? 2 : code);
+    }
+
     static int Show(DialogWindow dialog)
     {
         Current = dialog;
@@ -146,7 +201,6 @@ static class AlertView
         string title,
         string detail,
         Action? onClose = null,
-        bool showProgress = false,
         params (string Label, Action Click, bool Busy)[] actions)
     {
         var (fg, bg, glyph) = severity switch
@@ -176,8 +230,6 @@ static class AlertView
                 TextWrapping = TextWrapping.Wrap,
                 Margin = new Thickness(0, 4, 0, 0),
             });
-        if (showProgress)
-            text.Children.Add(new Spinner { Margin = new Thickness(0, 12, 0, 0), HorizontalAlignment = HorizontalAlignment.Left });
         if (actions.Length > 0)
         {
             var row = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 12, 0, 0) };

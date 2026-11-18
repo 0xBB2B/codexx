@@ -1027,7 +1027,7 @@ public class MultiRelayTests
         h.Vault.Keys["7"] = "sk-example-0007";
         h.Settings.Relays.Clear();
 
-        await h.Model.UninstallAsync();
+        await h.Model.RunConfirmedUninstallAsync(false);
 
         Assert.AreEqual(1, h.Vault.DeleteAllCount);
         Assert.AreEqual(0, h.Vault.Keys.Count);

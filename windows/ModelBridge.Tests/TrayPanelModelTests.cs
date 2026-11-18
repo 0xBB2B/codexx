@@ -177,8 +177,9 @@ public class TrayPanelModelTests
     public async Task Busy_DisablesLoginStartUpdateUninstallAndQuit()
     {
         var h = await StartedAsync();
-        h.Confirmer.Gate = new TaskCompletionSource<bool>();
-        var pending = h.Model.UninstallAsync();
+        var gate = new TaskCompletionSource<System.Text.Json.JsonElement>();
+        h.Core.OnAsync("prepare_uninstall", _ => gate.Task);
+        var pending = h.Model.RunConfirmedUninstallAsync(false);
         Assert.IsTrue(h.Model.IsBusy);
 
         var panel = TrayPanelModel.From(h.Model);
@@ -190,7 +191,7 @@ public class TrayPanelModelTests
         Assert.IsFalse(Item(panel, TrayMenuCommand.Quit).IsEnabled);
         Assert.IsTrue(Item(panel, TrayMenuCommand.OpenConfig).IsEnabled);
 
-        h.Confirmer.Gate.SetResult(false);
+        gate.SetResult(Json.Parse("{}"));
         await pending;
     }
 
@@ -211,15 +212,16 @@ public class TrayPanelModelTests
     public async Task Busy_OpenConfigStaysEnabled_OthersDisabled()
     {
         var h = await StartedAsync();
-        h.Confirmer.Gate = new TaskCompletionSource<bool>();
-        var pending = h.Model.UninstallAsync();
+        var gate = new TaskCompletionSource<System.Text.Json.JsonElement>();
+        h.Core.OnAsync("prepare_uninstall", _ => gate.Task);
+        var pending = h.Model.RunConfirmedUninstallAsync(false);
 
         var items = TrayPanelModel.From(h.Model).Groups.SelectMany(g => g).ToList();
 
         Assert.IsTrue(items.Single(i => i.Command == TrayMenuCommand.OpenConfig).IsEnabled);
         Assert.IsTrue(items.Where(i => i.Command != TrayMenuCommand.OpenConfig).All(i => !i.IsEnabled));
 
-        h.Confirmer.Gate.SetResult(false);
+        gate.SetResult(Json.Parse("{}"));
         await pending;
     }
 

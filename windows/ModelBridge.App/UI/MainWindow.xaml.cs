@@ -15,8 +15,6 @@ public partial class MainWindow : Window
     readonly AppModel model;
     object? shownBanners;
     object? shownNotices;
-    string? shownProgress;
-    string? dismissedProgress;
     bool shownRechecking;
 
     public MainWindow(AppModel appModel)
@@ -79,8 +77,7 @@ public partial class MainWindow : Window
         UpdateText.Margin = new Thickness(0, 0, model.UpdateVersion == null ? 0 : 12, 0);
         UpdateButton.Content = model.UpdateVersion == null ? "检查更新" : "打开下载页";
 
-        if (model.ProgressText == null) dismissedProgress = null;
-        if (ReferenceEquals(shownBanners, model.Banners) && ReferenceEquals(shownNotices, model.Notices) && shownProgress == model.ProgressText && shownRechecking == model.IsRechecking)
+        if (ReferenceEquals(shownBanners, model.Banners) && ReferenceEquals(shownNotices, model.Notices) && shownRechecking == model.IsRechecking)
             return;
         Rebuild();
     }
@@ -95,7 +92,6 @@ public partial class MainWindow : Window
     {
         shownBanners = model.Banners;
         shownNotices = model.Notices;
-        shownProgress = model.ProgressText;
         shownRechecking = model.IsRechecking;
         AlertView.Fill(AlertHost, BuildAlerts());
     }
@@ -103,12 +99,6 @@ public partial class MainWindow : Window
     List<UIElement> BuildAlerts()
     {
         var alerts = new List<UIElement>();
-        if (model.ProgressText is { } progress && progress != dismissedProgress)
-            alerts.Add(AlertView.Create(AppSeverity.Info, progress, "完成前请不要关闭本窗口。", () =>
-            {
-                dismissedProgress = progress;
-                Rebuild();
-            }, true));
         foreach (var notice in model.Notices)
             alerts.Add(AlertView.Create(notice.Severity, notice.Title, notice.Detail, () => model.DismissNotice(notice.Id)));
         foreach (var banner in model.Banners)
@@ -117,7 +107,6 @@ public partial class MainWindow : Window
                 banner.Title,
                 banner.Detail,
                 () => model.DismissBanner(banner),
-                false,
                 banner.Actions.Select(a => (Label(a, model.IsRechecking), (Action)(() => Run(a, banner)), a == BannerAction.Redetect && model.IsRechecking)).ToArray()));
         return alerts;
     }

@@ -54,6 +54,27 @@ public class MainWindowLayoutTests
     }
 
     [TestMethod]
+    public async Task Uninstalling_MainWindowShowsNoProgressBanner()
+    {
+        var h = await StartAsync(1);
+        var gate = new TaskCompletionSource<System.Text.Json.JsonElement>();
+        h.Core.OnAsync("prepare_uninstall", _ => gate.Task);
+
+        await WithWindowAsync(h, async window =>
+        {
+            var pending = h.Model.RunConfirmedUninstallAsync(false);
+            await UiHost.Settle();
+
+            var text = UiHost.Joined(window);
+            Assert.IsFalse(text.Contains("正在卸载"), text);
+            Assert.IsFalse(text.Contains("完成前请不要关闭本窗口"), text);
+
+            gate.SetResult(Json.Parse("{}"));
+            await pending;
+        });
+    }
+
+    [TestMethod]
     public async Task Window_NoRunStatusOrRelayConnectionCards()
     {
         var h = await StartAsync(3);

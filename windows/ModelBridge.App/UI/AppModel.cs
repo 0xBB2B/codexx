@@ -146,7 +146,6 @@ public sealed class AppModel : IRelayFields
     readonly object noticeLock = new();
     readonly HashSet<string> dismissedBanners = [];
     AppNotice? taskError;
-    string? progressText;
     string successTitle = "";
     string successText = "";
     bool forwardingEnabled;
@@ -238,7 +237,6 @@ public sealed class AppModel : IRelayFields
     public IReadOnlyList<AppNotice> Notices { get => notices; private set => Set(ref notices, value); }
     public TimeSpan NoticeAutoDismissDelay { get; set; } = TimeSpan.FromSeconds(4);
     public AppNotice? TaskError { get => taskError; private set => Set(ref taskError, value); }
-    public string? ProgressText { get => progressText; private set => Set(ref progressText, value); }
     public string SuccessTitle { get => successTitle; private set => Set(ref successTitle, value); }
     public string SuccessText { get => successText; private set => Set(ref successText, value); }
     public bool LoginStartEnabled { get => loginStartEnabled; private set => Set(ref loginStartEnabled, value); }
@@ -977,11 +975,24 @@ public sealed class AppModel : IRelayFields
         }
     }
 
-    public Task<int> UninstallAsync() => RunUninstallAsync(true);
+    public ConfirmRequest UninstallConfirmRequest()
+    {
+        var tail = chatGpt.IsRunning() ? "ChatGPT 正在运行，卸载后请重启 ChatGPT。" : "";
+        return new ConfirmRequest(
+            "卸载模型接入助手？",
+            "卸载会：\n· 关闭转发，把 Codex 配置还原成安装前的样子\n· 从系统凭据管理器删除中转 API Key，删除本助手保存的 Base URL\n· 取消「登录时启动」，删除本助手\n\n不会删除 ChatGPT、聊天记录，以及你自己的其他 Codex 设置。"
+            + (tail == "" ? "" : "\n" + tail),
+            "卸载");
+    }
 
-    public Task<int> RunHeadlessUninstallAsync() => RunUninstallAsync(true, true);
+    public bool TryBeginUninstall()
+    {
+        if (RejectWhileConnecting() || busy) return false;
+        IsBusy = true;
+        return true;
+    }
 
-    public Task<int> RecheckUninstallAsync() => RunUninstallAsync(false);
+    public void ReleaseUninstall() => IsBusy = false;
 
     bool RejectWhileConnecting()
     {
@@ -990,60 +1001,45 @@ public sealed class AppModel : IRelayFields
         return true;
     }
 
-    async Task<int> RunUninstallAsync(bool askFirst, bool startCoreAfterConfirm = false)
+    public async Task<int> RunConfirmedUninstallAsync(bool startCore)
     {
-        if (RejectWhileConnecting() || busy) return 1;
+        if (!TryBeginUninstall()) return 1;
+        try { return await RunHeldUninstallAsync(startCore); }
+        finally { ReleaseUninstall(); }
+    }
 
-        IsBusy = true;
+    public async Task<int> RunHeldUninstallAsync(bool startCore)
+    {
+        if (startCore) await StartAsync();
+
+        UninstallPause = null;
         try
         {
-            if (askFirst)
-            {
-                var tail = chatGpt.IsRunning() ? "ChatGPT 正在运行，卸载后请重启 ChatGPT。" : "";
-                var request = new ConfirmRequest(
-                    "卸载模型接入助手？",
-                    "卸载会：\n· 关闭转发，把 Codex 配置还原成安装前的样子\n· 从系统凭据管理器删除中转 API Key，删除本助手保存的 Base URL\n· 取消「登录时启动」，删除本助手\n\n不会删除 ChatGPT、聊天记录，以及你自己的其他 Codex 设置。"
-                    + (tail == "" ? "" : "\n" + tail),
-                    "卸载");
-                if (!await confirmer.ConfirmAsync(request)) return 1;
-            }
-
-            if (startCoreAfterConfirm) await StartAsync();
-
-            UninstallPause = null;
-            ProgressText = "正在卸载";
-            try
-            {
-                await core.CallAsync("prepare_uninstall");
-            }
-            catch (CoreCallException ex) when (ex.Code == "restore_blocked")
-            {
-                UninstallPause = new UninstallPause(ex.Keys, configPath);
-                return 2;
-            }
-            catch (Exception ex) when (ex is CoreCallException or CoreProcessExitedException)
-            {
-                AddNotice(new AppNotice("没能卸载", Describe(ex)));
-                return 1;
-            }
-
-            var leftovers = new List<string>();
-            try { vault.DeleteAll(); }
-            catch (Exception ex) when (IsSystemFault(ex)) { leftovers.Add("系统凭据管理器里的 API Key 没能删除"); }
-            try { settings.DeleteAll(); }
-            catch (Exception ex) when (IsSystemFault(ex)) { leftovers.Add("本助手保存的设置没能删除"); }
-            try { login.Disable(); }
-            catch (Exception ex) when (IsSystemFault(ex)) { leftovers.Add("登录时启动项没能取消"); }
-
-            await StopCoreAsync();
-            Uninstalled = new UninstallOutcome(leftovers, chatGpt.IsRunning());
-            return 0;
+            await core.CallAsync("prepare_uninstall");
         }
-        finally
+        catch (CoreCallException ex) when (ex.Code == "restore_blocked")
         {
-            ProgressText = null;
-            IsBusy = false;
+            UninstallPause = new UninstallPause(ex.Keys, configPath);
+            return 2;
         }
+        catch (Exception ex) when (ex is CoreCallException or CoreProcessExitedException)
+        {
+            AddNotice(new AppNotice("没能卸载", Describe(ex)));
+            ShowMainWindowRequested?.Invoke();
+            return 1;
+        }
+
+        var leftovers = new List<string>();
+        try { vault.DeleteAll(); }
+        catch (Exception ex) when (IsSystemFault(ex)) { leftovers.Add("系统凭据管理器里的 API Key 没能删除"); }
+        try { settings.DeleteAll(); }
+        catch (Exception ex) when (IsSystemFault(ex)) { leftovers.Add("本助手保存的设置没能删除"); }
+        try { login.Disable(); }
+        catch (Exception ex) when (IsSystemFault(ex)) { leftovers.Add("登录时启动项没能取消"); }
+
+        await StopCoreAsync();
+        Uninstalled = new UninstallOutcome(leftovers, chatGpt.IsRunning());
+        return 0;
     }
 
     public async Task CheckUpdateAsync()

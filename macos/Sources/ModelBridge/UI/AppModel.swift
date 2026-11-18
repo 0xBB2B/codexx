@@ -197,6 +197,7 @@ final class AppModel: ObservableObject {
     @Published private(set) var notices: [Notice] = []
     @Published private var dismissedBanners: Set<Banner> = []
     @Published var uninstallPhase: UninstallPhase = .idle
+    @Published private(set) var isRecheckingUninstall = false
     @Published var availableUpdate: UpdateInfo?
     @Published var loginStartEnabled = false
     @Published var mainWindowRequested = false
@@ -707,9 +708,27 @@ final class AppModel: ObservableObject {
         onTerminate()
     }
 
-    func recheckUninstall() async { await runUninstall() }
+    func recheckUninstall() async {
+        guard !isRecheckingUninstall else { return }
+        isRecheckingUninstall = true
+        defer { isRecheckingUninstall = false }
+        await runUninstall(keepPhase: true)
+    }
 
-    func cancelUninstall() { uninstallPhase = .idle }
+    func cancelUninstall() {
+        guard !isRecheckingUninstall else { return }
+        uninstallPhase = .idle
+    }
+
+    var uninstallDialogContent: (any DialogContent)? {
+        if let pending = pendingConfirmation, pending.kind == .uninstall {
+            return ConfirmDialogModel(confirmation: pending, busyLabel: uninstallPhase == .running ? "正在卸载" : nil)
+        }
+        if case .paused(let keys, let configPath) = uninstallPhase {
+            return UninstallPausedDialogModel(keys: keys, configPath: configPath, busyLabel: isRecheckingUninstall ? "正在卸载" : nil)
+        }
+        return nil
+    }
 
     func checkUpdate() async {
         do {
@@ -737,23 +756,27 @@ final class AppModel: ObservableObject {
     }
 
     func cancelPending() {
-        guard !isDeletingRelay else { return }
+        guard !isDeletingRelay, uninstallPhase != .running else { return }
         pendingConfirmation = nil
     }
 
     func confirmPending() async {
-        guard let pending = pendingConfirmation, !isDeletingRelay else { return }
+        guard let pending = pendingConfirmation, !isDeletingRelay, uninstallPhase != .running else { return }
         if case .deleteRelay(let id) = pending.kind {
             await deleteRelay(id: id)
             pendingConfirmation = nil
             return
         }
+        if pending.kind == .uninstall {
+            await runUninstall()
+            pendingConfirmation = nil
+            return
+        }
         pendingConfirmation = nil
         switch pending.kind {
-        case .deleteRelay: break
+        case .deleteRelay, .uninstall: break
         case .loginStartOff: applyLoginStart(false)
         case .quit: await shutdown(restore: true)
-        case .uninstall: await runUninstall()
         }
     }
 
@@ -839,8 +862,8 @@ final class AppModel: ObservableObject {
         }
     }
 
-    private func runUninstall() async {
-        uninstallPhase = .running
+    private func runUninstall(keepPhase: Bool = false) async {
+        if !keepPhase { uninstallPhase = .running }
         uninstallLeftovers = []
         do {
             _ = try await core.call("prepare_uninstall", params: Empty())
@@ -849,6 +872,7 @@ final class AppModel: ObservableObject {
             return
         } catch {
             uninstallPhase = .idle
+            mainWindowRequested = true
             addNotice(Notice(title: "卸载没有完成", detail: CoreFailure(error).message, kind: .error))
             return
         }

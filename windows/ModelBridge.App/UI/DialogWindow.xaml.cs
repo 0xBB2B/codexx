@@ -83,6 +83,7 @@ public partial class DialogWindow : Window
             if (spec.IsDefault) defaultButton = button;
             ButtonRow.Children.Add(button);
         }
+        if (IsLoaded) defaultButton?.Focus();
     }
 
     internal static StackPanel BusyContent(string text)

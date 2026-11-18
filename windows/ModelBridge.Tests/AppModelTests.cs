@@ -933,27 +933,13 @@ public class AppModelTests
     #region 卸载
 
     [TestMethod]
-    public async Task Uninstall_Cancel_NothingHappens()
-    {
-        var h = new Harness();
-        h.Confirmer.Answer = _ => false;
-
-        await h.Model.UninstallAsync();
-
-        Assert.AreEqual(0, h.Core.Count("prepare_uninstall"));
-        Assert.AreEqual(0, h.Vault.DeleteAllCount);
-        Assert.AreEqual(0, h.Settings.DeleteCount);
-        Assert.AreEqual(0, h.Login.DisableCount);
-    }
-
-    [TestMethod]
     public async Task Uninstall_RestoreBlocked_PausesWithKeysAndConfigPath_ExitCode2_NothingCleaned()
     {
         var h = new Harness();
         h.Push(s => s["config_path"] = "/home/example/.codex/config.toml");
         h.Core.Fail("prepare_uninstall", "restore_blocked", "model_provider", "openai_base_url");
 
-        var code = await h.Model.UninstallAsync();
+        var code = await h.Model.RunConfirmedUninstallAsync(false);
 
         Assert.AreEqual(2, code);
         CollectionAssert.AreEqual(
@@ -972,7 +958,7 @@ public class AppModelTests
         h.Seed("1", "中转", "https://relay.example.com", "sk-example-0001");
         h.Seed("2", "A家", "https://relay2.example.com", "sk-example-0002");
 
-        var code = await h.Model.UninstallAsync();
+        var code = await h.Model.RunConfirmedUninstallAsync(false);
 
         Assert.AreEqual(0, code);
         Assert.AreEqual(1, h.Vault.DeleteAllCount);
@@ -991,7 +977,7 @@ public class AppModelTests
         h.Seed("1", "中转", "https://relay.example.com", "sk-example-0001");
         h.Vault.DeleteException = new IOException();
 
-        var code = await h.Model.UninstallAsync();
+        var code = await h.Model.RunConfirmedUninstallAsync(false);
 
         Assert.AreEqual(0, code);
         Assert.AreEqual(1, h.Model.Uninstalled?.Leftovers.Count);
@@ -1006,7 +992,7 @@ public class AppModelTests
         var h = new Harness();
         h.Settings.DeleteException = new IOException();
 
-        await h.Model.UninstallAsync();
+        await h.Model.RunConfirmedUninstallAsync(false);
 
         Assert.AreEqual(1, h.Model.Uninstalled?.Leftovers.Count);
         StringAssert.Contains(h.Model.Uninstalled!.Leftovers[0], "设置");
@@ -1019,87 +1005,50 @@ public class AppModelTests
         var h = new Harness();
         h.Login.DisableException = new UnauthorizedAccessException();
 
-        await h.Model.UninstallAsync();
+        await h.Model.RunConfirmedUninstallAsync(false);
 
         Assert.AreEqual(1, h.Model.Uninstalled?.Leftovers.Count);
         StringAssert.Contains(h.Model.Uninstalled!.Leftovers[0], "登录");
     }
 
     [TestMethod]
-    public async Task Uninstall_ChatGptRunning_OnlyTheUninstallAsk_RecordsRunningInOutcome()
+    public async Task Uninstall_ChatGptRunning_ConfirmCopyAsksRestart_RecordsRunningInOutcome()
     {
         var h = new Harness();
         h.ChatGpt.Running = true;
+        StringAssert.Contains(h.Model.UninstallConfirmRequest().Message, "ChatGPT 正在运行，卸载后请重启 ChatGPT。");
 
-        await h.Model.UninstallAsync();
+        await h.Model.RunConfirmedUninstallAsync(false);
 
-        Assert.AreEqual(1, h.Confirmer.Requests.Count);
         Assert.IsTrue(h.Model.Uninstalled!.ChatGptRunning);
     }
 
     [TestMethod]
-    public async Task Uninstall_ChatGptNotRunning_OnlyOneAsk_OutcomeNotRunning()
+    public async Task Uninstall_ChatGptNotRunning_ConfirmCopyHasNoRestartAdvice_OutcomeNotRunning()
     {
         var h = new Harness();
         h.ChatGpt.Running = false;
+        Assert.IsFalse(h.Model.UninstallConfirmRequest().Message.Contains("ChatGPT 正在运行"));
 
-        await h.Model.UninstallAsync();
+        await h.Model.RunConfirmedUninstallAsync(false);
 
-        Assert.AreEqual(1, h.Confirmer.Requests.Count);
         Assert.IsFalse(h.Model.Uninstalled!.ChatGptRunning);
     }
 
     [TestMethod]
-    public async Task HeadlessUninstall_Cancel_Returns1_CoreNeverStartedNorCalled()
-    {
-        var h = new Harness();
-        h.Seed("1", "中转", "https://relay.example.com", "sk-example-0001");
-        h.Confirmer.Answer = _ => false;
-
-        var code = await h.Model.RunHeadlessUninstallAsync();
-
-        Assert.AreEqual(1, code);
-        Assert.AreEqual(1, h.Confirmer.Requests.Count);
-        Assert.IsNull(h.Core.StartedWith);
-        Assert.AreEqual(0, h.Core.Calls.Count);
-        Assert.AreEqual(0, h.Vault.DeleteAllCount);
-        Assert.AreEqual(0, h.Settings.DeleteCount);
-        Assert.AreEqual(0, h.Login.DisableCount);
-        Assert.AreEqual(1, h.Vault.Keys.Count);
-        Assert.AreEqual(1, h.Settings.Relays.Count);
-    }
-
-    [TestMethod]
-    public async Task HeadlessUninstall_CancelWithForwardingOn_NoCoreStartNoForwardingRewrite()
-    {
-        var h = new Harness();
-        h.Seed("1", "中转", "https://relay.example.com", "sk-example-0001");
-        h.ForwardingOn();
-        h.Confirmer.Answer = _ => false;
-
-        var code = await h.Model.RunHeadlessUninstallAsync();
-
-        Assert.AreEqual(1, code);
-        Assert.IsNull(h.Core.StartedWith);
-        Assert.AreEqual(0, h.Core.Count("set_forwarding"));
-        Assert.AreEqual(0, h.Core.Calls.Count);
-        Assert.AreEqual(0, h.Core.StopCount);
-    }
-
-    [TestMethod]
-    public async Task HeadlessUninstall_Confirm_StartsCoreAfterConfirm_ThenPreparesAndCleans_ExitCode0()
+    public async Task HeadlessUninstall_StartsCoreBeforePrepare_ThenPreparesAndCleans_ExitCode0()
     {
         var h = new Harness();
         h.Seed("1", "中转", "https://relay.example.com", "sk-example-0001");
 
-        var code = await h.Model.RunHeadlessUninstallAsync();
+        var code = await h.Model.RunConfirmedUninstallAsync(true);
 
         Assert.AreEqual(0, code);
         Assert.IsNotNull(h.Core.StartedWith);
-        var confirm = h.Log.IndexOf("confirm");
+        var status = h.Log.IndexOf("call:status");
         var prepare = h.Log.IndexOf("call:prepare_uninstall");
-        Assert.IsTrue(confirm >= 0 && prepare > confirm);
-        Assert.AreEqual(1, h.Confirmer.Requests.Count);
+        Assert.IsTrue(status >= 0 && prepare > status);
+        Assert.AreEqual(1, h.Core.StartCount);
         Assert.AreEqual(1, h.Vault.DeleteAllCount);
         Assert.AreEqual(1, h.Settings.DeleteCount);
         Assert.AreEqual(1, h.Login.DisableCount);
@@ -1112,7 +1061,7 @@ public class AppModelTests
         h.Seed("1", "中转", "https://relay.example.com", "sk-example-0001");
         h.Core.Fail("prepare_uninstall", "restore_blocked", "model_provider");
 
-        var code = await h.Model.RunHeadlessUninstallAsync();
+        var code = await h.Model.RunConfirmedUninstallAsync(true);
 
         Assert.AreEqual(2, code);
         Assert.AreEqual(0, h.Vault.DeleteAllCount);
@@ -1120,7 +1069,7 @@ public class AppModelTests
     }
 
     [TestMethod]
-    public async Task HeadlessUninstall_RestoreBlockedThenRecheck_CoreStartedOnce_NoSecondConfirm_CleansOnce()
+    public async Task HeadlessUninstall_RestoreBlockedThenRecheck_CoreStartedOnce_CleansOnce()
     {
         var h = new Harness();
         h.Seed("1", "中转", "https://relay.example.com", "sk-example-0001");
@@ -1129,16 +1078,15 @@ public class AppModelTests
             ? Task.FromException<JsonElement>(new CoreCallException("restore_blocked", ["model_provider"]))
             : Task.FromResult(Json.Parse("{}")));
 
-        var first = await h.Model.RunHeadlessUninstallAsync();
+        var first = await h.Model.RunConfirmedUninstallAsync(true);
 
         Assert.AreEqual(2, first);
         Assert.AreEqual(1, h.Core.StartCount);
         Assert.IsNotNull(h.Model.UninstallPause);
 
-        var second = await h.Model.RecheckUninstallAsync();
+        var second = await h.Model.RunConfirmedUninstallAsync(false);
 
         Assert.AreEqual(0, second);
-        Assert.AreEqual(1, h.Confirmer.Requests.Count);
         Assert.AreEqual(1, h.Core.StartCount);
         Assert.AreEqual(2, h.Core.Count("prepare_uninstall"));
         Assert.AreEqual(1, h.Vault.DeleteAllCount);
@@ -1572,23 +1520,6 @@ public class AppModelTests
     }
 
     [TestMethod]
-    public async Task Uninstall_ShowsProgressWhilePreparing_ThenClears()
-    {
-        var h = new Harness();
-        string? progress = null;
-        h.Core.On("prepare_uninstall", _ =>
-        {
-            progress = h.Model.ProgressText;
-            return Json.Parse("{}");
-        });
-
-        await h.Model.UninstallAsync();
-
-        Assert.AreEqual("正在卸载", progress);
-        Assert.IsNull(h.Model.ProgressText);
-    }
-
-    [TestMethod]
     public async Task StopCore_StopsCoreAndMarksNotRunning()
     {
         var h = new Harness();
@@ -1616,17 +1547,20 @@ public class AppModelTests
     }
 
     [TestMethod]
-    public async Task Uninstall_ConfirmPending_SecondCallReturns1WithoutAsking()
+    public async Task Uninstall_Running_TryBeginFalse_SecondRunReturns1WithoutPreparingAgain()
     {
         var h = new Harness();
-        h.Confirmer.Gate = new TaskCompletionSource<bool>();
+        var gate = new TaskCompletionSource<JsonElement>();
+        h.Core.OnAsync("prepare_uninstall", _ => gate.Task);
 
-        var first = h.Model.UninstallAsync();
-        var second = await h.Model.UninstallAsync();
+        var first = h.Model.RunConfirmedUninstallAsync(false);
+        var tryBegin = h.Model.TryBeginUninstall();
+        var second = await h.Model.RunConfirmedUninstallAsync(false);
 
+        Assert.IsFalse(tryBegin);
         Assert.AreEqual(1, second);
-        Assert.AreEqual(1, h.Confirmer.Requests.Count);
-        h.Confirmer.Gate.SetResult(false);
+        Assert.AreEqual(1, h.Core.Count("prepare_uninstall"));
+        gate.SetResult(Json.Parse("{}"));
         await first;
     }
 
@@ -2042,22 +1976,6 @@ public class AppModelTests
     }
 
     [TestMethod]
-    public async Task NewNotice_UninstallCancelled_KeepsOldNoticeAndAddsNone()
-    {
-        var h = new Harness();
-        h.Core.RaiseFailed("核心进程反复崩溃");
-        var oldId = h.Model.Notices.Single().Id;
-        var before = Ids(h);
-        h.Confirmer.Answer = _ => false;
-
-        var code = await h.Model.UninstallAsync();
-
-        Assert.AreEqual(1, code);
-        Assert.IsFalse(HasNewNotice(h, before));
-        Assert.AreEqual(oldId, h.Model.Notices.Single().Id);
-    }
-
-    [TestMethod]
     public async Task NewNotice_UninstallFails_AddsNoticeWithNewIdAndKeepsOldOne()
     {
         var h = new Harness();
@@ -2065,12 +1983,29 @@ public class AppModelTests
         var before = Ids(h);
         h.Core.Fail("prepare_uninstall", "internal_error");
 
-        var code = await h.Model.UninstallAsync();
+        var code = await h.Model.RunConfirmedUninstallAsync(false);
 
         Assert.AreEqual(1, code);
         Assert.IsTrue(HasNewNotice(h, before));
         Assert.IsNotNull(Find(h, "没能卸载"));
         Assert.IsNotNull(Find(h, CoreDown));
+    }
+
+    [TestMethod]
+    public async Task Uninstall_FailsTwiceWithNoticeStillShown_AsksToShowMainWindowEachTime()
+    {
+        var h = new Harness();
+        h.Core.Fail("prepare_uninstall", "internal_error");
+        var shows = 0;
+        h.Model.ShowMainWindowRequested += () => shows++;
+
+        var first = await h.Model.RunConfirmedUninstallAsync(false);
+        var second = await h.Model.RunConfirmedUninstallAsync(false);
+
+        Assert.AreEqual(1, first);
+        Assert.AreEqual(1, second);
+        Assert.AreEqual(1, h.Model.Notices.Count(n => n.Title == "没能卸载"));
+        Assert.AreEqual(2, shows);
     }
 
     #endregion

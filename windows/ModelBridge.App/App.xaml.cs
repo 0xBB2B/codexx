@@ -96,8 +96,9 @@ public partial class App : Application
 
     async Task<int> RunHeadlessUninstallAsync()
     {
+        var model = this.model!;
         var before = NoticeIds();
-        var code = await RunUninstallAsync(model!.RunHeadlessUninstallAsync);
+        var code = await RunUninstallAsync(true);
         if (code == 1 && model.Notices.LastOrDefault(n => !before.Contains(n.Id)) is { } notice)
             Dialogs.Show(DialogModel.ForInfo(notice.Title, notice.Detail));
         await model.StopCoreAsync();
@@ -106,35 +107,17 @@ public partial class App : Application
 
     HashSet<Guid> NoticeIds() => model!.Notices.Select(n => n.Id).ToHashSet();
 
-    Task<int> RunUninstallAsync() => RunUninstallAsync(model!.UninstallAsync);
-
-    async Task<int> RunUninstallAsync(Func<Task<int>> first)
+    async Task<int> RunUninstallAsync(bool headless)
     {
-        var code = await first();
-        var model = this.model!;
-        while (code == 2)
-        {
-            var pause = model.UninstallPause!;
-            var choice = Dialogs.Show(DialogModel.ForUninstallPause(pause));
-            if (choice == 1) ExternalOpen.FolderOf(pause.ConfigPath);
-            else if (choice == 2) code = await model.RecheckUninstallAsync();
-            else return 2;
-        }
-
-        if (code == 0 && model.Uninstalled is { } outcome && (outcome.Leftovers.Count > 0 || outcome.ChatGptRunning))
+        var code = await Dialogs.ShowUninstall(model!, headless);
+        if (code == 0 && model!.Uninstalled is { } outcome && (outcome.Leftovers.Count > 0 || outcome.ChatGptRunning))
             Dialogs.Show(DialogModel.ForUninstallFinished(outcome));
         return code;
     }
 
     async Task UninstallFromMenuAsync()
     {
-        var before = NoticeIds();
-        var code = await RunUninstallAsync();
-        if (code != 0)
-        {
-            if (model!.Notices.Any(n => !before.Contains(n.Id))) ShowMainWindow();
-            return;
-        }
+        if (await RunUninstallAsync(false) != 0) return;
 
         await model!.StopCoreAsync();
         var uninstaller = Path.Combine(AppContext.BaseDirectory, "unins000.exe");

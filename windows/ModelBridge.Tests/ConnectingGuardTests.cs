@@ -63,17 +63,16 @@ public class ConnectingGuardTests
     }
 
     [TestMethod]
-    public async Task Uninstall_WhileConnecting_DoesNothingAndAsksToShowWindow()
+    public async Task TryBeginUninstall_WhileConnecting_RefusesAndAsksToShowWindow()
     {
         var (h, gate, submit) = await ConnectingAsync();
         var shows = 0;
         h.Model.ShowMainWindowRequested += () => shows++;
         try
         {
-            var code = await h.Model.UninstallAsync();
+            var allowed = h.Model.TryBeginUninstall();
 
-            Assert.AreNotEqual(0, code);
-            Assert.AreEqual(0, h.Confirmer.Requests.Count);
+            Assert.IsFalse(allowed);
             Assert.AreEqual(0, h.Core.Count("prepare_uninstall"));
             Assert.AreEqual(0, h.Vault.DeleteAllCount);
             Assert.IsNull(h.Model.Uninstalled);
@@ -86,14 +85,14 @@ public class ConnectingGuardTests
     }
 
     [TestMethod]
-    public async Task RecheckUninstall_WhileConnecting_DoesNothingAndAsksToShowWindow()
+    public async Task RecheckTryBeginUninstall_WhileConnecting_RefusesAndAsksToShowWindow()
     {
         var (h, gate, submit) = await ConnectingAsync();
         var shows = 0;
         h.Model.ShowMainWindowRequested += () => shows++;
         try
         {
-            var code = await h.Model.RecheckUninstallAsync();
+            var code = await h.Model.RunConfirmedUninstallAsync(false);
 
             Assert.AreNotEqual(0, code);
             Assert.AreEqual(0, h.Core.Count("prepare_uninstall"));

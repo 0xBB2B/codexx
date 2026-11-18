@@ -240,7 +240,7 @@ public class SetupWindowRecoveryTests
         await model.StartAsync();
         Assert.IsTrue(File.Exists(BackupPath));
 
-        Assert.AreEqual(0, await model.UninstallAsync());
+        Assert.AreEqual(0, await model.RunConfirmedUninstallAsync(false));
 
         Assert.IsFalse(File.Exists(BackupPath));
         Assert.IsFalse(File.Exists(SettingsPath));

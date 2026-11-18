@@ -18,13 +18,13 @@ public sealed record DialogModel(
     int EscapeButtonIndex,
     DialogAlert? Alert = null)
 {
-    public static DialogModel ForConfirm(ConfirmRequest request) => new(
+    public static DialogModel ForConfirm(ConfirmRequest request, bool busy = false) => new(
         520,
         request.Title,
         request.Message,
         [
-            new(request.CancelText, DialogButtonRole.Secondary, IsDefault: true),
-            new(request.ConfirmText, DialogButtonRole.Primary),
+            new(request.CancelText, DialogButtonRole.Secondary, IsDefault: true, IsEnabled: !busy),
+            new(busy ? "正在卸载" : request.ConfirmText, DialogButtonRole.Primary, IsEnabled: !busy, IsBusy: busy),
         ],
         0);
 
@@ -41,14 +41,14 @@ public sealed record DialogModel(
         ],
         0);
 
-    public static DialogModel ForUninstallPause(UninstallPause pause) => new(
+    public static DialogModel ForUninstallPause(UninstallPause pause, bool busy = false) => new(
         520,
         "卸载暂停：有设置被手动改过",
         "",
         [
-            new("取消卸载", DialogButtonRole.Secondary, IsDefault: true),
-            new("打开所在文件夹", DialogButtonRole.Secondary),
-            new("重新检查", DialogButtonRole.Primary),
+            new("取消卸载", DialogButtonRole.Secondary, IsDefault: true, IsEnabled: !busy),
+            new("打开所在文件夹", DialogButtonRole.Secondary, IsEnabled: !busy),
+            new(busy ? "正在卸载" : "重新检查", DialogButtonRole.Primary, IsEnabled: !busy, IsBusy: busy),
         ],
         0,
         new DialogAlert(
