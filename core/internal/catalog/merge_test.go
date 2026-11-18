@@ -1,0 +1,296 @@
+package catalog_test
+
+import (
+	"encoding/json"
+	"reflect"
+	"testing"
+
+	"modelbridge/internal/catalog"
+)
+
+func strp(s string) *string { return &s }
+
+func roundtrip(t *testing.T, v any) []map[string]any {
+	t.Helper()
+	b, err := json.Marshal(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out []map[string]any
+	if err := json.Unmarshal(b, &out); err != nil {
+		t.Fatal(err)
+	}
+	return out
+}
+
+func officialFixture() []catalog.Entry {
+	return []catalog.Entry{
+		{
+			"slug": "gpt-a", "display_name": "GPT A", "priority": 3,
+			"base_instructions": "keep-me", "shell_type": "shell_command",
+			"truncation_policy":    map[string]any{"mode": "tokens", "limit": 10000},
+			"supports_search_tool": true, "web_search_tool_type": "text",
+			"upgrade":                      map[string]any{"model": "gpt-z"},
+			"availability_nux":             map[string]any{"message": "hi"},
+			"model_messages":               map[string]any{"a": "b"},
+			"service_tiers":                []any{"fast"},
+			"additional_speed_tiers":       []any{"fast"},
+			"experimental_supported_tools": []any{"t"},
+			"visibility":                   "hide", "supported_in_api": false,
+			"context_window": 1, "max_context_window": 1,
+			"input_modalities": []any{"text"},
+			"description":      "官方",
+		},
+		{"slug": "gpt-b", "priority": 7},
+		{"slug": "gpt-c", "priority": 5},
+	}
+}
+
+var mergeParams = []catalog.Param{
+	{ID: "auto", ContextWindow: 1000000, InputModalities: []string{"text", "image"}, ReasoningLevels: []string{}, DefaultReasoningLevel: nil, Source: "s"},
+	{ID: "deepseek-v3.2", ContextWindow: 128000, InputModalities: []string{"text"}, ReasoningLevels: []string{"low", "high"}, DefaultReasoningLevel: strp("high"), Source: "s"},
+}
+
+func paramGroup(params []catalog.Param) []catalog.RelayGroup {
+	return []catalog.RelayGroup{{ID: "1", Name: "主力", ParamOnly: params}}
+}
+
+func TestMerge_OfficialFirstUnchangedThenRelayWithConsecutivePriority(t *testing.T) {
+	t.Parallel()
+	res, err := catalog.MergeRelay(officialFixture(), paramGroup(mergeParams))
+	if err != nil {
+		t.Fatalf("Merge: %v", err)
+	}
+	got := roundtrip(t, res.Models)
+	want := roundtrip(t, officialFixture())
+	if len(got) != 5 {
+		t.Fatalf("len = %d", len(got))
+	}
+	if !reflect.DeepEqual(got[:3], want) {
+		t.Errorf("官方条目被改动或顺序变化")
+	}
+	if got[3]["slug"] != "relay-auto" || got[4]["slug"] != "relay-deepseek-v3.2" {
+		t.Errorf("中转条目顺序不对: %v %v", got[3]["slug"], got[4]["slug"])
+	}
+	if got[3]["priority"] != float64(8) || got[4]["priority"] != float64(9) {
+		t.Errorf("priority = %v, %v，应从官方最大值 7 之后连续递增", got[3]["priority"], got[4]["priority"])
+	}
+}
+
+func TestMerge_RelayEntryOverridesAndKeepsBase(t *testing.T) {
+	t.Parallel()
+	res, err := catalog.MergeRelay(officialFixture(), paramGroup(mergeParams))
+	if err != nil {
+		t.Fatal(err)
+	}
+	e := roundtrip(t, res.Models)[4]
+
+	exact := map[string]any{
+		"slug": "relay-deepseek-v3.2", "display_name": "主力 · deepseek-v3.2", "description": "中转模型",
+		"visibility": "list", "supported_in_api": true,
+		"context_window": float64(128000), "max_context_window": float64(128000),
+		"input_modalities":                  []any{"text"},
+		"default_reasoning_level":           "high",
+		"supports_reasoning_effort_updates": true,
+		"supports_search_tool":              false,
+		"experimental_supported_tools":      []any{},
+		"service_tiers":                     []any{},
+		"additional_speed_tiers":            []any{},
+		"supported_reasoning_levels": []any{
+			map[string]any{"effort": "low", "description": "low"},
+			map[string]any{"effort": "high", "description": "high"},
+		},
+		"base_instructions": "keep-me", "shell_type": "shell_command",
+		"truncation_policy": map[string]any{"mode": "tokens", "limit": float64(10000)},
+	}
+	for k, want := range exact {
+		got, ok := e[k]
+		if !ok {
+			t.Errorf("缺字段 %s", k)
+			continue
+		}
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("%s = %#v, want %#v", k, got, want)
+		}
+	}
+	for _, k := range []string{"web_search_tool_type", "upgrade", "availability_nux", "model_messages"} {
+		if v, ok := e[k]; ok {
+			t.Errorf("%s = %#v，应不写这个字段，交给 Codex 用默认值", k, v)
+		}
+	}
+}
+
+func TestMerge_EmptyReasoningLevels(t *testing.T) {
+	t.Parallel()
+	res, err := catalog.MergeRelay(officialFixture(), paramGroup(mergeParams[:1]))
+	if err != nil {
+		t.Fatal(err)
+	}
+	e := roundtrip(t, res.Models)[3]
+	levels, ok := e["supported_reasoning_levels"].([]any)
+	if !ok || len(levels) != 0 {
+		t.Errorf("supported_reasoning_levels = %#v，应为空数组", e["supported_reasoning_levels"])
+	}
+	if e["supports_reasoning_effort_updates"] != false {
+		t.Errorf("supports_reasoning_effort_updates = %v", e["supports_reasoning_effort_updates"])
+	}
+	if v, ok := e["default_reasoning_level"]; ok {
+		t.Errorf("default_reasoning_level = %#v，应不写这个字段", v)
+	}
+}
+
+func TestMerge_DoesNotMutateOfficial(t *testing.T) {
+	t.Parallel()
+	off := officialFixture()
+	if _, err := catalog.MergeRelay(off, paramGroup(mergeParams)); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(roundtrip(t, off), roundtrip(t, officialFixture())) {
+		t.Errorf("Merge 改动了传入的官方条目")
+	}
+}
+
+func TestMerge_NoRelayYieldsOnlyOfficial(t *testing.T) {
+	t.Parallel()
+	res, err := catalog.MergeRelay(officialFixture(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Models) != 3 || len(res.ReasoningLevels) != 0 {
+		t.Errorf("models=%d levels=%v", len(res.Models), res.ReasoningLevels)
+	}
+}
+
+func TestMerge_EmptyOfficialIsError(t *testing.T) {
+	t.Parallel()
+	if _, err := catalog.MergeRelay(nil, paramGroup(mergeParams)); err == nil {
+		t.Fatal("没有官方条目就没有底板，应报错")
+	}
+}
+
+func TestMerge_ReasoningLevelsSummary(t *testing.T) {
+	t.Parallel()
+	params := []catalog.Param{
+		{ID: "m1", ContextWindow: 1, InputModalities: []string{"text"}, ReasoningLevels: []string{"low", "high"}, Source: "s"},
+		{ID: "m2", ContextWindow: 1, InputModalities: []string{"text"}, ReasoningLevels: []string{"high", "xhigh"}, Source: "s"},
+		{ID: "m3", ContextWindow: 1, InputModalities: []string{"text"}, ReasoningLevels: nil, Source: "s"},
+	}
+	res, err := catalog.MergeRelay(officialFixture(), paramGroup(params))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"low", "high", "xhigh"}
+	if !reflect.DeepEqual(res.ReasoningLevels, want) {
+		t.Errorf("ReasoningLevels = %v, want %v（按首次出现顺序去重）", res.ReasoningLevels, want)
+	}
+}
+
+func TestMerge_NegativeOfficialPriority(t *testing.T) {
+	t.Parallel()
+	off := []catalog.Entry{{"slug": "a", "priority": -5}, {"slug": "b", "priority": -3}}
+	res, err := catalog.MergeRelay(off, paramGroup(mergeParams))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := roundtrip(t, res.Models)
+	if got[2]["priority"] != float64(-2) || got[3]["priority"] != float64(-1) {
+		t.Errorf("priority = %v, %v，应从 -2 开始", got[2]["priority"], got[3]["priority"])
+	}
+}
+
+func TestMerge_GroupsInOrder_ParamOnlyThenSameName_WithRoutesAndSummaries(t *testing.T) {
+	t.Parallel()
+	groups := []catalog.RelayGroup{
+		{ID: "1", Name: "主力", ParamOnly: mergeParams[:1], SameName: []string{"gpt-a", "gpt-c"}},
+		{ID: "2", Name: "备用", ParamOnly: mergeParams[1:], SameName: []string{"gpt-b"}},
+	}
+	res, err := catalog.MergeRelay(officialFixture(), groups)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := roundtrip(t, res.Models)
+	wantSlugs := []any{"gpt-a", "gpt-b", "gpt-c", "relay-auto", "relay-gpt-a", "relay-gpt-c", "relay2-deepseek-v3.2", "relay2-gpt-b"}
+	if s := slugsOf(got); !reflect.DeepEqual(s, wantSlugs) {
+		t.Fatalf("slugs = %v, want %v", s, wantSlugs)
+	}
+	for i, m := range got[3:] {
+		if m["priority"] != float64(8+i) {
+			t.Errorf("%v priority = %v, want %d", m["slug"], m["priority"], 8+i)
+		}
+	}
+	if got[4]["display_name"] != "主力 · gpt-a" || got[7]["display_name"] != "备用 · gpt-b" {
+		t.Errorf("display_name = %v, %v", got[4]["display_name"], got[7]["display_name"])
+	}
+	wantRoutes := map[string]catalog.RelayRoute{
+		"relay-auto":           {ID: "1", Model: "auto", FromParams: true},
+		"relay-gpt-a":          {ID: "1", Model: "gpt-a"},
+		"relay-gpt-c":          {ID: "1", Model: "gpt-c"},
+		"relay2-deepseek-v3.2": {ID: "2", Model: "deepseek-v3.2", FromParams: true},
+		"relay2-gpt-b":         {ID: "2", Model: "gpt-b"},
+	}
+	if !reflect.DeepEqual(res.Routes, wantRoutes) {
+		t.Errorf("Routes = %+v", res.Routes)
+	}
+	wantAll := []string{"relay-auto", "relay-gpt-a", "relay-gpt-c", "relay2-deepseek-v3.2", "relay2-gpt-b"}
+	if !reflect.DeepEqual(res.RelayModels, wantAll) {
+		t.Errorf("RelayModels = %v, want %v", res.RelayModels, wantAll)
+	}
+	if want := []string{"relay-auto", "relay2-deepseek-v3.2"}; !reflect.DeepEqual(res.RelayFromParams, want) {
+		t.Errorf("RelayFromParams = %v, want %v", res.RelayFromParams, want)
+	}
+	if want := []string{"relay-auto", "relay-gpt-c", "relay2-deepseek-v3.2", "relay2-gpt-b"}; !reflect.DeepEqual(res.RelayShown, want) {
+		t.Errorf("RelayShown = %v, want %v（官方 gpt-a 是 hide，同名中转不显示）", res.RelayShown, want)
+	}
+}
+
+func TestMerge_MaxLevelWrittenAsUltraAcrossGroups(t *testing.T) {
+	t.Parallel()
+	p := []catalog.Param{{ID: "m", ContextWindow: 1, InputModalities: []string{"text"}, ReasoningLevels: []string{"low", "max"}, DefaultReasoningLevel: strp("max"), Source: "s"}}
+	res, err := catalog.MergeRelay(officialFixture(), paramGroup(p))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"low", "ultra"}; !reflect.DeepEqual(res.ReasoningLevels, want) {
+		t.Errorf("ReasoningLevels = %v, want %v", res.ReasoningLevels, want)
+	}
+	if got := roundtrip(t, res.Models)[3]["default_reasoning_level"]; got != "ultra" {
+		t.Errorf("default_reasoning_level = %v", got)
+	}
+}
+
+func TestMerge_RelayQwen4MaxFromBuiltinParams(t *testing.T) {
+	t.Parallel()
+	params, err := catalog.BuiltinParams()
+	if err != nil {
+		t.Fatal(err)
+	}
+	official := officialFixture()
+	paramOnly, sameName := catalog.RelayNames([]string{"qwen4-max"}, params, official)
+	if len(paramOnly) != 1 || len(sameName) != 0 {
+		t.Fatalf("paramOnly = %v, sameName = %v，qwen4-max 应只命中参数表", paramOnly, sameName)
+	}
+	res, err := catalog.MergeRelay(official, []catalog.RelayGroup{{ID: "1", Name: "主力", ParamOnly: paramOnly}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	models := roundtrip(t, res.Models)
+	if len(models) != 4 {
+		t.Fatalf("len = %d，应为官方 3 条加 qwen4-max", len(models))
+	}
+	e := models[3]
+	if e["slug"] != "relay-qwen4-max" {
+		t.Fatalf("slug = %v", e["slug"])
+	}
+	if e["default_reasoning_level"] != "high" {
+		t.Errorf("default_reasoning_level = %v", e["default_reasoning_level"])
+	}
+	wantLevels := []any{
+		map[string]any{"effort": "none", "description": "none"},
+		map[string]any{"effort": "low", "description": "low"},
+		map[string]any{"effort": "high", "description": "high"},
+		map[string]any{"effort": "xhigh", "description": "xhigh"},
+	}
+	if !reflect.DeepEqual(e["supported_reasoning_levels"], wantLevels) {
+		t.Errorf("supported_reasoning_levels = %#v", e["supported_reasoning_levels"])
+	}
+}

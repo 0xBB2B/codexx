@@ -1,0 +1,38 @@
+<Window x:Class="ModelBridge.UI.DialogWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:ui="clr-namespace:ModelBridge.UI"
+        WindowStyle="None" AllowsTransparency="True" Background="Transparent" ResizeMode="NoResize"
+        SizeToContent="Height" WindowStartupLocation="CenterScreen" ShowInTaskbar="False"
+        FontSize="13" Foreground="{StaticResource TextBrush}" UseLayoutRounding="True"
+        KeyboardNavigation.TabNavigation="Cycle" KeyboardNavigation.DirectionalNavigation="Cycle">
+    <Grid Margin="48,32,48,64">
+        <Border x:Name="Card" Background="{StaticResource SurfaceBrush}" CornerRadius="12">
+            <Border.Effect>
+                <DropShadowEffect BlurRadius="48" ShadowDepth="16" Direction="270" Color="#172B3A" Opacity="0.16" />
+            </Border.Effect>
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+
+                <StackPanel Orientation="Horizontal" Margin="24,24,24,0">
+                    <ui:AppIcon Width="24" Height="24" Margin="0,0,12,0" VerticalAlignment="Center" />
+                    <TextBlock x:Name="TitleText" Style="{StaticResource CardTitle}" TextWrapping="Wrap" VerticalAlignment="Center" />
+                </StackPanel>
+
+                <TextBlock x:Name="MessageText" Grid.Row="1" FontSize="14" TextWrapping="Wrap" Margin="24,12,24,24" />
+
+                <ContentControl x:Name="AlertHost" Grid.Row="2" Margin="24,12,24,24" Visibility="Collapsed" />
+
+                <Border Grid.Row="3" BorderBrush="{StaticResource DividerBrush}" BorderThickness="0,1,0,0" Padding="24,16"
+                        CornerRadius="0,0,12,12">
+                    <StackPanel x:Name="ButtonRow" Orientation="Horizontal" HorizontalAlignment="Right" />
+                </Border>
+            </Grid>
+        </Border>
+    </Grid>
+</Window>

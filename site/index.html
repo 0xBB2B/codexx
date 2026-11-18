@@ -1,0 +1,274 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>模型接入助手 ModelBridge — 让 Codex 用上你自己的模型服务</title>
+<link rel="icon" href="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAzMiAzMiI+PHJlY3Qgd2lkdGg9IjMyIiBoZWlnaHQ9IjMyIiByeD0iOCIgZmlsbD0iIzBmNzY2ZSIvPjxnIHRyYW5zZm9ybT0idHJhbnNsYXRlKDQgNCkgc2NhbGUoMSkiIGZpbGw9Im5vbmUiIHN0cm9rZT0iI2ZmZiIgc3Ryb2tlLXdpZHRoPSIxLjYiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIgc3Ryb2tlLWxpbmVqb2luPSJyb3VuZCI+PGNpcmNsZSBjeD0iMTIiIGN5PSIxMiIgcj0iOS4yIi8+PHBhdGggZD0iTTcgMTBoMTBsLTIuNi0yLjZNMTcgMTRIN2wyLjYgMi42Ii8+PC9nPjwvc3ZnPg==">
+<style>
+*{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0}@media (prefers-reduced-motion:reduce){html{scroll-behavior:auto}*{transition:none!important}}
+html[lang="en"] [data-l="zh"],html:not([lang="en"]) [data-l="en"]{display:none}
+.am{font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",sans-serif;color:#172b3a;text-align:left;letter-spacing:0;display:flex;justify-content:center}
+.am *{box-sizing:border-box}
+.am.am h2,.am.am h3,.am.am p,.am.am dl,.am.am dd,.am.am strong{margin:0;font-family:inherit;letter-spacing:0}
+.am-mono{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:12px}
+.am .si{width:16px;height:16px;flex:none}.am .ico{width:20px;height:20px;flex:none}
+.am-window{width:620px;flex:none;background:#f5f7fa;border-radius:12px;overflow:hidden;box-shadow:0 22px 70px #172b3a38,0 2px 8px #172b3a22}
+.am-titlebar{height:48px;display:flex;align-items:center;justify-content:center;position:relative;background:#fff;border-bottom:1px solid #e2e7ec;font-size:13px}
+.am-lights{position:absolute;left:16px;display:flex;gap:8px}.am-lights i{width:12px;height:12px;border-radius:9999px}
+.am .l-close{background:#ff5f57}.am .l-min{background:#febc2e}.am .l-max{background:#28c840}
+.am-body{padding:24px;display:grid;gap:20px}
+.am-group{background:#fff;border:1px solid #e2e7ec;border-radius:12px;padding:24px;display:grid;gap:20px}
+.am.am .am-group h3{font-size:16px;line-height:1.3;font-weight:600;color:#172b3a}
+.am.am .am-intro h2{font-size:20px;line-height:1.3;font-weight:600;margin-bottom:8px;color:#172b3a}.am.am .am-intro p{font-size:13px;color:#536575}
+.am-field{display:grid;grid-template-columns:112px 1fr;gap:12px;align-items:start}
+.am-label{font-size:13px;font-weight:600;padding-top:12px}.am-req{font-weight:400;font-size:12px;color:#536575}
+.am-input{height:44px;padding:0 12px;border:1px solid #7b8998;border-radius:8px;background:#fff;display:flex;align-items:center;flex:1;min-width:0}
+.am-key{display:flex;gap:8px}
+.am-btn-icon{width:44px;height:44px;flex:none;border:1px solid #7b8998;border-radius:8px;background:#fff;display:grid;place-items:center}
+.am-help{font-size:12px;color:#536575;margin-top:8px}
+.am-row{display:flex;align-items:center;gap:12px;min-height:44px;font-size:13px}.am-row strong{font-weight:600}.am-row strong+.am-muted{margin-left:-8px}
+.am-muted{color:#536575}.am-grow{flex:1}
+.am-switch{width:40px;height:24px;border-radius:9999px;background:#0f766e;border:1px solid #0f766e;position:relative;flex:none}
+.am-switch i{position:absolute;top:3px;left:19px;width:16px;height:16px;border-radius:9999px;background:#fff}
+.am-btn1,.am-btn2{height:44px;padding:0 20px;border-radius:8px;font-size:13px;font-weight:600;display:inline-flex;align-items:center}
+.am-btn1{background:#0f766e;color:#fff;border:1px solid #0f766e}.am-btn2{background:#fff;color:#172b3a;border:1px solid #7b8998}
+.am .sm{padding:0 16px}
+.am-hero{background:#e7f2f0;border:1px solid #0f766e;border-radius:12px;padding:16px 24px;display:grid;gap:12px}
+.am-hero-top{display:flex;align-items:center;gap:16px}.am-hero-title{font-size:16px;font-weight:600}.am-hero-sub{font-size:12px;color:#536575;margin-top:4px}
+.am-hero-mode{display:flex;align-items:center;gap:12px;min-height:44px;font-size:13px}
+.am .app-ic{flex:none;display:block}
+.lv{display:inline-flex;align-items:baseline;gap:8px;white-space:nowrap}.lv-label,.lv-note{color:#536575;font-weight:400}.lv-value{font-weight:600;color:#172b3a}.lv-value+.lv-note{margin-left:-4px}
+.cfg-list{list-style:none;margin:0;padding:0}.cfg-row{height:64px;padding:8px 0;display:flex;align-items:center;gap:12px}.cfg-row+.cfg-row{border-top:1px solid #e2e7ec}
+.cfg-main{flex:1;min-width:0}.cfg-name{font-size:13px;font-weight:600;white-space:nowrap}
+.cfg-meta{display:flex;gap:8px;font-size:12px;align-items:center}.cfg-status{color:#16734b;display:inline-flex;gap:4px;align-items:center;white-space:nowrap}.cfg-url{color:#536575;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.cfg-actions{display:flex;gap:8px}.cfg-foot{display:flex;align-items:center;gap:12px}.cfg-foot .am-help{margin:0}
+.am-status .lv{font-size:12px}
+.am-end{display:flex;justify-content:flex-end}
+.am-link{color:#0f766e;font-size:13px;font-weight:600}
+.am-kv{display:grid;grid-template-columns:112px 1fr;gap:12px;font-size:13px}.am-kv dt{font-weight:600}
+.am-ok{color:#16734b;display:inline-flex;gap:4px;align-items:center}
+.am-status{min-height:48px;display:flex;align-items:center;gap:8px;padding:0 24px;background:#fff;border-top:1px solid #e2e7ec;font-size:12px;color:#536575}
+.am-dot{width:8px;height:8px;border-radius:9999px;background:#16734b}
+.am-scene{width:620px;flex:none;height:432px;border-radius:12px;overflow:hidden;position:relative;background:linear-gradient(160deg,#dfe7ee,#eef2f6 60%,#e7f2f0);box-shadow:0 22px 70px #172b3a38,0 2px 8px #172b3a22}
+.am-menubar{height:24px;display:flex;justify-content:flex-end;align-items:center;gap:16px;padding:0 12px;background:#ffffffe0;border-bottom:1px solid #e2e7ec;font-size:13px}
+.am-mb-ic{display:inline-grid;place-items:center;width:28px;height:20px;border-radius:4px;background:#172b3a1f}.am-mb-ic .ico{width:18px;height:18px}
+.am-menu{position:absolute;top:28px;right:72px;width:286px;background:#fff;border:1px solid #e2e7ec;border-radius:12px;box-shadow:0 16px 48px #172b3a29;padding:4px;font-size:13px}
+.am-menu-head{display:flex;gap:8px;align-items:center;padding:12px;color:#0f766e}.am-menu-head strong{color:#172b3a;font-weight:600}
+.am-sub{font-size:12px;color:#536575}
+.am-sep{height:1px;background:#e2e7ec;margin:4px 8px}
+.am-mi{min-height:44px;display:flex;align-items:center;gap:8px;padding:0 12px 0 8px;border-radius:8px}
+.am-mi-check{width:16px;height:16px;color:#0f766e;flex:none}.am-kbd{color:#536575;font-size:12px}
+@media (max-width:760px){.am{zoom:.8}}
+@media (max-width:600px){.am{zoom:.52}}
+@media (max-width:356px){.am{zoom:.46}}
+body{--bg:#ffffff;--alt:#f5f7fa;--text:#172b3a;--muted:#536575;--line:#e2e7ec;--strong:#7b8998;--pri:#0f766e;--pri-h:#115e59;--tint:#e7f2f0;--press:#e9edf1;
+  font:16px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;color:var(--text);background:var(--bg)}
+.wrap{max-width:1088px;margin:0 auto;padding:0 24px}
+a{color:var(--pri)}:focus-visible{outline:2px solid var(--pri);outline-offset:3px}
+.ic{width:24px;height:24px;flex:none}
+.nav{position:sticky;top:0;z-index:9;background:var(--bg);border-bottom:1px solid var(--line)}
+.nav-in{height:64px;display:flex;align-items:center;gap:24px}
+.brand{display:flex;align-items:center;gap:8px;text-decoration:none;color:var(--text);min-height:44px;border-radius:8px;padding:0 8px;margin:0 -8px}
+.brand:hover{background:var(--alt)}.brand:active{background:var(--press)}
+.brand .ic{color:var(--pri)}.brand b{font-size:16px}.brand .sub{font-size:14px;color:var(--muted)}
+.links{display:flex;gap:4px;margin-left:auto}
+.links a{font-size:14px;color:var(--muted);text-decoration:none;padding:0 12px;line-height:44px;border-radius:8px}
+.links a:hover{color:var(--text);background:var(--alt)}.links a:active{color:var(--text);background:var(--press)}
+.nav-r{display:flex;align-items:center;gap:12px}
+.lang{display:flex;border:1px solid var(--strong);border-radius:8px}
+.lang button:first-child{border-radius:8px 0 0 8px}.lang button:last-child{border-radius:0 8px 8px 0}
+.lang button{white-space:nowrap;height:44px;padding:0 12px;border:0;background:#fff;color:var(--muted);font-weight:600;font-size:14px;line-height:1;font-family:inherit;cursor:pointer}
+.lang button:focus-visible{position:relative;z-index:1}
+.lang button:hover{background:var(--alt);color:var(--text)}.lang button:active{background:var(--tint);color:var(--pri)}.lang button[aria-pressed="true"]{background:var(--tint);color:var(--pri)}
+.gh{font-size:14px;font-weight:600;text-decoration:none;line-height:44px;padding:0 4px}
+.gh:hover,.foot-r a:hover{color:var(--pri-h)}.gh:active,.foot-r a:active{color:var(--text)}
+.hero{text-align:center;padding:96px 0 64px;background:radial-gradient(720px 320px at 50% 0,var(--tint),transparent 72%)}
+.eyebrow{display:inline-block;font-size:14px;font-weight:600;color:var(--pri);background:var(--tint);border-radius:9999px;padding:4px 16px;margin:0 0 24px}
+h1{font-size:48px;line-height:1.2;font-weight:700;letter-spacing:-.5px;margin:0 auto 24px;max-width:840px}
+.lead{font-size:18px;line-height:1.6;color:var(--muted);max-width:680px;margin:0 auto 32px}
+.ctas{display:flex;gap:12px;justify-content:center;flex-wrap:wrap}
+.btn{display:inline-flex;align-items:center;gap:8px;min-height:48px;padding:10px 24px;border-radius:8px;font-size:16px;line-height:1.6;font-weight:600;text-decoration:none;transition:background-color 200ms ease-out}
+.btn .ic{width:20px;height:20px}
+.btn-1{background:var(--pri);color:#fff;border:1px solid var(--pri)}.btn-1:hover{background:var(--pri-h);border-color:var(--pri-h)}.btn-1:active{background:var(--pri-h);border-color:var(--pri-h);transform:translateY(1px)}
+.btn-2{background:#fff;color:var(--text);border:1px solid var(--strong)}.btn-2:hover{background:var(--alt)}.btn-2:active{background:var(--press)}
+.need{font-size:14px;color:var(--muted);margin:24px 0 0}
+.sec{padding:96px 0}.sec.alt{background:var(--alt)}
+.sec [id],.sec{scroll-margin-top:64px}
+.sec-h{text-align:center;margin-bottom:48px}
+h2{font-size:32px;line-height:1.3;font-weight:700;margin:0 0 12px}
+.sec-h p{color:var(--muted);margin:0 auto;max-width:640px}
+h3{font-size:18px;line-height:1.4;font-weight:600;margin:0 0 8px}
+p{margin:0}
+.note{font-size:14px;color:var(--muted);text-align:center;margin-top:16px}
+.tabs{display:flex;justify-content:center;gap:4px;margin:0 auto 32px;padding:4px;background:#fff;border:1px solid var(--line);border-radius:12px;width:fit-content;max-width:100%;flex-wrap:wrap}
+.tabs button{white-space:nowrap;height:44px;padding:0 20px;border:0;border-radius:8px;background:none;color:var(--muted);font-weight:600;font-size:14px;line-height:1;font-family:inherit;cursor:pointer}
+.tabs button:hover{color:var(--text)}.tabs button:active{background:var(--pri);color:#fff}.tabs button[aria-selected="true"]{background:var(--pri);color:#fff}
+.shot{margin:0}.stage{padding:24px 0 48px;overflow-x:clip}
+figcaption{text-align:center;color:var(--muted);font-size:16px}
+.steps{list-style:none;margin:0;padding:0;display:grid;grid-template-columns:repeat(3,1fr);gap:24px}
+.steps li{background:#fff;border:1px solid var(--line);border-radius:12px;padding:32px}
+.num{display:grid;place-items:center;width:40px;height:40px;border-radius:9999px;background:var(--tint);color:var(--pri);font-weight:700;margin-bottom:16px}
+.steps p,.mode p,.safe p,.get p,.faq p,.first{color:var(--muted);font-size:16px}
+code{font:14px/1.5 ui-monospace,SFMono-Regular,Consolas,monospace;background:var(--alt);border:1px solid var(--line);border-radius:4px;padding:0 4px;color:var(--text);overflow-wrap:anywhere}
+.flow{display:flex;align-items:center;justify-content:center;gap:16px;margin-bottom:48px;flex-wrap:wrap}
+.node{background:#fff;border:1px solid var(--line);border-radius:12px;padding:12px 20px;display:grid;min-width:168px}
+.node b{font-size:16px}.node>span{font-size:14px;color:var(--muted)}
+.node.hub{border:2px solid var(--pri);background:var(--tint)}
+.fork{display:grid;gap:12px}.arrow{font-style:normal;color:var(--strong);font-size:24px}
+.modes{display:grid;grid-template-columns:1fr 1fr;gap:24px}
+.mode{background:#fff;border:1px solid var(--line);border-radius:12px;padding:32px;display:flex;flex-direction:column}
+.when{align-self:flex-start;font-size:14px;font-weight:600;color:var(--pri);background:var(--tint);border-radius:4px;padding:0 8px;margin-bottom:12px}
+.mode p{flex:1}
+.ml{margin-top:24px;border:1px solid var(--line);border-radius:8px;padding:8px;background:var(--alt);font-size:14px}
+.ml-t{font-size:12px;color:var(--muted);padding:4px 8px}.ml-g{font-size:12px;font-weight:600;color:var(--muted);padding:8px 8px 4px}
+.ml-r{padding:8px 12px;border-radius:4px;background:#fff;margin-top:4px;display:flex;justify-content:space-between}
+.ml-r.on{border-left:4px solid var(--pri)}.ml-r em{font-style:normal;font-size:12px;color:var(--pri);font-weight:600}
+.safe{list-style:none;margin:0;padding:0;display:grid;grid-template-columns:1fr 1fr;gap:24px}
+.safe li{display:flex;gap:16px;background:#fff;border:1px solid var(--line);border-radius:12px;padding:24px}
+.safe .ic{width:48px;height:48px;padding:12px;border-radius:12px;background:var(--tint);color:var(--pri)}
+.faq{max-width:760px;margin:0 auto}
+details{border-bottom:1px solid var(--line)}
+summary{cursor:pointer;font-size:18px;font-weight:600;padding:20px 0;min-height:44px}summary:hover{color:var(--pri)}
+details p{padding:0 0 24px}
+.gets{display:grid;grid-template-columns:1fr 1fr;gap:24px}
+.get{background:#fff;border:1px solid var(--line);border-radius:12px;padding:32px}
+.get h3{font-size:24px}.get p+.btn{margin-top:24px}
+button.btn{font-family:inherit;cursor:pointer}
+.btn:disabled,.btn:disabled:hover,.btn:disabled:active{background:#e9edf1;border-color:#e9edf1;color:#586878;cursor:not-allowed;transform:none}
+.more{text-align:center;margin-top:16px;font-size:14px}.more a{display:inline-block;line-height:44px}
+.more a:hover{color:var(--pri-h)}.more a:active{color:var(--text)}
+.first{margin-top:24px;border:1px solid var(--line);border-radius:12px;padding:24px 32px;background:#fff}
+.first h3{color:var(--text)}.first dl{display:grid;grid-template-columns:96px 1fr;gap:8px 16px;margin:12px 0}
+.first dt{font-weight:600;color:var(--text)}.first dd{margin:0}
+.foot{border-top:1px solid var(--line);padding:32px 0;font-size:14px;color:var(--muted)}
+.foot-in{display:flex;justify-content:space-between;gap:24px;flex-wrap:wrap}.foot-r{display:flex;gap:24px}.foot-r a{line-height:44px}
+.small{font-size:12px;margin-top:4px}
+@media (max-width:900px){.links{display:none}.nav-r{margin-left:auto}h1{font-size:36px}.steps,.modes,.safe,.gets{grid-template-columns:1fr}.sec{padding:64px 0}.flow{flex-direction:column}.arrow{transform:rotate(90deg)}}
+@media (max-width:600px){.brand .sub{display:none}.nav-in{gap:12px}.nav-r{gap:8px;margin-left:auto}.wrap{padding:0 16px}.hero{padding:64px 0 48px}h1{font-size:32px}.node{min-width:0}.first{padding:24px}.first dl{grid-template-columns:1fr}.tabs button{padding:0 12px}}
+@media (max-width:400px){.lang button{padding:0 4px}.nav-in{gap:8px}.nav-r{gap:4px}.brand b{font-size:14px}.brand{padding-left:4px;padding-right:4px;margin-left:-4px;margin-right:-4px}.gh{padding:0}}
+</style>
+<script>
+const LANG_KEY = 'modelbridge-site-lang';
+function pickLang() {
+  try {
+    const saved = localStorage.getItem(LANG_KEY);
+    if (saved === 'zh' || saved === 'en') return saved;
+  } catch (e) {}
+  const first = (navigator.languages && navigator.languages[0]) || navigator.language || '';
+  return /^zh/i.test(first) ? 'zh' : 'en';
+}
+document.documentElement.lang = pickLang() === 'zh' ? 'zh-CN' : 'en';
+</script>
+</head>
+<body id="top">
+<header class="nav"><div class="wrap nav-in"><a class="brand" href="#top"><svg class="ic logo-ic" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9.2"/><path d="M7 10h10l-2.6-2.6M17 14H7l2.6 2.6"/></svg><b>ModelBridge</b><span class="sub" data-l="zh">模型接入助手</span></a>
+<nav class="links" aria-label="页内导航" data-aria-zh="页内导航" data-aria-en="On this page"><a href="#screens"><span data-l="zh">界面</span><span data-l="en">Interface</span></a><a href="#start"><span data-l="zh">上手</span><span data-l="en">Setup</span></a><a href="#modes"><span data-l="zh">接入方式</span><span data-l="en">Access modes</span></a><a href="#security"><span data-l="zh">安全</span><span data-l="en">Security</span></a><a href="#faq"><span data-l="zh">常见问题</span><span data-l="en">FAQ</span></a><a href="#download"><span data-l="zh">下载</span><span data-l="en">Download</span></a></nav><div class="nav-r"><div class="lang" role="group" aria-label="语言 / Language"><button type="button" data-lang-btn="zh" aria-pressed="true" lang="zh-CN">中文</button><button type="button" data-lang-btn="en" aria-pressed="false" lang="en">English</button></div><a class="gh" href="https://github.com/0xBB2B/codexx">GitHub</a></div></div></header>
+<main>
+<section class="hero" id="hero"><div class="wrap"><p class="eyebrow"><span data-l="zh">开源 · macOS / Windows 托盘小工具</span><span data-l="en">Open source · menu bar / tray utility for macOS and Windows</span></p><h1><span data-l="zh">让 ChatGPT 桌面版里的 Codex，用上你自己的模型服务</span><span data-l="en">Use your own model service with Codex in the ChatGPT desktop app</span></h1><p class="lead"><span data-l="zh">填好 Base URL 和 API Key，模型接入助手替你改好 Codex 配置，并在本机 127.0.0.1:47311 转发请求。这个页面把你自己的模型服务叫作「中转」。</span><span data-l="en">Enter a Base URL and an API Key. ModelBridge updates the Codex configuration for you and forwards requests locally at 127.0.0.1:47311. This page calls your own model service the “relay”.</span></p><div class="ctas"><!--sb:hero--><button class="btn btn-1" type="button" disabled><span data-l="zh">暂未发布</span><span data-l="en">Not released yet</span></button><!--/sb--><a class="btn btn-2" href="https://github.com/0xBB2B/codexx"><span data-l="zh">查看源码</span><span data-l="en">View source</span></a></div><p class="need"><span data-l="zh">需要先装好 ChatGPT 桌面版 · macOS 13 及以上（Apple 芯片）· Windows 10 1809 及以上（64 位）</span><span data-l="en">Requires the ChatGPT desktop app · macOS 13 or later (Apple silicon) · Windows 10 1809 or later (64-bit)</span></p></div></section>
+<section class="sec alt" id="screens"><div class="wrap"><div class="sec-h"><h2><span data-l="zh">界面长什么样</span><span data-l="en">What it looks like</span></h2><p><span data-l="zh">下面是照 App 的样子画的示意图，里面的地址、Key、数字都是示例。</span><span data-l="en">These are drawn mock-ups of the app. Every address, key and number in them is an example.</span></p></div><div class="tabs" role="tablist"><button type="button" role="tab" aria-selected="false" data-tab="0"><span data-l="zh">首次设置</span><span data-l="en">Setup</span></button><button type="button" role="tab" aria-selected="true" data-tab="1"><span data-l="zh">主窗口</span><span data-l="en">Main window</span></button><button type="button" role="tab" aria-selected="false" data-tab="2"><span data-l="zh">菜单栏菜单</span><span data-l="en">Menu bar</span></button></div>
+<figure class="shot" data-pane="0" hidden><div class="stage"><div class="am" role="img" aria-label="首次设置窗口示意图" data-aria-zh="首次设置窗口示意图" data-aria-en="Mock-up of the first-run setup window"><div class="am-window" inert>
+  <div class="am-titlebar"><span class="am-lights"><i class="l-close"></i><i class="l-min"></i><i class="l-max"></i></span><span>设置模型接入助手</span></div>
+  <div class="am-body">
+    <div class="am-intro"><h2>连接中转服务</h2><p>填写中转服务提供的 Base URL 和 API Key。设置完成后，Codex 的模型列表里会多出中转模型。</p></div>
+<section class="am-group">
+      <div class="am-field"><span class="am-label">名字 <span class="am-req">必填</span></span><div><div class="am-input">中转</div><div class="am-help">1~16 个字，不能重名，不能含「·」。</div></div></div>
+      <div class="am-field"><span class="am-label">Base URL <span class="am-req">必填</span></span><div><div class="am-input am-mono">https://relay.example.com/v1</div><div class="am-help">以 https&#58;// 开头的完整地址。</div></div></div>
+      <div class="am-field"><span class="am-label">API Key <span class="am-req">必填</span></span><div><div class="am-key"><div class="am-input am-mono">••••••••••••••••••••••••</div><span class="am-btn-icon"><svg class="si" viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M1.5 8s2.5-4.5 6.5-4.5S14.5 8 14.5 8 12 12.5 8 12.5 1.5 8 1.5 8z"/><circle cx="8" cy="8" r="2"/></svg></span></div><div class="am-help">保存在系统钥匙串中。</div></div></div>
+    </section>
+    <div class="am-end"><span class="am-btn1">完成设置</span></div>
+  </div>
+</div></div></div><figcaption><span data-l="zh">第一次打开填三项：名字、Base URL 和 API Key。</span><span data-l="en">On first launch you fill in three fields: name, Base URL and API Key.</span></figcaption></figure>
+<figure class="shot" data-pane="1"><div class="stage"><div class="am" role="img" aria-label="主窗口示意图" data-aria-zh="主窗口示意图" data-aria-en="Mock-up of the main window"><div class="am-window" inert>
+  <div class="am-titlebar"><span class="am-lights"><i class="l-close"></i><i class="l-min"></i><i class="l-max"></i></span><span>模型接入助手</span></div>
+  <div class="am-body">
+<section class="am-hero">
+      <div class="am-hero-top"><svg class="app-ic" width="48" height="48" viewBox="0 0 100 100" aria-hidden="true"><rect width="100" height="100" rx="22.4" fill="#0f766e"/><g fill="none" stroke="#fff" stroke-width="9" stroke-linecap="round" stroke-linejoin="round"><circle cx="50" cy="50" r="34"/><path d="M31.5 42.6H68.5l-9.6-9.6M68.5 57.4H31.5l9.6 9.6"/></g></svg><div class="am-grow"><div class="am-hero-title">使用中转 · 已开启</div><div class="am-hero-sub">官方模型在上，中转模型在下；选官方模型时仍访问官方服务。</div></div><span class="am-switch"><i></i></span></div>
+      <div class="am-hero-mode"><span class="lv"><span class="lv-label">接入方式</span><strong class="lv-value">官方 + 中转</strong><span class="lv-note">· 已检测到 ChatGPT 登录</span></span><span class="am-grow"></span><span class="am-btn2 sm">重新检测</span></div>
+    </section>
+<section class="am-group"><h3>中转配置</h3>
+      <ul class="cfg-list"><li class="cfg-row"><div class="cfg-main"><div class="cfg-name"><span>中转</span></div><div class="cfg-meta"><span class="cfg-status"><svg class="si" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="7" fill="currentColor"/><path d="M4.8 8.2l2.2 2.2 4.2-4.6" fill="none" stroke="#fff" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>6 个模型</span><span class="cfg-url am-mono">https://relay.example.com/v1</span></div></div><div class="cfg-actions"><span class="am-btn2 sm">编辑</span><span class="am-btn2 sm">删除</span></div></li><li class="cfg-row"><div class="cfg-main"><div class="cfg-name"><span>A家</span></div><div class="cfg-meta"><span class="cfg-status"><svg class="si" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="7" fill="currentColor"/><path d="M4.8 8.2l2.2 2.2 4.2-4.6" fill="none" stroke="#fff" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>4 个模型</span><span class="cfg-url am-mono">https://relay.example.com/alt/v1</span></div></div><div class="cfg-actions"><span class="am-btn2 sm">编辑</span><span class="am-btn2 sm">删除</span></div></li></ul>
+      <div class="cfg-foot"><span class="am-btn2">添加配置</span><span class="am-help">已有 2 个，最多 10 个。</span></div>
+    </section>
+  </div>
+  <div class="am-status"><span class="am-mono">v1.0.0</span><i class="am-dot"></i><span>后台运行中</span><span class="am-ok"><svg class="si" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="7" fill="currentColor"/><path d="M4.8 8.2l2.2 2.2 4.2-4.6" fill="none" stroke="#fff" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg><span class="lv"><span class="lv-label">ChatGPT</span><strong class="lv-value">已检测到</strong></span></span><span class="am-ok"><svg class="si" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="7" fill="currentColor"/><path d="M4.8 8.2l2.2 2.2 4.2-4.6" fill="none" stroke="#fff" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg><span class="lv"><span class="lv-label">中转模型</span><strong class="lv-value">10 个</strong><span class="lv-note">（2 个配置）</span></span></span><span class="am-grow"></span><span class="am-link">检查更新</span></div>
+</div></div></div><figcaption><span data-l="zh">在主窗口开关转发、看当前的接入方式、管理中转配置。</span><span data-l="en">Turn forwarding on or off, see the current access mode and manage relay configurations.</span></figcaption></figure>
+<figure class="shot" data-pane="2" hidden><div class="stage"><div class="am" role="img" aria-label="菜单栏菜单示意图" data-aria-zh="菜单栏菜单示意图" data-aria-en="Mock-up of the menu bar menu"><div class="am-scene" inert>
+  <div class="am-menubar"><span class="am-mb-ic"><svg class="ico" viewBox="0 0 100 100" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="9" stroke-linecap="round" stroke-linejoin="round"><g transform="translate(50 50) scale(1.2) translate(-50 -50)"><circle cx="50" cy="50" r="34"/><path d="M31.5 42.6H68.5l-9.6-9.6M68.5 57.4H31.5l9.6 9.6"/></g></svg></span><span>周一 09:41</span></div>
+  <div class="am-menu">
+    <div class="am-menu-head"><svg class="app-ic" width="24" height="24" viewBox="0 0 100 100" aria-hidden="true"><rect width="100" height="100" rx="22.4" fill="#0f766e"/><g fill="none" stroke="#fff" stroke-width="9" stroke-linecap="round" stroke-linejoin="round"><circle cx="50" cy="50" r="34"/><path d="M31.5 42.6H68.5l-9.6-9.6M68.5 57.4H31.5l9.6 9.6"/></g></svg><div><strong>模型接入助手</strong><div class="am-sub">转发已开启 · 后台运行中</div></div></div>
+    <div class="am-sep"></div>
+    <div class="am-mi"><span class="am-mi-check"><svg class="si" viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 8.5l3 3 6-7"/></svg></span><span class="am-grow">使用中转</span></div><div class="am-mi"><span class="am-mi-check"></span><span class="am-grow">打开配置…</span><span class="am-kbd">⌘,</span></div>
+    <div class="am-sep"></div>
+    <div class="am-mi"><span class="am-mi-check"><svg class="si" viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 8.5l3 3 6-7"/></svg></span><span class="am-grow">登录时启动</span></div><div class="am-mi"><span class="am-mi-check"></span><span class="am-grow">检查更新</span></div>
+    <div class="am-sep"></div>
+    <div class="am-mi"><span class="am-mi-check"></span><span class="am-grow">卸载模型接入助手…</span></div><div class="am-mi"><span class="am-mi-check"></span><span class="am-grow">退出模型接入助手</span><span class="am-kbd">⌘Q</span></div>
+  </div>
+</div></div></div><figcaption><span data-l="zh">平时待在菜单栏（Windows 上是任务栏通知区域），点一下就能开关转发。</span><span data-l="en">It stays in the menu bar (the notification area on Windows). One click toggles forwarding.</span></figcaption></figure><p class="note" data-l="en">The app’s interface is available in Chinese only.</p></div></section>
+<section class="sec" id="start"><div class="wrap"><div class="sec-h"><h2><span data-l="zh">三步上手</span><span data-l="en">Set up in three steps</span></h2></div><ol class="steps">
+<li><span class="num" aria-hidden="true">1</span><h3><span data-l="zh">下载并安装</span><span data-l="en">Download and install</span></h3><p><span data-l="zh">先装好 ChatGPT 桌面版，再用本页的下载按钮下载安装包。安装包没有开发者签名，第一次打开要手动放行，步骤写在「下载」一节。</span><span data-l="en">Install the ChatGPT desktop app first, then get the installer with a download button on this page. The installer is not code-signed, so you approve it by hand the first time. The steps are in the Download section.</span></p></li>
+<li><span class="num" aria-hidden="true">2</span><h3><span data-l="zh">填 Base URL 和 API Key</span><span data-l="en">Enter the Base URL and API Key</span></h3><p><span data-l="zh">打开模型接入助手，填中转提供的 Base URL（例如 <code>https://relay.example.com/v1</code>）和 API Key（例如 <code>sk-example-0000</code>），点「完成设置」。</span><span data-l="en">Open ModelBridge and enter the Base URL (for example <code>https://relay.example.com/v1</code>) and API Key (for example <code>sk-example-0000</code>) from your relay service, then click “完成设置” (Finish setup).</span></p></li>
+<li><span class="num" aria-hidden="true">3</span><h3><span data-l="zh">重启 ChatGPT</span><span data-l="en">Restart ChatGPT</span></h3><p><span data-l="zh">助手只提示"重启 ChatGPT 后生效"，由你自己重启。重启后，在 Codex 的模型列表里就能选中转模型。</span><span data-l="en">ModelBridge only tells you that the change takes effect after ChatGPT restarts. You restart it yourself. After that, the relay models appear in the Codex model list.</span></p></li></ol></div></section>
+<section class="sec alt" id="modes"><div class="wrap"><div class="sec-h"><h2><span data-l="zh">两种接入方式，自动选</span><span data-l="en">Two access modes, picked automatically</span></h2><p><span data-l="zh">助手检测 Codex 有没有登录 ChatGPT，按结果自动选一种。</span><span data-l="en">ModelBridge checks whether Codex is signed in to ChatGPT and picks a mode from the result.</span></p></div><div class="flow" role="img" aria-label="Codex → 模型接入助手 → 官方服务 / 你的中转" data-aria-zh="Codex → 模型接入助手 → 官方服务 / 你的中转" data-aria-en="Codex → ModelBridge → Official service / Your relay"><div class="node"><b>Codex</b><span><span data-l="zh">ChatGPT 桌面版</span><span data-l="en">ChatGPT desktop app</span></span></div><i class="arrow" aria-hidden="true">→</i><div class="node hub"><b><span data-l="zh">模型接入助手</span><span data-l="en">ModelBridge</span></b><span><span data-l="zh">本机 127.0.0.1:47311</span><span data-l="en">local 127.0.0.1:47311</span></span></div><i class="arrow" aria-hidden="true">→</i><div class="fork"><div class="node"><b><span data-l="zh">官方服务</span><span data-l="en">Official service</span></b><span><span data-l="zh">官方模型的请求</span><span data-l="en">requests for official models</span></span></div><div class="node"><b><span data-l="zh">你的中转</span><span data-l="en">Your relay</span></b><span><span data-l="zh">中转模型的请求</span><span data-l="en">requests for relay models</span></span></div></div></div><div class="modes">
+<article class="mode"><span class="when"><span data-l="zh">已登录 ChatGPT 时</span><span data-l="en">When signed in to ChatGPT</span></span><h3><span data-l="zh">官方 + 中转</span><span data-l="en">Official + relay</span></h3><p><span data-l="zh">模型列表里官方模型在上，中转模型在下。选官方模型时，请求仍然访问官方服务。</span><span data-l="en">Official models come first in the list and relay models follow. Requests for official models still go to the official service.</span></p><div class="ml" aria-hidden="true"><div class="ml-t"><span data-l="zh">Codex 模型列表（示意）</span><span data-l="en">Codex model list (illustration)</span></div><div class="ml-g"><span data-l="zh">官方模型</span><span data-l="en">Official models</span></div><div class="ml-r"><span data-l="zh">官方模型 A</span><span data-l="en">Official model A</span></div><div class="ml-r"><span data-l="zh">官方模型 B</span><span data-l="en">Official model B</span></div><div class="ml-g"><span data-l="zh">中转模型</span><span data-l="en">Relay models</span></div><div class="ml-r on"><span>中转 · auto</span></div><div class="ml-r on"><span><span data-l="zh">中转 · 模型 A</span><span data-l="en">中转 · model A</span></span></div><div class="ml-r on"><span>A家 · auto</span></div></div></article>
+<article class="mode"><span class="when"><span data-l="zh">没登录 ChatGPT 时</span><span data-l="en">When not signed in to ChatGPT</span></span><h3><span data-l="zh">只用中转</span><span data-l="en">Relay only</span></h3><p><span data-l="zh">不登录也能用。模型列表里只有中转模型，默认选中「中转 · auto」。登录 ChatGPT 后在主窗口点「重新检测」，就能同时用官方模型。</span><span data-l="en">It works without signing in. The list holds relay models only, with “中转 · auto” selected by default. After you sign in to ChatGPT, click “重新检测” (Re-check) in the main window to get official models as well.</span></p><div class="ml" aria-hidden="true"><div class="ml-t"><span data-l="zh">Codex 模型列表（示意）</span><span data-l="en">Codex model list (illustration)</span></div><div class="ml-g"><span data-l="zh">中转模型</span><span data-l="en">Relay models</span></div><div class="ml-r on"><span>中转 · auto</span><em><span data-l="zh">默认</span><span data-l="en">default</span></em></div><div class="ml-r on"><span><span data-l="zh">中转 · 模型 A</span><span data-l="en">中转 · model A</span></span></div><div class="ml-r on"><span>A家 · auto</span></div></div></article></div><p class="note" data-l="en">Relay models are labelled “中转” (relay) in the list.</p></div></section>
+<section class="sec" id="security"><div class="wrap"><div class="sec-h"><h2><span data-l="zh">安全说明</span><span data-l="en">Security</span></h2><p><span data-l="zh">全部源码公开在 GitHub 上，下面每一条都能在代码里查到。</span><span data-l="en">All source code is public on GitHub. You can check every point below in the code.</span></p></div><ul class="safe">
+<li><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="15" r="4"/><path d="M11 12l8.5-8.5M16 7l2.5 2.5M13.5 9.5l2 2"/></svg><div><h3><span data-l="zh">API Key 只存在系统凭据库</span><span data-l="en">The API Key lives in the system credential store</span></h3><p><span data-l="zh">macOS 存进钥匙串，Windows 存进凭据管理器。普通文件和日志里都没有它。</span><span data-l="en">Keychain on macOS, Credential Manager on Windows. It is absent from ordinary files and logs.</span></p></div></li>
+<li><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l7.5 3v5.5c0 4.6-3 8-7.5 9.5C7.500 19.500 4.500 16.100 4.500 11.500V6z"/><path d="M8.8 12l2.3 2.3 4.2-4.6"/></svg><div><h3><span data-l="zh">官方凭据只发往官方服务</span><span data-l="en">Official credentials go to the official service only</span></h3><p><span data-l="zh">官方凭据只转发给官方服务，中转收不到；助手也不保存它。</span><span data-l="en">They are forwarded to the official service alone. The relay never receives them and ModelBridge does not store them.</span></p></div></li>
+<li><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4.500 9.500h9.500a5.500 5.500 0 010 11H8"/><path d="M8.500 5.500l-4 4 4 4"/></svg><div><h3><span data-l="zh">配置可以原样还原</span><span data-l="en">Your configuration is restored as it was</span></h3><p><span data-l="zh">助手只改自己的接入项。关闭转发或卸载时，Codex 配置还原为开启前的样子。</span><span data-l="en">ModelBridge changes only its own entries. When you turn forwarding off or uninstall, the Codex configuration returns to its earlier state.</span></p></div></li>
+<li><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5.500M12 16v.2"/></svg><div><h3><span data-l="zh">重启 ChatGPT 由你决定</span><span data-l="en">You decide when ChatGPT restarts</span></h3><p><span data-l="zh">改动要重启才生效时，助手只提示"重启 ChatGPT 后生效"，什么时候重启由你定。</span><span data-l="en">When a change needs a restart, ModelBridge only shows a notice. The timing is yours.</span></p></div></li></ul></div></section>
+<section class="sec alt" id="faq"><div class="wrap"><div class="sec-h"><h2><span data-l="zh">常见问题</span><span data-l="en">FAQ</span></h2></div><div class="faq">
+<details open><summary><span data-l="zh">没登录 ChatGPT 能用吗？</span><span data-l="en">Does it work if I am not signed in to ChatGPT?</span></summary><p><span data-l="zh">能。助手会自动用「只用中转」方式：Codex 里只有中转模型，默认选中「中转 · auto」。</span><span data-l="en">Yes. ModelBridge switches to the “Relay only” mode: Codex lists relay models only, with “中转 · auto” selected by default.</span></p></details>
+<details><summary><span data-l="zh">选了官方模型，请求会发给中转吗？</span><span data-l="en">If I pick an official model, is the request sent to the relay?</span></summary><p><span data-l="zh">不会，只发给官方服务。请求先到本机的助手，再转给官方服务，官方凭据也只发往官方服务。</span><span data-l="en">It goes to the official service only. The request reaches ModelBridge on your machine, which passes official-model requests to the official service. Official credentials go there and nowhere else.</span></p></details>
+<details><summary><span data-l="zh">API Key 存在哪里？</span><span data-l="en">Where is the API Key stored?</span></summary><p><span data-l="zh">macOS 存在系统钥匙串，Windows 存在凭据管理器。</span><span data-l="en">In Keychain on macOS and in Credential Manager on Windows.</span></p></details>
+<details><summary><span data-l="zh">助手会重启我的 ChatGPT 吗？</span><span data-l="en">Will it restart ChatGPT for me?</span></summary><p><span data-l="zh">助手只提示"重启 ChatGPT 后生效"，重启由你自己操作。</span><span data-l="en">ModelBridge only shows a notice that the change takes effect after a restart. You restart ChatGPT yourself.</span></p></details>
+<details><summary><span data-l="zh">以后不想用了怎么办？</span><span data-l="en">What if I stop using it?</span></summary><p><span data-l="zh">关闭转发，Codex 配置就还原为开启前的样子。要卸载时：macOS 用菜单里的「卸载模型接入助手…」（直接把 App 拖进废纸篓的话，Codex 配置得不到还原）；Windows 用托盘菜单卸载，或者从「应用和功能」卸载。卸载后 ChatGPT 和聊天数据都还在。</span><span data-l="en">Turn forwarding off and the Codex configuration returns to its earlier state. To uninstall on macOS, use “卸载模型接入助手…” (Uninstall) in the menu, because dragging the app to the Trash leaves the Codex configuration unrestored. On Windows, uninstall from the tray menu or from “Apps & features”. ChatGPT and your chats stay in place.</span></p></details>
+<details><summary><span data-l="zh">第一次打开被系统拦住了怎么办？</span><span data-l="en">The system blocked the app on first launch. What now?</span></summary><p><span data-l="zh">安装包没有开发者签名，手动放行即可。macOS：进入 系统设置 > 隐私与安全性，点「仍要打开」。Windows：在 SmartScreen 弹窗里点「更多信息 > 仍要运行」。</span><span data-l="en">The installer is not code-signed, so approve it by hand. macOS: open System Settings > Privacy & Security and click “Open Anyway”. Windows: in the SmartScreen dialog click “More info > Run anyway”.</span></p></details>
+<details><summary><span data-l="zh">支持哪些系统？</span><span data-l="en">Which systems are supported?</span></summary><p><span data-l="zh">macOS 13 及以上（Apple 芯片）和 Windows 10 1809 及以上（64 位）。电脑上要先装好 ChatGPT 桌面版。</span><span data-l="en">macOS 13 or later (Apple silicon) and Windows 10 1809 or later (64-bit). The ChatGPT desktop app must be installed first.</span></p></details></div></div></section>
+<section class="sec" id="download"><div class="wrap"><div class="sec-h"><h2><span data-l="zh">下载</span><span data-l="en">Download</span></h2><p><!--sb:note--><span data-l="zh">正式版还没有发布。</span><span data-l="en">No release has been published yet.</span><!--/sb--></p></div><div class="gets">
+<article class="get"><h3>macOS</h3><p><span data-l="zh">Apple 芯片，macOS 13 及以上</span><span data-l="en">Apple silicon, macOS 13 or later</span></p><!--sb:macos--><button class="btn btn-1" type="button" disabled><span data-l="zh">暂未发布</span><span data-l="en">Not released yet</span></button><!--/sb--></article>
+<article class="get"><h3>Windows</h3><p><span data-l="zh">64 位，Windows 10 1809 及以上</span><span data-l="en">64-bit, Windows 10 1809 or later</span></p><!--sb:windows--><button class="btn btn-1" type="button" disabled><span data-l="zh">暂未发布</span><span data-l="en">Not released yet</span></button><!--/sb--></article></div><p class="more"><a href="https://github.com/0xBB2B/codexx/releases"><span data-l="zh">查看所有版本</span><span data-l="en">All releases</span></a></p><div class="first"><h3><span data-l="zh">首次打开要手动放行</span><span data-l="en">Approve the app by hand on first launch</span></h3><dl><dt>macOS</dt><dd><span data-l="zh">把 App 拖进「应用程序」，双击打开被拦后，进入 系统设置 > 隐私与安全性，点「仍要打开」。</span><span data-l="en">Drag the app into Applications. When the first launch is blocked, open System Settings > Privacy & Security and click “Open Anyway”.</span></dd><dt>Windows</dt><dd><span data-l="zh">在 SmartScreen 弹窗里点「更多信息 > 仍要运行」。</span><span data-l="en">In the SmartScreen dialog click “More info > Run anyway”.</span></dd></dl><p><span data-l="zh">升级到新版本后，钥匙串可能会问一次是否允许访问，选允许即可。</span><span data-l="en">After an upgrade, Keychain may ask once whether to allow access. Choose Allow.</span></p></div></div></section>
+</main>
+<footer class="foot" id="footer"><div class="wrap foot-in"><div><p><span data-l="zh">ModelBridge（模型接入助手）是开源项目。</span><span data-l="en">ModelBridge is an open-source project.</span></p><p class="small"><span data-l="zh">ChatGPT 和 Codex 是各自所有者的商标，本项目与它们的所有者没有隶属关系。</span><span data-l="en">ChatGPT and Codex are trademarks of their respective owners. This project is not affiliated with them.</span></p></div><div class="foot-r"><a href="https://github.com/0xBB2B/codexx"><span data-l="zh">GitHub 仓库</span><span data-l="en">GitHub repository</span></a><a href="#top"><span data-l="zh">回到顶部</span><span data-l="en">Back to top</span></a></div></div></footer>
+<template data-sb="hero"><a class="btn btn-1" href="{{mac}}"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v11M7.500 11l4.500 4.500 4.500-4.500M5 20h14"/></svg><span data-l="zh">下载 macOS 版 v{{ver}}</span><span data-l="en">Download for macOS v{{ver}}</span></a><a class="btn btn-1" href="{{win}}"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v11M7.500 11l4.500 4.500 4.500-4.500M5 20h14"/></svg><span data-l="zh">下载 Windows 版 v{{ver}}</span><span data-l="en">Download for Windows v{{ver}}</span></a></template>
+<template data-sb="note"><span data-l="zh">最新正式版是 v{{ver}}，点按钮直接下载安装包。</span><span data-l="en">The latest release is v{{ver}}. The buttons download the installer directly.</span></template>
+<template data-sb="macos"><a class="btn btn-1" href="{{mac}}"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v11M7.500 11l4.500 4.500 4.500-4.500M5 20h14"/></svg><span data-l="zh">下载 macOS 版 v{{ver}}</span><span data-l="en">Download for macOS v{{ver}}</span></a></template>
+<template data-sb="windows"><a class="btn btn-1" href="{{win}}"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v11M7.500 11l4.500 4.500 4.500-4.500M5 20h14"/></svg><span data-l="zh">下载 Windows 版 v{{ver}}</span><span data-l="en">Download for Windows v{{ver}}</span></a></template>
+<script>
+const TITLES = {"zh":"模型接入助手 ModelBridge — 让 Codex 用上你自己的模型服务","en":"ModelBridge — Use your own model service in Codex"};
+function applyLang(lang) {
+  document.documentElement.lang = lang === 'zh' ? 'zh-CN' : 'en';
+  document.title = TITLES[lang];
+  document.querySelectorAll('[data-lang-btn]').forEach(function (b) {
+    b.setAttribute('aria-pressed', String(b.dataset.langBtn === lang));
+  });
+  document.querySelectorAll('[data-aria-zh]').forEach(function (el) {
+    el.setAttribute('aria-label', lang === 'zh' ? el.dataset.ariaZh : el.dataset.ariaEn);
+  });
+}
+function setLang(lang) {
+  applyLang(lang);
+  try {
+    localStorage.setItem(LANG_KEY, lang);
+  } catch (e) {}
+}
+function selectTab(index) {
+  document.querySelectorAll('[data-tab]').forEach(function (b) {
+    b.setAttribute('aria-selected', String(b.dataset.tab === index));
+  });
+  document.querySelectorAll('[data-pane]').forEach(function (p) {
+    p.hidden = p.dataset.pane !== index;
+  });
+}
+document.addEventListener('DOMContentLoaded', function () {
+  applyLang(pickLang());
+  document.querySelectorAll('[data-lang-btn]').forEach(function (b) {
+    b.addEventListener('click', function () { setLang(b.dataset.langBtn); });
+  });
+  document.querySelectorAll('[data-tab]').forEach(function (b) {
+    b.addEventListener('click', function () { selectTab(b.dataset.tab); });
+  });
+});
+</script>
+</body>
+</html>

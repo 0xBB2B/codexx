@@ -1,0 +1,348 @@
+using System;
+using System.Collections.Generic;
+using System.ComponentModel;
+using System.Diagnostics;
+using System.IO;
+using System.Linq;
+using System.Threading.Tasks;
+using System.Windows;
+using System.Windows.Automation.Peers;
+using System.Windows.Controls;
+using System.Windows.Media;
+using System.Windows.Media.Effects;
+
+namespace ModelBridge.UI;
+
+public sealed class WindowConfirmer : IConfirmer
+{
+    public Task<bool> ConfirmAsync(ConfirmRequest request) =>
+        Task.FromResult(Dialogs.Show(DialogModel.ForConfirm(request)) == 1);
+}
+
+static class Dialogs
+{
+    public static Window? Current { get; internal set; }
+
+    public static int Show(DialogModel model) => Show(new DialogWindow(model));
+
+    public static void ShowDeleteRelay(AppModel model, RelayRow row, Window? owner = null)
+    {
+        var count = model.ModelCountOf(row.Id);
+        var dialog = new DialogWindow(DialogModel.ForDeleteRelay(row.Name, count, isDeleting: false));
+        var deleting = false;
+        dialog.ButtonHandler = async index =>
+        {
+            if (index == 0)
+            {
+                if (!deleting) dialog.Close();
+                return;
+            }
+            if (deleting) return;
+            deleting = true;
+            dialog.Apply(DialogModel.ForDeleteRelay(row.Name, count, isDeleting: true));
+            try { await model.PerformDeleteRelayAsync(row.Id); }
+            finally { dialog.ForceClose(); }
+        };
+        dialog.Owner = owner ?? Application.Current.Windows.OfType<MainWindow>().FirstOrDefault();
+        dialog.WindowStartupLocation = WindowStartupLocation.CenterOwner;
+        Show(dialog);
+    }
+
+    public static Task<int> ShowUninstall(AppModel model, bool headless)
+    {
+        if (!model.TryBeginUninstall()) return Task.FromResult(1);
+
+        var request = model.UninstallConfirmRequest();
+        var dialog = new DialogWindow(DialogModel.ForConfirm(request));
+        UninstallPause? pause = null;
+        var coreNotStarted = false;
+        var code = 1;
+
+        async Task RunAsync(bool startCore)
+        {
+            pause = null;
+            code = await model.RunHeldUninstallAsync(startCore);
+            if (code == AppModel.UninstallCoreNotStarted)
+            {
+                coreNotStarted = true;
+                dialog.Apply(DialogModel.ForUninstallCoreStartFailed());
+                return;
+            }
+            if (code == 2)
+            {
+                pause = model.UninstallPause!;
+                dialog.Apply(DialogModel.ForUninstallPause(pause));
+                return;
+            }
+            dialog.ForceClose();
+        }
+
+        dialog.ButtonHandler = async index =>
+        {
+            if (coreNotStarted)
+            {
+                dialog.Close();
+                return;
+            }
+            if (pause == null)
+            {
+                if (index == 0)
+                {
+                    dialog.Close();
+                    return;
+                }
+                dialog.Apply(DialogModel.ForConfirm(request, busy: true));
+                await RunAsync(headless);
+                return;
+            }
+
+            if (index == 0)
+            {
+                dialog.Close();
+                return;
+            }
+            if (index == 1)
+            {
+                ExternalOpen.FolderOf(pause.ConfigPath);
+                return;
+            }
+            dialog.Apply(DialogModel.ForUninstallPause(pause, busy: true));
+            await RunAsync(false);
+        };
+
+        try { Show(dialog); }
+        finally { model.ReleaseUninstall(); }
+        return Task.FromResult(pause != null ? 2 : code);
+    }
+
+    public static Task<bool> ShowQuit(AppModel model)
+    {
+        if (!model.TryBeginQuit()) return Task.FromResult(false);
+
+        var request = model.QuitConfirmRequest()!;
+        var dialog = new DialogWindow(DialogModel.ForConfirm(request));
+        var exited = false;
+        dialog.ButtonHandler = async index =>
+        {
+            if (index == 0)
+            {
+                dialog.Close();
+                return;
+            }
+            dialog.Apply(DialogModel.ForConfirm(request, busy: true, busyLabel: "正在还原"));
+            exited = await model.RunHeldQuitAsync();
+            dialog.ForceClose();
+        };
+
+        try { Show(dialog); }
+        finally { model.ReleaseQuit(); }
+        return Task.FromResult(exited);
+    }
+
+    static int Show(DialogWindow dialog)
+    {
+        Current = dialog;
+        var owner = dialog.Owner ?? Application.Current.Windows.OfType<Window>().FirstOrDefault(w => w.IsVisible && w.IsActive && w is not TrayPanelWindow);
+        if (owner != null)
+        {
+            dialog.Owner = owner;
+            dialog.WindowStartupLocation = WindowStartupLocation.CenterOwner;
+        }
+        else dialog.ShowInTaskbar = true;
+        try { dialog.ShowDialog(); }
+        finally { Current = null; }
+        return dialog.Result;
+    }
+}
+
+static class RestoreHelp
+{
+    public static void Show(AppModel model, AppBanner banner)
+    {
+        int choice;
+        while ((choice = Dialogs.Show(DialogModel.ForRestoreHelp(banner.Code, banner.Keys, banner.ConfigPath))) == 1)
+            ExternalOpen.FolderOf(banner.ConfigPath);
+        if (choice == 2) _ = model.RecheckAsync();
+    }
+}
+
+public sealed class AppIcon : FrameworkElement
+{
+    protected override void OnRender(DrawingContext dc)
+    {
+        var size = Math.Min(ActualWidth, ActualHeight);
+        var corner = size * 48 / 256;
+        dc.DrawRoundedRectangle(AlertView.Brush("PrimaryBrush"), null, new Rect(0, 0, size, size), corner, corner);
+
+        var arrowsOnly = size < 24;
+        var graphic = size * 0.88;
+        var strokeUnits = arrowsOnly ? 12 : size >= 64 ? 6 : 9;
+        var pen = new Pen(Brushes.White, strokeUnits) { StartLineCap = PenLineCap.Round, EndLineCap = PenLineCap.Round, LineJoin = PenLineJoin.Round };
+        var geometry = (Geometry)FindResource(arrowsOnly ? "AppIconArrowsGeometry" : "AppIconGeometry");
+        var scale = graphic / 100;
+        dc.PushTransform(new TranslateTransform((size - graphic) / 2, (size - graphic) / 2));
+        dc.PushTransform(new ScaleTransform(scale, scale));
+        dc.DrawGeometry(null, pen, geometry);
+        dc.Pop();
+        dc.Pop();
+    }
+}
+
+static class Motion
+{
+    public static Duration SwitchDuration =>
+        new(SystemParameters.ClientAreaAnimation ? TimeSpan.FromMilliseconds(200) : TimeSpan.Zero);
+}
+
+public sealed class Spinner : Control
+{
+    public static readonly DependencyProperty IsAnimatedProperty =
+        DependencyProperty.Register(nameof(IsAnimated), typeof(bool), typeof(Spinner), new PropertyMetadata(SystemParameters.ClientAreaAnimation));
+
+    public bool IsAnimated
+    {
+        get => (bool)GetValue(IsAnimatedProperty);
+        set => SetValue(IsAnimatedProperty, value);
+    }
+}
+
+static class ExternalOpen
+{
+    public static void Url(string? url)
+    {
+        if (!Uri.TryCreate(url, UriKind.Absolute, out var uri) || uri.Scheme != Uri.UriSchemeHttps) return;
+        Start(new ProcessStartInfo(uri.AbsoluteUri) { UseShellExecute = true });
+    }
+
+    public static void FolderOf(string path)
+    {
+        if (path == "") return;
+        var info = File.Exists(path)
+            ? new ProcessStartInfo("explorer.exe", $"/select,\"{path}\"")
+            : new ProcessStartInfo("explorer.exe", $"\"{Path.GetDirectoryName(path)}\"");
+        Start(info);
+    }
+
+    static void Start(ProcessStartInfo info)
+    {
+        try { Process.Start(info)?.Dispose(); }
+        catch (Exception ex) when (ex is Win32Exception or InvalidOperationException) { }
+    }
+}
+
+static class AlertView
+{
+    public static Border Create(
+        AppSeverity severity,
+        string title,
+        string detail,
+        Action? onClose = null,
+        params (string Label, Action Click, bool Busy)[] actions)
+    {
+        var (fg, bg, glyph) = severity switch
+        {
+            AppSeverity.Success => ("SuccessBrush", "SuccessBgBrush", ""),
+            AppSeverity.Warning => ("WarningBrush", "WarningBgBrush", ""),
+            AppSeverity.Danger => ("DangerBrush", "DangerBgBrush", ""),
+            _ => ("InfoBrush", "InfoBgBrush", ""),
+        };
+        var foreground = Brush(fg);
+
+        var text = new StackPanel();
+        text.Children.Add(new TextBlock
+        {
+            Text = title,
+            FontSize = 13,
+            FontWeight = FontWeights.SemiBold,
+            Foreground = foreground,
+            TextWrapping = TextWrapping.Wrap,
+        });
+        if (detail != "")
+            text.Children.Add(new TextBlock
+            {
+                Text = detail,
+                FontSize = 13,
+                Foreground = Brush("TextBrush"),
+                TextWrapping = TextWrapping.Wrap,
+                Margin = new Thickness(0, 4, 0, 0),
+            });
+        if (actions.Length > 0)
+        {
+            var row = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 12, 0, 0) };
+            foreach (var (label, click, busy) in actions)
+            {
+                var button = new Button { MinHeight = 44, Padding = new Thickness(16, 0, 16, 0), Margin = new Thickness(0, 0, 8, 0), IsEnabled = !busy };
+                if (busy)
+                {
+                    var content = new StackPanel { Orientation = Orientation.Horizontal };
+                    content.Children.Add(new Spinner { Margin = new Thickness(0, 0, 8, 0), VerticalAlignment = VerticalAlignment.Center });
+                    content.Children.Add(new TextBlock { Text = label, VerticalAlignment = VerticalAlignment.Center });
+                    button.Content = content;
+                }
+                else button.Content = label;
+                button.Click += (_, _) => click();
+                row.Children.Add(button);
+            }
+            text.Children.Add(row);
+        }
+
+        var grid = new Grid();
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        grid.ColumnDefinitions.Add(new ColumnDefinition());
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        grid.Children.Add(new TextBlock
+        {
+            Text = glyph,
+            FontFamily = new FontFamily("Segoe MDL2 Assets"),
+            FontSize = 16,
+            Foreground = foreground,
+            Margin = new Thickness(0, 0, 12, 0),
+            VerticalAlignment = VerticalAlignment.Top,
+        });
+        Grid.SetColumn(text, 1);
+        grid.Children.Add(text);
+
+        if (onClose != null)
+        {
+            var close = new Button
+            {
+                Style = (Style)Application.Current.FindResource("AlertCloseButton"),
+                Content = "\uE711",
+                Margin = new Thickness(12, -12, -12, -12),
+                VerticalAlignment = VerticalAlignment.Top,
+            };
+            System.Windows.Automation.AutomationProperties.SetName(close, "关闭提示");
+            close.Click += (_, _) => onClose();
+            Grid.SetColumn(close, 2);
+            grid.Children.Add(close);
+        }
+
+        var border = new Border
+        {
+            Style = (Style)Application.Current.FindResource("AlertBorder"),
+            BorderBrush = foreground,
+            Background = Brush(bg),
+            Effect = onClose == null ? null : (Effect)Application.Current.FindResource("FloatShadow"),
+            Child = grid,
+        };
+        System.Windows.Automation.AutomationProperties.SetLiveSetting(
+            border,
+            severity == AppSeverity.Danger
+                ? System.Windows.Automation.AutomationLiveSetting.Assertive
+                : System.Windows.Automation.AutomationLiveSetting.Polite);
+        return border;
+    }
+
+    public static Brush Brush(string key) => (Brush)Application.Current.FindResource(key);
+
+    public static void Fill(Panel host, IEnumerable<UIElement> alerts)
+    {
+        host.Children.Clear();
+        foreach (var alert in alerts)
+        {
+            ((FrameworkElement)alert).Margin = new Thickness(0, host.Children.Count == 0 ? 0 : 8, 0, 0);
+            host.Children.Add(alert);
+            UIElementAutomationPeer.CreatePeerForElement(alert)?.RaiseAutomationEvent(AutomationEvents.LiveRegionChanged);
+        }
+    }
+}

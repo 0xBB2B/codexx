@@ -1,0 +1,135 @@
+name: release
+on:
+  push:
+    tags: ['v*']
+permissions:
+  contents: read
+concurrency:
+  group: release-${{ github.ref_name }}
+  cancel-in-progress: false
+env:
+  GH_TOKEN: ${{ github.token }}
+  GH_REPO: ${{ github.repository }}
+jobs:
+  prepare:
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.tag.outputs.version }}
+      release_id: ${{ steps.draft.outputs.release_id }}
+      prerelease: ${{ steps.tag.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: scripts/releasetag/go.mod
+          cache: false
+      - id: tag
+        working-directory: scripts/releasetag
+        run: go run . "$GITHUB_REF_NAME" origin/main >> "$GITHUB_OUTPUT"
+      - id: draft
+        run: |
+          if OUT="$(gh release view "$GITHUB_REF_NAME" 2>&1)"; then
+            echo "标签 $GITHUB_REF_NAME 已有发布页，不改动它" >&2
+            exit 1
+          elif [ "$OUT" != "release not found" ]; then
+            echo "$OUT" >&2
+            exit 1
+          fi
+          ID="$(gh api "repos/$GH_REPO/releases" \
+            -f tag_name="$GITHUB_REF_NAME" -f name="$GITHUB_REF_NAME" \
+            -F draft=true -F prerelease=${{ steps.tag.outputs.prerelease }} \
+            -F generate_release_notes=true -q .id)"
+          echo "release_id=$ID" >> "$GITHUB_OUTPUT"
+  macos:
+    timeout-minutes: 45
+    needs: prepare
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: core/go.mod
+          cache-dependency-path: core/go.sum
+      - run: make test
+      - run: scripts/package-macos.sh "${{ needs.prepare.outputs.version }}" "$GH_REPO"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: macos-dmg
+          path: dist/model-bridge-${{ needs.prepare.outputs.version }}-macos.dmg
+          if-no-files-found: error
+          retention-days: 1
+  windows:
+    timeout-minutes: 45
+    needs: prepare
+    runs-on: windows-2025
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: core/go.mod
+          cache-dependency-path: core/go.sum
+      - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
+        with:
+          dotnet-version: '10.0.x'
+      - run: |
+          VERSION="${{ needs.prepare.outputs.version }}"
+          (cd core && go test ./...)
+          dotnet test --solution windows/ModelBridge.sln
+          scripts/package-windows.sh "$VERSION" "$GH_REPO"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: windows-exe
+          path: dist/model-bridge-${{ needs.prepare.outputs.version }}-windows-setup.exe
+          if-no-files-found: error
+          retention-days: 1
+  upload:
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    needs: [prepare, macos, windows]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          path: dist
+          merge-multiple: true
+      - run: gh release upload "$GITHUB_REF_NAME" "dist/model-bridge-${{ needs.prepare.outputs.version }}-macos.dmg" "dist/model-bridge-${{ needs.prepare.outputs.version }}-windows-setup.exe"
+  publish:
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    needs: [prepare, upload]
+    runs-on: ubuntu-latest
+    steps:
+      - run: gh api -X PATCH "repos/$GH_REPO/releases/${{ needs.prepare.outputs.release_id }}" -F draft=false -f make_latest=legacy
+  site:
+    timeout-minutes: 5
+    permissions:
+      actions: write
+    needs: [prepare, publish]
+    if: needs.prepare.outputs.prerelease == 'false'
+    runs-on: ubuntu-latest
+    steps:
+      - run: gh workflow run pages.yml --ref main -R "$GH_REPO"
+  cleanup:
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    needs: [prepare, macos, windows, upload, publish]
+    if: ${{ (failure() || cancelled()) && needs.prepare.outputs.release_id != '' }}
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          ID="${{ needs.prepare.outputs.release_id }}"
+          if [ "$(gh api "repos/$GH_REPO/releases/$ID" -q .draft)" = "true" ]; then
+            gh api -X DELETE "repos/$GH_REPO/releases/$ID"
+          fi
+          exit 1

@@ -1,0 +1,259 @@
+package catalog
+
+import (
+	"encoding/json"
+	"errors"
+	"maps"
+	"os"
+	"time"
+)
+
+const RelaySlugPrefix = "relay-"
+
+type Result struct {
+	Models          []Entry
+	ReasoningLevels []string
+	// RelayModels、RelayShown、RelayFromParams 里放的是内部名（relay-xxx）
+	RelayModels     []string
+	RelayShown      []string
+	RelayFromParams []string
+	Relays          []RelayResult
+	Routes          map[string]RelayRoute
+	DefaultModel    string
+	StoreErr        error
+}
+
+type RelayResult struct {
+	ID         string
+	ModelCount int
+	FetchedAt  time.Time
+	Stale      bool
+	Err        error
+}
+
+type RelayRoute struct {
+	ID         string
+	Model      string
+	FromParams bool
+}
+
+type RelayGroup struct {
+	ID        string
+	Name      string
+	ParamOnly []Param
+	SameName  []string
+}
+
+func RelayNames(ids []string, params []Param, official []Entry) (paramOnly []Param, sameName []string) {
+	slugs := make(map[string]bool, len(official))
+	for _, e := range official {
+		if slug, ok := e["slug"].(string); ok {
+			slugs[slug] = true
+		}
+	}
+	inRelay := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		inRelay[id] = true
+	}
+	for _, p := range params {
+		if inRelay[p.ID] && !slugs[p.ID] {
+			paramOnly = append(paramOnly, p)
+		}
+	}
+	seen := map[string]bool{}
+	for _, e := range official {
+		if slug, ok := e["slug"].(string); ok && inRelay[slug] && !seen[slug] {
+			seen[slug] = true
+			sameName = append(sameName, slug)
+		}
+	}
+	return paramOnly, sameName
+}
+
+func MergeRelay(official []Entry, groups []RelayGroup) (*Result, error) {
+	if len(official) == 0 {
+		return nil, errors.New("没有官方模型条目，无法作为底板")
+	}
+	maxPriority, _ := toFloat(official[0]["priority"])
+	bySlug := make(map[string]Entry, len(official))
+	hidden := map[string]bool{}
+	for _, e := range official {
+		if p, ok := toFloat(e["priority"]); ok && p > maxPriority {
+			maxPriority = p
+		}
+		if slug, ok := e["slug"].(string); ok {
+			if _, dup := bySlug[slug]; !dup {
+				bySlug[slug] = e
+			}
+			if v, has := e["visibility"]; has && v != "list" {
+				hidden[slug] = true
+			}
+		}
+	}
+
+	res := &Result{Models: append([]Entry(nil), official...), Routes: map[string]RelayRoute{}}
+	seen := map[string]bool{}
+	addLevel := func(l string) {
+		if !seen[l] {
+			seen[l] = true
+			res.ReasoningLevels = append(res.ReasoningLevels, l)
+		}
+	}
+	next := maxPriority + 1
+	for _, g := range groups {
+		for _, p := range g.ParamOnly {
+			e := Entry(maps.Clone(official[0]))
+			supported := make([]map[string]any, 0, len(p.ReasoningLevels))
+			for _, l := range p.ReasoningLevels {
+				if l == "max" {
+					l = "ultra"
+				}
+				supported = append(supported, map[string]any{"effort": l, "description": l})
+				addLevel(l)
+			}
+			e["context_window"] = p.ContextWindow
+			e["max_context_window"] = p.ContextWindow
+			e["input_modalities"] = p.InputModalities
+			e["supported_reasoning_levels"] = supported
+			e["visibility"] = "list"
+			if p.DefaultReasoningLevel != nil {
+				d := *p.DefaultReasoningLevel
+				if d == "max" {
+					d = "ultra"
+				}
+				e["default_reasoning_level"] = d
+			} else {
+				delete(e, "default_reasoning_level")
+			}
+			e["supports_reasoning_effort_updates"] = len(p.ReasoningLevels) > 0
+			slug := RelaySlug(g.ID, p.ID)
+			applyRelayOverrides(e, slug, g.Name, p.ID, next)
+			next++
+			res.Models = append(res.Models, e)
+			res.Routes[slug] = RelayRoute{ID: g.ID, Model: p.ID, FromParams: true}
+			res.RelayModels = append(res.RelayModels, slug)
+			res.RelayShown = append(res.RelayShown, slug)
+			res.RelayFromParams = append(res.RelayFromParams, slug)
+		}
+		for _, name := range g.SameName {
+			base := bySlug[name]
+			e := Entry(maps.Clone(base))
+			if list, ok := base["supported_reasoning_levels"].([]any); ok {
+				for _, it := range list {
+					if m, ok := it.(map[string]any); ok {
+						if l, ok := m["effort"].(string); ok {
+							addLevel(l)
+						}
+					}
+				}
+			}
+			slug := RelaySlug(g.ID, name)
+			applyRelayOverrides(e, slug, g.Name, name, next)
+			next++
+			res.Models = append(res.Models, e)
+			res.Routes[slug] = RelayRoute{ID: g.ID, Model: name}
+			res.RelayModels = append(res.RelayModels, slug)
+			if !hidden[name] {
+				res.RelayShown = append(res.RelayShown, slug)
+			}
+		}
+	}
+	return res, nil
+}
+
+func RelaySlug(id, model string) string {
+	if id == "1" {
+		return RelaySlugPrefix + model
+	}
+	return "relay" + id + "-" + model
+}
+
+func relayDisplayName(configName, model string) string {
+	return configName + " · " + model
+}
+
+func applyRelayOverrides(e Entry, slug, configName, model string, priority float64) {
+	e["slug"] = slug
+	e["display_name"] = relayDisplayName(configName, model)
+	e["description"] = "中转模型"
+	e["supported_in_api"] = true
+	e["priority"] = priority
+	e["supports_search_tool"] = false
+	e["experimental_supported_tools"] = []any{}
+	e["service_tiers"] = []any{}
+	e["additional_speed_tiers"] = []any{}
+	// 新版 Codex 不接受 web_search_tool_type 为 null；不写字段时 Codex 会用自己的默认值。
+	for _, k := range []string{"web_search_tool_type", "upgrade", "availability_nux", "model_messages"} {
+		delete(e, k)
+	}
+}
+
+func toFloat(v any) (float64, bool) {
+	switch n := v.(type) {
+	case float64:
+		return n, true
+	case int:
+		return float64(n), true
+	}
+	return 0, false
+}
+
+func ShownRelayNames(paramOnly []Param, sameName []string, official []Entry) []string {
+	hidden := map[string]bool{}
+	for _, e := range official {
+		if v, has := e["visibility"]; has && v != "list" {
+			slug, _ := e["slug"].(string)
+			hidden[slug] = true
+		}
+	}
+	var out []string
+	for _, p := range paramOnly {
+		out = append(out, p.ID)
+	}
+	for _, n := range sameName {
+		if !hidden[n] {
+			out = append(out, n)
+		}
+	}
+	return out
+}
+
+func FilterOfficial(official []Entry, accountSlugs []string) []Entry {
+	if len(accountSlugs) == 0 {
+		return official
+	}
+	allowed := make(map[string]bool, len(accountSlugs))
+	for _, slug := range accountSlugs {
+		allowed[slug] = true
+	}
+	var out []Entry
+	for _, e := range official {
+		if slug, ok := e["slug"].(string); ok && allowed[slug] {
+			out = append(out, e)
+		}
+	}
+	if len(out) == 0 {
+		return official
+	}
+	return out
+}
+
+func AccountSlugs(modelsCachePath string) []string {
+	b, err := os.ReadFile(modelsCachePath)
+	if err != nil {
+		return nil
+	}
+	var file struct {
+		Models []struct {
+			Slug string `json:"slug"`
+		} `json:"models"`
+	}
+	if json.Unmarshal(b, &file) != nil {
+		return nil
+	}
+	var out []string
+	for _, m := range file.Models {
+		out = append(out, m.Slug)
+	}
+	return out
+}
