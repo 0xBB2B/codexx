@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"maps"
 	"net/http"
 	"net/url"
 	"strings"
@@ -21,14 +22,21 @@ type RelayTarget struct {
 	FromParams bool
 }
 
+type RelayInfo struct {
+	Name    string
+	Fetched bool
+}
+
 type RelayConfig struct {
 	Routes    map[string]RelayTarget
+	Configs   map[string]RelayInfo
 	RelayOnly bool
 }
 
 type relayState struct {
 	mu        sync.RWMutex
 	routes    map[string]RelayTarget
+	configs   map[string]RelayInfo
 	relayOnly bool
 }
 
@@ -38,7 +46,7 @@ func (s *relayState) set(c RelayConfig) {
 		routes[k] = v
 	}
 	s.mu.Lock()
-	s.routes, s.relayOnly = routes, c.RelayOnly
+	s.routes, s.configs, s.relayOnly = routes, maps.Clone(c.Configs), c.RelayOnly
 	s.mu.Unlock()
 }
 
@@ -49,7 +57,8 @@ type route struct {
 	model      string
 	ultraToMax bool
 	reject     bool
-	deleted    bool
+	failCode   string
+	failMsg    string
 }
 
 func (s *Server) decideRoute(r *http.Request, urlPath, model string) (route, error) {
@@ -58,10 +67,19 @@ func (s *Server) decideRoute(r *http.Request, urlPath, model string) (route, err
 	s.relayState.mu.RLock()
 	t, isRelay := s.relayState.routes[model]
 	relayOnly := s.relayState.relayOnly
+	info, configured := s.relayState.configs[relayIDOfSlug(model)]
 	s.relayState.mu.RUnlock()
 
 	if !isRelay && looksLikeRelaySlug(model) {
-		return route{deleted: true}, nil
+		code, msg := relayDeletedError()
+		switch {
+		case !configured:
+		case !info.Fetched:
+			code, msg = relayNotFetchedError(info.Name)
+		default:
+			code, msg = relayModelMissingError(info.Name)
+		}
+		return route{failCode: code, failMsg: msg}, nil
 	}
 	base := t.BaseURL
 	if !isRelay {
@@ -78,6 +96,18 @@ func (s *Server) decideRoute(r *http.Request, urlPath, model string) (route, err
 	u.RawPath = ""
 	u.RawQuery = r.URL.RawQuery
 	return route{relay: isRelay, target: u, key: t.Key, model: t.Model, ultraToMax: t.FromParams, reject: relayOnly && !isRelay}, nil
+}
+
+func relayIDOfSlug(model string) string {
+	rest, ok := strings.CutPrefix(model, "relay")
+	if !ok {
+		return ""
+	}
+	digits := strings.TrimLeft(rest, "0123456789")
+	if id := rest[:len(rest)-len(digits)]; id != "" {
+		return id
+	}
+	return "1"
 }
 
 func looksLikeRelaySlug(model string) bool {

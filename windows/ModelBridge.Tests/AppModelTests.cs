@@ -187,10 +187,11 @@ sealed class FakeLogin(List<string> log) : ILoginStart
     public bool Enabled { get; set; }
     public Exception? EnableException { get; set; }
     public Exception? DisableException { get; set; }
+    public Exception? IsEnabledException { get; set; }
     public int EnableCount { get; private set; }
     public int DisableCount { get; private set; }
 
-    public bool IsEnabled() => Enabled;
+    public bool IsEnabled() => IsEnabledException != null ? throw IsEnabledException : Enabled;
 
     public void Enable()
     {
@@ -799,45 +800,35 @@ public class AppModelTests
     const string QuitBase = "退出前会关闭转发，并把 Codex 配置还原成开启前的样子。";
     const string QuitRunningTail = "ChatGPT 正在运行，请在退出后重启 ChatGPT。";
 
+    static async Task<bool> RunQuitAsync(Harness h)
+    {
+        Assert.IsTrue(h.Model.TryBeginQuit());
+        try { return await h.Model.RunHeldQuitAsync(); }
+        finally { h.Model.ReleaseQuit(); }
+    }
+
     [TestMethod]
-    public async Task Quit_ForwardingOnAndChatGptRunning_AsksWithFullMessage()
+    public void QuitConfirmRequest_ForwardingOnAndChatGptRunning_FullMessage()
     {
         var h = new Harness();
         h.ForwardingOn();
         h.ChatGpt.Running = true;
-        h.Confirmer.Answer = _ => false;
 
-        await h.Model.QuitAsync();
+        var ask = h.Model.QuitConfirmRequest()!;
 
-        var ask = h.Confirmer.Requests.Single();
         Assert.AreEqual(QuitTitle, ask.Title);
         Assert.AreEqual(QuitBase + QuitRunningTail, ask.Message);
+        Assert.AreEqual("还原并退出", ask.ConfirmText);
     }
 
     [TestMethod]
-    public async Task Quit_ForwardingOnAndChatGptNotRunning_MessageWithoutSecondHalf()
+    public void QuitConfirmRequest_ForwardingOnAndChatGptNotRunning_MessageWithoutSecondHalf()
     {
         var h = new Harness();
         h.ForwardingOn();
         h.ChatGpt.Running = false;
-        h.Confirmer.Answer = _ => false;
 
-        await h.Model.QuitAsync();
-
-        Assert.AreEqual(QuitBase, h.Confirmer.Requests.Single().Message);
-    }
-
-    [TestMethod]
-    public async Task Quit_Cancel_NoShutdownNoExit()
-    {
-        var h = new Harness();
-        h.ForwardingOn();
-        h.Confirmer.Answer = _ => false;
-
-        await h.Model.QuitAsync();
-
-        Assert.AreEqual(0, h.Core.Count("shutdown"));
-        Assert.AreEqual(0, h.ExitCount);
+        Assert.AreEqual(QuitBase, h.Model.QuitConfirmRequest()!.Message);
     }
 
     [TestMethod]
@@ -846,7 +837,7 @@ public class AppModelTests
         var h = new Harness();
         h.ForwardingOn();
 
-        await h.Model.QuitAsync();
+        Assert.IsTrue(await RunQuitAsync(h));
 
         Assert.AreEqual(true, h.Core.ParamsOf("shutdown")["restore"]);
         Assert.AreEqual(1, h.ExitCount);
@@ -862,7 +853,7 @@ public class AppModelTests
     };
 
     [TestMethod]
-    public async Task Quit_ChatGptUnavailableWhileCoreForwardingOn_NoAskAndShutdownWithRestore()
+    public async Task Quit_ChatGptUnavailableWhileCoreForwardingOn_NoConfirmRequestAndShutdownWithRestore()
     {
         foreach (var unsupported in new[] { true, false })
         {
@@ -870,9 +861,9 @@ public class AppModelTests
             await h.Model.StartAsync();
             h.Push(ForwardingOnButChatGptUnavailable(unsupported));
 
-            await h.Model.QuitAsync();
+            Assert.IsNull(h.Model.QuitConfirmRequest(), $"unsupported={unsupported}");
+            Assert.IsTrue(await RunQuitAsync(h), $"unsupported={unsupported}");
 
-            Assert.AreEqual(0, h.Confirmer.Requests.Count, $"unsupported={unsupported}");
             Assert.AreEqual(true, h.Core.ParamsOf("shutdown")["restore"], $"unsupported={unsupported}");
             Assert.AreEqual(1, h.ExitCount, $"unsupported={unsupported}");
         }
@@ -906,7 +897,7 @@ public class AppModelTests
         h.ForwardingOn();
         h.Core.Fail("shutdown", "restore_blocked", "model_provider");
 
-        await h.Model.QuitAsync();
+        Assert.IsFalse(await RunQuitAsync(h));
 
         Assert.AreEqual(0, h.ExitCount);
         CollectionAssert.AreEqual(new[] { "model_provider" }, h.Model.LastError?.Keys.ToArray());
@@ -915,14 +906,14 @@ public class AppModelTests
     }
 
     [TestMethod]
-    public async Task Quit_ForwardingOff_ShutdownWithoutRestoreAndNoAsk()
+    public async Task Quit_ForwardingOff_NoConfirmRequest_QuitAsyncShutsDownWithoutRestore()
     {
         var h = new Harness();
         await h.Model.StartAsync();
 
+        Assert.IsNull(h.Model.QuitConfirmRequest());
         await h.Model.QuitAsync();
 
-        Assert.AreEqual(0, h.Confirmer.Requests.Count);
         Assert.AreEqual(false, h.Core.ParamsOf("shutdown")["restore"]);
         Assert.AreEqual(1, h.ExitCount);
         Assert.IsFalse(h.Model.CoreRunning);
@@ -1094,6 +1085,62 @@ public class AppModelTests
         Assert.AreEqual(1, h.Login.DisableCount);
     }
 
+    [TestMethod]
+    public async Task HeadlessUninstall_LoginStateUnreadable_DoesNotThrow_StillStartsCoreAndCleans_ExitCode0()
+    {
+        var h = new Harness();
+        h.Seed("1", "中转", "https://relay.example.com", "sk-example-0001");
+        h.Login.IsEnabledException = new IOException();
+
+        var code = await h.Model.RunConfirmedUninstallAsync(true);
+
+        Assert.AreEqual(0, code);
+        Assert.IsNotNull(h.Core.StartedWith);
+        Assert.AreEqual(1, h.Core.Count("prepare_uninstall"));
+        Assert.AreEqual(1, h.Vault.DeleteAllCount);
+        Assert.AreEqual(1, h.Settings.DeleteCount);
+        Assert.AreEqual(1, h.Login.DisableCount);
+        Assert.AreEqual(0, h.Model.Uninstalled!.Leftovers.Count);
+    }
+
+    [TestMethod]
+    public async Task HeadlessUninstall_LoginStateUnreadableAndDisableFails_RecordedAsLeftover_ExitCode0()
+    {
+        var h = new Harness();
+        h.Login.IsEnabledException = new UnauthorizedAccessException();
+        h.Login.DisableException = new UnauthorizedAccessException();
+
+        var code = await h.Model.RunConfirmedUninstallAsync(true);
+
+        Assert.AreEqual(0, code);
+        Assert.AreEqual(1, h.Model.Uninstalled?.Leftovers.Count);
+        StringAssert.Contains(h.Model.Uninstalled!.Leftovers[0], "登录");
+        Assert.AreEqual(1, h.Vault.DeleteAllCount);
+        Assert.AreEqual(1, h.Settings.DeleteCount);
+    }
+
+    [TestMethod]
+    public async Task Start_LoginStateUnreadable_DoesNotThrow_CoreStillStarted_LoginStartShownOff()
+    {
+        var h = new Harness();
+        h.Login.IsEnabledException = new IOException();
+
+        await h.Model.StartAsync();
+
+        Assert.IsNotNull(h.Core.StartedWith);
+        Assert.IsTrue(h.Model.CoreRunning);
+        Assert.IsFalse(h.Model.LoginStartEnabled);
+    }
+
+    [TestMethod]
+    public void IsAlreadyCleaned_LoginStateUnreadable_False()
+    {
+        var h = new Harness();
+        h.Login.IsEnabledException = new IOException();
+
+        Assert.IsFalse(h.Model.IsAlreadyCleaned());
+    }
+
     #endregion
 
     #region 检查更新
@@ -1197,6 +1244,18 @@ public class AppModelTests
         var h = new Harness();
         h.Push(s => s["proxy"] = new JsonObject { ["running"] = false, ["error"] = "proxy_port_in_use" });
         Assert.IsTrue(Has(h, "本机转发服务没能启动"));
+    }
+
+    [TestMethod]
+    public void Banners_ProxyStartTimeout_DangerBannerWithRetry()
+    {
+        var h = new Harness();
+        h.Push(s => s["proxy"] = new JsonObject { ["running"] = false, ["error"] = "proxy_start_timeout" });
+
+        var banner = h.Model.Banners.Single(b => b.Title == "本机转发服务没能启动");
+
+        Assert.AreEqual("启动转发超过 30 秒还没完成，请重试", banner.Detail);
+        CollectionAssert.Contains(banner.Actions.ToList(), BannerAction.Retry);
     }
 
     [TestMethod]
@@ -1495,7 +1554,7 @@ public class AppModelTests
         });
         h.Core.Fail("shutdown", "restore_blocked", "model_provider", "openai_base_url");
 
-        await h.Model.QuitAsync();
+        await RunQuitAsync(h);
 
         var banner = h.Model.Banners.Single(b => b.Title == "没能自动还原 Codex 配置");
         CollectionAssert.AreEqual(new[] { "model_provider", "openai_base_url" }, banner.Keys.ToArray());
@@ -1511,7 +1570,7 @@ public class AppModelTests
         h.ForwardingOn();
         h.Core.Fail("shutdown", "internal_error");
 
-        await h.Model.QuitAsync();
+        Assert.IsFalse(await RunQuitAsync(h));
 
         Assert.AreEqual("没能退出", Find(h, "没能退出")?.Title);
         Assert.AreEqual(Msg("internal_error"), Find(h, "没能退出")?.Detail);
@@ -1532,18 +1591,17 @@ public class AppModelTests
     }
 
     [TestMethod]
-    public async Task Quit_ConfirmPending_SecondCallReturnsWithoutAsking()
+    public void Quit_Held_SecondTryBeginRefused_AllowedAgainAfterRelease()
     {
         var h = new Harness();
         h.ForwardingOn();
-        h.Confirmer.Gate = new TaskCompletionSource<bool>();
 
-        var first = h.Model.QuitAsync();
-        await h.Model.QuitAsync();
+        Assert.IsTrue(h.Model.TryBeginQuit());
+        Assert.IsFalse(h.Model.TryBeginQuit());
+        h.Model.ReleaseQuit();
 
-        Assert.AreEqual(1, h.Confirmer.Requests.Count);
-        h.Confirmer.Gate.SetResult(false);
-        await first;
+        Assert.IsTrue(h.Model.TryBeginQuit());
+        h.Model.ReleaseQuit();
     }
 
     [TestMethod]

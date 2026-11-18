@@ -33,6 +33,7 @@ public class SetupWindowNameTests
             }
             finally
             {
+                h.ForwardingOff();
                 window.Close();
             }
         });

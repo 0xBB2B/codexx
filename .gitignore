@@ -4,3 +4,4 @@ macos/.build/
 windows/**/bin/
 windows/**/obj/
 .playwright-mcp/
+.DS_Store

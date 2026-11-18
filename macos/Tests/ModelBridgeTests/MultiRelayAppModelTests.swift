@@ -354,7 +354,7 @@ final class MultiRelayAppModelTests: XCTestCase {
         XCTAssertNil(h.keychain.stored["2"])
         XCTAssertEqual(h.settings.stored, [relayOne])
         XCTAssertEqual(h.model.relays, [relayOne])
-        XCTAssertEqual(h.model.relaySaveAlert, DialogAlert(title: "没有保存", message: "无法写入设置文件。", severity: .danger))
+        XCTAssertEqual(h.model.relaySaveAlert, DialogAlert(title: "没有保存", message: "无法写入设置文件。已填的内容都还在，改好后再保存。", severity: .danger))
         XCTAssertTrue(h.model.showRelayForm)
         XCTAssertFalse(h.model.notices.contains { $0.title.hasPrefix("已添加") })
     }
@@ -371,7 +371,7 @@ final class MultiRelayAppModelTests: XCTestCase {
         XCTAssertEqual(h.core.calls("delete_relay").map(\.params), [#"{"id":"2"}"#])
         XCTAssertEqual(h.settings.stored, [relayOne])
         XCTAssertEqual(h.model.relays, [relayOne])
-        XCTAssertEqual(h.model.relaySaveAlert, DialogAlert(title: "没有保存", message: "无法写入钥匙串。", severity: .danger))
+        XCTAssertEqual(h.model.relaySaveAlert, DialogAlert(title: "没有保存", message: "无法写入钥匙串。已填的内容都还在，改好后再保存。", severity: .danger))
         XCTAssertTrue(h.model.showRelayForm)
     }
 
@@ -561,7 +561,7 @@ final class MultiRelayAppModelTests: XCTestCase {
         fillDraft(h.model, name: "备用", url: "https://b.example.com", key: "sk-new-2")
         await h.model.saveRelay()
         XCTAssertEqual(h.model.relaySaveAlert, DialogAlert(
-            title: "没有保存", message: "无法写入设置文件。" + notRevokedLine, severity: .danger
+            title: "没有保存", message: "无法写入设置文件。已填的内容都还在，改好后再保存。" + notRevokedLine, severity: .danger
         ))
     }
 
@@ -576,7 +576,7 @@ final class MultiRelayAppModelTests: XCTestCase {
         await h.model.saveRelay()
         XCTAssertEqual(h.core.calls("save_relay").count, 1)
         XCTAssertEqual(h.model.relaySaveAlert, DialogAlert(
-            title: "没有保存", message: "无法写入设置文件。" + notRevokedLine, severity: .danger
+            title: "没有保存", message: "无法写入设置文件。已填的内容都还在，改好后再保存。" + notRevokedLine, severity: .danger
         ))
     }
 
@@ -590,7 +590,7 @@ final class MultiRelayAppModelTests: XCTestCase {
         fillDraft(h.model, name: "备用二", url: "https://new.example.com", key: "sk-new-2")
         await h.model.saveRelay()
         XCTAssertEqual(h.core.calls("save_relay").count, 2)
-        XCTAssertEqual(h.model.relaySaveAlert?.message, "无法写入设置文件。" + notRevokedLine)
+        XCTAssertEqual(h.model.relaySaveAlert?.message, "无法写入设置文件。已填的内容都还在，改好后再保存。" + notRevokedLine)
     }
 
     func testDelete_KeychainDeleteFails_ShowsWarningWithKeychainLine() async throws {

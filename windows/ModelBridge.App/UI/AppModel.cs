@@ -105,7 +105,7 @@ public sealed class AppModel : IRelayFields
     public const string SettingsBackedUp = "原来的设置读不出来，已备份原文件";
     public const string SettingsUnreadable = "原来的设置读不出来";
     const string CredentialWriteFailed = "无法写入系统凭据管理器";
-    const string SettingsWriteFailed = "无法保存设置";
+    const string SettingsWriteFailed = "无法写入设置文件";
     const string CoreStartFailed = "后台服务没能启动，请退出后重新打开";
     const string CoreStopped = "后台服务已停止，请退出后重新打开";
     const string RestoreBlockedTitle = "没能自动还原 Codex 配置";
@@ -152,6 +152,7 @@ public sealed class AppModel : IRelayFields
     bool chatGptFound = true;
     bool chatGptUnsupported;
     bool coreForwarding;
+    bool quitRestore;
     bool isRechecking;
     bool loginStartEnabled;
     bool coreRunning;
@@ -430,7 +431,8 @@ public sealed class AppModel : IRelayFields
 
         RebuildRelays();
         Page = configs.Count == 0 ? AppPage.Setup : AppPage.Main;
-        LoginStartEnabled = login.IsEnabled();
+        try { LoginStartEnabled = login.IsEnabled(); }
+        catch (Exception ex) when (IsSystemFault(ex)) { LoginStartEnabled = false; }
         if (keyUnreadable)
         {
             AddNotice(new AppNotice(KeyUnreadable, "", AppSeverity.Warning));
@@ -759,9 +761,13 @@ public sealed class AppModel : IRelayFields
             }
             catch (Exception ex) when (ex is CoreCallException or CoreProcessExitedException)
             {
-                editor.SaveAlert = ex is CoreCallException { Code: "relay_5xx" or "relay_4xx" or "relay_bad_response" }
-                    ? new DialogAlert(NoSave, Describe(ex), DialogAlertSeverity.Danger)
-                    : SaveFailedAlert(Describe(ex));
+                editor.SaveAlert = ex switch
+                {
+                    CoreCallException { Code: "relay_5xx" or "relay_4xx" or "relay_bad_response" } =>
+                        new DialogAlert(NoSave, Describe(ex), DialogAlertSeverity.Danger),
+                    CoreCallException => SaveFailedAlert(Describe(ex)),
+                    _ => new DialogAlert(NoSave, CoreStopped + "。", DialogAlertSeverity.Danger),
+                };
                 return false;
             }
 
@@ -910,51 +916,60 @@ public sealed class AppModel : IRelayFields
         }
     }
 
+    public bool TryBeginQuit()
+    {
+        if (!TryHoldBusy()) return false;
+        quitRestore = coreForwarding;
+        LastError = null;
+        return true;
+    }
+
+    public void ReleaseQuit() => IsBusy = false;
+
+    public ConfirmRequest? QuitConfirmRequest() =>
+        forwardingEnabled
+            ? new ConfirmRequest("退出模型接入助手？", QuitBase + (chatGpt.IsRunning() ? QuitRunningTail : ""), "还原并退出")
+            : null;
+
     public async Task QuitAsync()
     {
-        if (RejectWhileConnecting()) return;
-        if (busy) return;
-
-        IsBusy = true;
+        if (!TryBeginQuit()) return;
         try
         {
-            var restore = coreForwarding;
-            LastError = null;
-            if (forwardingEnabled)
-            {
-                var tail = chatGpt.IsRunning() ? QuitRunningTail : "";
-                if (!await confirmer.ConfirmAsync(new ConfirmRequest("退出模型接入助手？", QuitBase + tail, "还原并退出")))
-                    return;
-            }
-
-            try
-            {
-                await core.CallAsync("shutdown", Params("restore", restore));
-            }
-            catch (CoreCallException ex) when (ex.Code == "restore_blocked")
-            {
-                LastError = new CoreErrorInfo(ex.Code, ex.Keys);
-                await StopCoreAsync();
-                ShowMainWindowRequested?.Invoke();
-                return;
-            }
-            catch (CoreCallException ex)
-            {
-                AddNotice(new AppNotice("没能退出", Describe(ex)));
-                ShowMainWindowRequested?.Invoke();
-                return;
-            }
-            catch (CoreProcessExitedException)
-            {
-            }
-
-            await StopCoreAsync();
-            ExitRequested?.Invoke();
+            await RunHeldQuitAsync();
         }
         finally
         {
-            IsBusy = false;
+            ReleaseQuit();
         }
+    }
+
+    public async Task<bool> RunHeldQuitAsync()
+    {
+        try
+        {
+            await core.CallAsync("shutdown", Params("restore", quitRestore));
+        }
+        catch (CoreCallException ex) when (ex.Code == "restore_blocked")
+        {
+            LastError = new CoreErrorInfo(ex.Code, ex.Keys);
+            await StopCoreAsync();
+            ShowMainWindowRequested?.Invoke();
+            return false;
+        }
+        catch (CoreCallException ex)
+        {
+            AddNotice(new AppNotice("没能退出", Describe(ex)));
+            ShowMainWindowRequested?.Invoke();
+            return false;
+        }
+        catch (CoreProcessExitedException)
+        {
+        }
+
+        await StopCoreAsync();
+        ExitRequested?.Invoke();
+        return true;
     }
 
     public async Task StopCoreAsync()
@@ -985,12 +1000,16 @@ public sealed class AppModel : IRelayFields
             "卸载");
     }
 
-    public bool TryBeginUninstall()
+    public const int UninstallCoreNotStarted = 3;
+
+    bool TryHoldBusy()
     {
         if (RejectWhileConnecting() || busy) return false;
         IsBusy = true;
         return true;
     }
+
+    public bool TryBeginUninstall() => TryHoldBusy();
 
     public void ReleaseUninstall() => IsBusy = false;
 
@@ -1010,7 +1029,11 @@ public sealed class AppModel : IRelayFields
 
     public async Task<int> RunHeldUninstallAsync(bool startCore)
     {
-        if (startCore) await StartAsync();
+        if (startCore)
+        {
+            await StartAsync();
+            if (!CoreRunning) return UninstallCoreNotStarted;
+        }
 
         UninstallPause = null;
         try

@@ -25,6 +25,7 @@ public static class CoreErrorMessages
         ["chatgpt_not_found"] = "没有找到 ChatGPT",
         ["chatgpt_unsupported"] = "当前 ChatGPT 版本暂不支持",
         ["proxy_port_in_use"] = "本机转发服务没能启动：端口被占用",
+        ["proxy_start_timeout"] = "启动转发超过 30 秒还没完成，请重试",
         ["restore_blocked"] = "没能自动还原 Codex 配置",
         ["config_invalid"] = "Codex 配置文件格式有误，未做修改",
         ["config_changed"] = "Codex 配置文件刚被其他程序修改，请重试",

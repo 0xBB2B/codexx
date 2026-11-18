@@ -13,6 +13,7 @@ import (
 const (
 	StartupDelay = time.Minute
 	Interval     = 24 * time.Hour
+	pollStep     = time.Minute
 
 	requestTimeout = 10 * time.Second
 	maxBodyBytes   = 1 << 20
@@ -37,11 +38,14 @@ type Result struct {
 
 type Clock interface {
 	After(d time.Duration) <-chan time.Time
+	Now() time.Time
 }
 
 type RealClock struct{}
 
 func (RealClock) After(d time.Duration) <-chan time.Time { return time.After(d) }
+
+func (RealClock) Now() time.Time { return time.Now() }
 
 func Check(ctx context.Context, cfg Config) (Result, error) {
 	if cfg.Repository == "" {
@@ -84,6 +88,7 @@ func Check(ctx context.Context, cfg Config) (Result, error) {
 
 func Loop(ctx context.Context, clock Clock, check func(context.Context)) {
 	delay := StartupDelay
+	var last time.Time
 	for {
 		select {
 		case <-ctx.Done():
@@ -93,7 +98,19 @@ func Loop(ctx context.Context, clock Clock, check func(context.Context)) {
 		if ctx.Err() != nil {
 			return
 		}
+		if !last.IsZero() {
+			now := clock.Now().Round(0)
+			elapsed := now.Sub(last)
+			if elapsed < 0 {
+				last = now
+			}
+			if elapsed < Interval {
+				delay = pollStep
+				continue
+			}
+		}
 		check(ctx)
-		delay = Interval
+		last = clock.Now().Round(0)
+		delay = pollStep
 	}
 }

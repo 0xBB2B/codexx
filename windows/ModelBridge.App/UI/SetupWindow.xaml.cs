@@ -97,11 +97,19 @@ public partial class SetupWindow : Window
     protected override void OnClosing(CancelEventArgs e)
     {
         base.OnClosing(e);
+        if (closing) return;
         if (model.IsConnecting)
         {
             e.Cancel = true;
             return;
         }
+        if (model.Page == AppPage.Setup && model.QuitConfirmRequest() != null)
+        {
+            e.Cancel = true;
+            closing = Dialogs.ShowQuit(model).Result;
+            return;
+        }
+
         closing = true;
         if (model.Page == AppPage.Success) model.FinishSetup();
         else if (model.Page == AppPage.Setup) _ = model.QuitAsync();

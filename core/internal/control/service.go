@@ -588,6 +588,9 @@ func (s *Service) activate(ctx context.Context) error {
 	if err == nil {
 		return nil
 	}
+	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		err = &Error{Code: "proxy_start_timeout"}
+	}
 	s.stopProxy()
 	s.restoreAfterFailedStart()
 	if code := errCode(err); strings.HasPrefix(code, "chatgpt_") {
@@ -861,7 +864,11 @@ func (s *Service) pushRelay() {
 			routes[slug] = proxy.RelayTarget{BaseURL: s.relays[i].baseURL, Key: s.relays[i].apiKey, Model: r.Model, FromParams: r.FromParams}
 		}
 	}
-	s.proxy.SetRelay(proxy.RelayConfig{Routes: routes, RelayOnly: s.accessMode == modeRelay})
+	configs := make(map[string]proxy.RelayInfo, len(s.relays))
+	for _, r := range s.relays {
+		configs[r.id] = proxy.RelayInfo{Name: r.name, Fetched: !s.relayInfos[r.id].fetchedAt.IsZero()}
+	}
+	s.proxy.SetRelay(proxy.RelayConfig{Routes: routes, Configs: configs, RelayOnly: s.accessMode == modeRelay})
 }
 
 type relayConfig struct {

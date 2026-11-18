@@ -199,6 +199,8 @@ sealed class MultiHarness
         Push();
     }
 
+    public void ForwardingOff() => Core.RaiseStatus(RelayJson.Status(false, Core.Entries.ToArray()));
+
     public void Push(bool forwarding = true, string? defaultRelay = null, string? mode = "both", params RelayJson.Entry[] entries) =>
         Core.RaiseStatus(RelayJson.Status(forwarding, entries.Length > 0 ? entries : Core.Entries.ToArray(), defaultRelay, mode));
 }
@@ -522,6 +524,108 @@ public class MultiRelayTests
             Assert.AreEqual("没有保存", editor.SaveAlert!.Title, code);
             Assert.AreEqual(expected, editor.SaveAlert.Message, code);
         }
+    }
+
+    const string KeepInputs = "已填的内容都还在，改好后再保存。";
+
+    [TestMethod]
+    public async Task Add_CoreErrors_AlertMessageHasFullStopAndKeepInputsHint()
+    {
+        (string Code, string Expected)[] cases =
+        [
+            ("relay_401", "中转服务返回 401：API Key 无效或已过期。" + KeepInputs),
+            ("relay_403", "中转服务返回 403：API Key 没有权限。" + KeepInputs),
+            ("relay_404", "中转服务返回 404：Base URL 不正确。" + KeepInputs),
+            ("relay_429", "中转服务返回 429：请求太频繁，请稍后重试。" + KeepInputs),
+            ("relay_unreachable", "连不上中转服务，请检查网络和 Base URL。" + KeepInputs),
+            ("internal_error", "内部错误，请重试。" + KeepInputs),
+            ("config_changed", "Codex 配置文件刚被其他程序修改，请重试。" + KeepInputs),
+        ];
+        foreach (var (code, expected) in cases)
+        {
+            var h = new MultiHarness();
+            await h.StartWithTwoAsync();
+            h.Core.Fail("save_relay", code);
+            var editor = Editors.Add(h.Model);
+            Fill(editor);
+
+            Assert.IsFalse(await editor.SaveAsync());
+
+            Assert.AreEqual("没有保存", editor.SaveAlert!.Title, code);
+            Assert.AreEqual(expected, editor.SaveAlert.Message, code);
+        }
+    }
+
+    [TestMethod]
+    public async Task Add_CoreStopped_AlertIsStoppedSentenceWithoutKeepInputsHint()
+    {
+        var h = new MultiHarness();
+        await h.StartWithTwoAsync();
+        h.Core.OnAsync("save_relay", _ => Task.FromException<JsonElement>(new CoreProcessExitedException()));
+        var editor = Editors.Add(h.Model);
+        Fill(editor);
+
+        Assert.IsFalse(await editor.SaveAsync());
+
+        Assert.AreEqual("没有保存", editor.SaveAlert!.Title);
+        Assert.AreEqual("后台服务已停止，请退出后重新打开。", editor.SaveAlert.Message);
+    }
+
+    [TestMethod]
+    public async Task Edit_CoreStopped_AlertIsStoppedSentenceWithoutKeepInputsHint()
+    {
+        var h = new MultiHarness();
+        await h.StartWithTwoAsync();
+        h.Core.OnAsync("save_relay", _ => Task.FromException<JsonElement>(new CoreProcessExitedException()));
+        var editor = Editors.Edit(h.Model, "1");
+        Fill(editor, "中转", "https://relay.example.com/v1", "sk-example-0009");
+
+        Assert.IsFalse(await editor.SaveAsync());
+
+        Assert.AreEqual("后台服务已停止，请退出后重新打开。", editor.SaveAlert!.Message);
+    }
+
+    [TestMethod]
+    public async Task Add_VaultWriteFails_AlertNamesCredentialManagerAndKeepInputsHint()
+    {
+        var h = new MultiHarness();
+        await h.StartWithTwoAsync();
+        h.Vault.SaveException = new IOException("denied");
+        var editor = Editors.Add(h.Model);
+        Fill(editor);
+
+        Assert.IsFalse(await editor.SaveAsync());
+
+        Assert.AreEqual("没有保存", editor.SaveAlert!.Title);
+        Assert.AreEqual("无法写入系统凭据管理器。" + KeepInputs, editor.SaveAlert.Message);
+    }
+
+    [TestMethod]
+    public async Task Edit_VaultWriteFails_AlertNamesCredentialManagerAndKeepInputsHint()
+    {
+        var h = new MultiHarness();
+        await h.StartWithTwoAsync();
+        h.Vault.SaveException = new IOException("denied");
+        var editor = Editors.Edit(h.Model, "1");
+        Fill(editor, "中转", "https://relay.example.com/v1", "sk-example-0009");
+
+        Assert.IsFalse(await editor.SaveAsync());
+
+        Assert.AreEqual("无法写入系统凭据管理器。" + KeepInputs, editor.SaveAlert!.Message);
+    }
+
+    [TestMethod]
+    public async Task Add_SettingsWriteFails_AlertNamesSettingsFileAndKeepInputsHint()
+    {
+        var h = new MultiHarness();
+        await h.StartWithTwoAsync();
+        h.Settings.SaveException = new IOException("disk full");
+        var editor = Editors.Add(h.Model);
+        Fill(editor);
+
+        Assert.IsFalse(await editor.SaveAsync());
+
+        Assert.AreEqual("无法写入设置文件。" + KeepInputs, editor.SaveAlert!.Message);
     }
 
     [TestMethod]

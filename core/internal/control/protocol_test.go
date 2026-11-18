@@ -553,6 +553,9 @@ func TestProtocolDoc_MatchesImplementation(t *testing.T) {
 			t.Errorf("PROTOCOL.md 缺少 %q", want)
 		}
 	}
+	if !strings.Contains(doc, "| proxy_start_timeout |") {
+		t.Error("PROTOCOL.md 错误码表缺少 proxy_start_timeout 这一行")
+	}
 }
 
 func TestServe_AccessMethods(t *testing.T) {

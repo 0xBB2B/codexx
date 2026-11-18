@@ -502,4 +502,197 @@ public class UninstallDialogTests
             }
         });
     }
+
+    const string QuitTitle = "退出模型接入助手？";
+
+    [TestMethod]
+    public void ConfirmBusy_WithRestoreLabel_ConfirmButtonShowsRestoring()
+    {
+        var buttons = DialogModel.ForConfirm(new ConfirmRequest(QuitTitle, "退出前会关闭转发，并把 Codex 配置还原成开启前的样子。", "还原并退出"), busy: true, busyLabel: "正在还原").Buttons;
+
+        Assert.IsFalse(buttons[0].IsEnabled);
+        Assert.AreEqual("正在还原", buttons[1].Text);
+        Assert.IsFalse(buttons[1].IsEnabled);
+        Assert.IsTrue(buttons[1].IsBusy);
+    }
+
+    [TestMethod]
+    public void ConfirmBusy_DefaultLabelStaysUninstalling()
+    {
+        Assert.AreEqual("正在卸载", DialogModel.ForConfirm(Request, busy: true).Buttons[1].Text);
+    }
+
+    static Harness ForwardingOnHarness()
+    {
+        var h = new Harness();
+        h.ForwardingOn();
+        Assert.IsTrue(h.Model.ForwardingEnabled);
+        return h;
+    }
+
+    static async Task<(DialogWindow Dialog, Task<bool> Shown)> OpenQuitAsync(AppModel model)
+    {
+        var before = Application.Current.Windows.OfType<DialogWindow>().ToList();
+        var shown = System.Windows.Threading.Dispatcher.CurrentDispatcher
+            .InvokeAsync(() => Dialogs.ShowQuit(model)).Task.Unwrap();
+        await UiHost.Settle();
+        return (Application.Current.Windows.OfType<DialogWindow>().Except(before).Single(), shown);
+    }
+
+    [TestMethod]
+    public async Task ShowQuit_ConfirmedWhileShutdownPending_StaysOpenRestoring_EscapeIgnored_ClosesAndExitsOnSuccess()
+    {
+        var h = ForwardingOnHarness();
+        var gate = new TaskCompletionSource<JsonElement>();
+        h.Core.OnAsync("shutdown", _ => gate.Task);
+        var exits = 0;
+        h.Model.ExitRequested += () => exits++;
+
+        await UiHost.RunAsync(async () =>
+        {
+            var (dialog, shown) = await OpenQuitAsync(h.Model);
+            try
+            {
+                Assert.IsNotNull(UiHost.FindText(dialog, QuitTitle));
+                await ClickAsync(dialog, "还原并退出");
+
+                Assert.IsTrue(dialog.IsVisible);
+                Assert.IsFalse(UiHost.FindButton(dialog, "取消")!.IsEnabled);
+                var busy = UiHost.FindButton(dialog, "正在还原");
+                Assert.IsNotNull(busy);
+                Assert.IsFalse(busy.IsEnabled);
+                Assert.IsTrue(UiHost.All<Spinner>(busy).Any());
+                await AssertEscapeAndCloseIgnoredAsync(dialog);
+                Assert.AreEqual(0, exits);
+
+                gate.SetResult(Json.Parse("{}"));
+                var exited = await shown;
+
+                Assert.IsTrue(exited);
+                Assert.IsFalse(dialog.IsVisible);
+                Assert.AreEqual(1, exits);
+            }
+            finally
+            {
+                gate.TrySetResult(Json.Parse("{}"));
+                dialog.ForceClose();
+                await shown;
+            }
+        });
+    }
+
+    [TestMethod]
+    public async Task ShowQuit_ShutdownFails_ClosesDialog_AsksToShowMainWindow_KeepsNotice_NoExit()
+    {
+        var h = ForwardingOnHarness();
+        h.Core.Fail("shutdown", "internal_error");
+        var exits = 0;
+        var shows = 0;
+        h.Model.ExitRequested += () => exits++;
+        h.Model.ShowMainWindowRequested += () => shows++;
+
+        await UiHost.RunAsync(async () =>
+        {
+            var (dialog, shown) = await OpenQuitAsync(h.Model);
+            try
+            {
+                await ClickAsync(dialog, "还原并退出");
+                var exited = await shown;
+
+                Assert.IsFalse(exited);
+                Assert.IsFalse(dialog.IsVisible);
+                Assert.AreEqual(0, exits);
+                Assert.IsTrue(shows >= 1);
+                Assert.IsNotNull(h.Model.Notices.FirstOrDefault(n => n.Title == "没能退出"));
+            }
+            finally
+            {
+                dialog.ForceClose();
+                await shown;
+            }
+        });
+    }
+
+    [TestMethod]
+    public async Task ShowQuit_Cancel_ClosesWithoutShutdown_ReleasesBusy()
+    {
+        var h = ForwardingOnHarness();
+        var exits = 0;
+        h.Model.ExitRequested += () => exits++;
+
+        await UiHost.RunAsync(async () =>
+        {
+            var (dialog, shown) = await OpenQuitAsync(h.Model);
+            try
+            {
+                await ClickAsync(dialog, "取消");
+                var exited = await shown;
+
+                Assert.IsFalse(exited);
+                Assert.IsFalse(dialog.IsVisible);
+                Assert.AreEqual(0, h.Core.Count("shutdown"));
+                Assert.AreEqual(0, exits);
+                Assert.IsFalse(h.Model.IsBusy);
+            }
+            finally
+            {
+                dialog.ForceClose();
+                await shown;
+            }
+        });
+    }
+
+    const string CoreStartFailedBody =
+        "后台服务没能启动，卸载没有开始：Codex 配置还没有还原，本助手和它保存的设置都还在。\n\n可以稍后再卸载一次；还是不行的话，重启电脑后再试。";
+
+    [TestMethod]
+    public void UninstallCoreStartFailed_Dialog_TitleBodyAndOnlyKnowButton()
+    {
+        var dialog = DialogModel.ForUninstallCoreStartFailed();
+
+        Assert.AreEqual("没能卸载", dialog.Title);
+        Assert.AreEqual(CoreStartFailedBody, dialog.Message);
+        Assert.AreEqual(1, dialog.Buttons.Count);
+        Assert.AreEqual("知道了", dialog.Buttons[0].Text);
+    }
+
+    [TestMethod]
+    public async Task ShowUninstall_HeadlessCoreCannotStart_ShowsNewDialog_NoPrepare_ReturnsNonZero()
+    {
+        var h = new Harness();
+        h.Core.StartException = new IOException("core missing");
+
+        await UiHost.RunAsync(async () =>
+        {
+            var before = Application.Current.Windows.OfType<DialogWindow>().ToList();
+            var shown = System.Windows.Threading.Dispatcher.CurrentDispatcher
+                .InvokeAsync(() => Dialogs.ShowUninstall(h.Model, true)).Task.Unwrap();
+            await UiHost.Settle();
+            var confirm = Application.Current.Windows.OfType<DialogWindow>().Except(before).Single();
+            try
+            {
+                await ClickAsync(confirm, "卸载");
+
+                var info = Application.Current.Windows.OfType<DialogWindow>()
+                    .Where(w => w.IsVisible && UiHost.FindText(w, "没能卸载") != null && UiHost.FindButton(w, "知道了") != null)
+                    .ToList();
+                Assert.AreEqual(1, info.Count);
+                StringAssert.Contains(UiHost.Joined(info[0]), CoreStartFailedBody.Split("\n\n")[0]);
+                StringAssert.Contains(UiHost.Joined(info[0]), CoreStartFailedBody.Split("\n\n")[1]);
+
+                await ClickAsync(info[0], "知道了");
+                var code = await shown;
+
+                Assert.AreNotEqual(0, code);
+                Assert.AreEqual(0, h.Core.Count("prepare_uninstall"));
+                Assert.AreEqual(0, h.Vault.DeleteAllCount);
+                Assert.AreEqual(0, h.Login.DisableCount);
+            }
+            finally
+            {
+                foreach (var w in Application.Current.Windows.OfType<DialogWindow>().Except(before).ToList()) w.ForceClose();
+                await shown;
+            }
+        });
+    }
 }

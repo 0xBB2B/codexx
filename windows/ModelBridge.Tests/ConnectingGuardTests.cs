@@ -28,7 +28,7 @@ public class ConnectingGuardTests
     }
 
     [TestMethod]
-    public async Task Quit_WhileConnecting_DoesNotExitAndAsksToShowWindow()
+    public async Task TryBeginQuit_WhileConnecting_RefusesAndAsksToShowWindow()
     {
         var (h, gate, submit) = await ConnectingAsync();
         var exits = 0;
@@ -37,7 +37,7 @@ public class ConnectingGuardTests
         h.Model.ShowMainWindowRequested += () => shows++;
         try
         {
-            await h.Model.QuitAsync();
+            Assert.IsFalse(h.Model.TryBeginQuit());
 
             Assert.AreEqual(0, exits);
             Assert.AreEqual(0, h.Core.Count("shutdown"));

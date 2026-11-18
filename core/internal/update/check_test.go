@@ -63,12 +63,26 @@ func (g *fakeGitHub) cfg() update.Config {
 type fakeClock struct {
 	mu     sync.Mutex
 	now    time.Duration
+	skew   time.Duration
 	timers []fakeTimer
 }
 
 type fakeTimer struct {
 	at time.Duration
 	ch chan time.Time
+}
+
+func (c *fakeClock) Now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC).Add(c.now + c.skew)
+}
+
+// 睡眠或手动改系统时间只动墙上时间，不动计时器
+func (c *fakeClock) jumpWall(d time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.skew += d
 }
 
 func (c *fakeClock) After(d time.Duration) <-chan time.Time {
@@ -263,6 +277,7 @@ func TestLoop_Schedule(t *testing.T) {
 	if count() != 1 {
 		t.Fatalf("不足 24 小时不该再检查, calls = %d", count())
 	}
+	waitFor(t, "不足 24 小时后重新登记定时器", func() bool { return clock.pending() == 1 })
 	clock.Advance(time.Minute)
 	waitFor(t, "第二次检查", func() bool { return count() == 2 })
 
@@ -277,6 +292,97 @@ func TestLoop_Schedule(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 	if count() != 2 {
 		t.Errorf("停止后不该再检查, calls = %d", count())
+	}
+}
+
+func TestLoop_WallClockInterval(t *testing.T) {
+	clock := &fakeClock{}
+	ctx, cancel := context.WithCancel(context.Background())
+	var mu sync.Mutex
+	calls := 0
+	count := func() int { mu.Lock(); defer mu.Unlock(); return calls }
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		update.Loop(ctx, clock, func(context.Context) {
+			mu.Lock()
+			calls++
+			mu.Unlock()
+		})
+	}()
+	t.Cleanup(func() {
+		cancel()
+		<-done
+	})
+
+	waitFor(t, "首次定时器登记", func() bool { return clock.pending() == 1 })
+	clock.Advance(update.StartupDelay)
+	waitFor(t, "首次检查", func() bool { return count() == 1 })
+	waitFor(t, "后续定时器登记", func() bool { return clock.pending() >= 1 })
+
+	clock.jumpWall(update.Interval - time.Hour)
+	clock.Advance(time.Minute)
+	time.Sleep(50 * time.Millisecond)
+	if count() != 1 {
+		t.Fatalf("墙上时间不足 24 小时不该再检查, calls = %d", count())
+	}
+
+	clock.jumpWall(time.Hour)
+	waitFor(t, "墙上时间满 24 小时后 1 分钟内的检查", func() bool {
+		clock.Advance(time.Minute)
+		return count() == 2
+	})
+}
+
+func TestLoop_WallClockInterval_AfterClockMovedBack(t *testing.T) {
+	tests := []struct {
+		name string
+		back time.Duration
+	}{
+		{"往回调几小时", 3 * time.Hour},
+		{"往回调几天", 3 * 24 * time.Hour},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			clock := &fakeClock{}
+			ctx, cancel := context.WithCancel(context.Background())
+			var mu sync.Mutex
+			calls := 0
+			count := func() int { mu.Lock(); defer mu.Unlock(); return calls }
+			done := make(chan struct{})
+			go func() {
+				defer close(done)
+				update.Loop(ctx, clock, func(context.Context) {
+					mu.Lock()
+					calls++
+					mu.Unlock()
+				})
+			}()
+			t.Cleanup(func() {
+				cancel()
+				<-done
+			})
+
+			waitFor(t, "首次定时器登记", func() bool { return clock.pending() == 1 })
+			clock.jumpWall(tc.back)
+			clock.Advance(update.StartupDelay)
+			waitFor(t, "首次检查", func() bool { return count() == 1 })
+			waitFor(t, "后续定时器登记", func() bool { return clock.pending() >= 1 })
+
+			clock.jumpWall(-tc.back)
+			clock.Advance(time.Minute)
+			waitFor(t, "察觉往回调后重新登记定时器", func() bool { return clock.pending() >= 1 })
+			clock.jumpWall(update.Interval - time.Hour)
+			clock.Advance(time.Minute)
+			time.Sleep(50 * time.Millisecond)
+			if count() != 1 {
+				t.Fatalf("回调后墙上时间不足 24 小时不该再检查, calls = %d", count())
+			}
+
+			clock.jumpWall(time.Hour)
+			clock.Advance(time.Minute)
+			waitFor(t, "回调后墙上时间满 24 小时后的检查", func() bool { return count() == 2 })
+		})
 	}
 }
 

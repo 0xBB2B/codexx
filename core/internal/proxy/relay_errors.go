@@ -35,6 +35,14 @@ func relayDeletedError() (code, message string) {
 	return "relay_deleted", "这个模型所在的中转配置已删除，请换一个模型。"
 }
 
+func relayNotFetchedError(name string) (code, message string) {
+	return "relay_not_fetched", fmt.Sprintf("还没获取到「%s」的模型列表。请打开模型接入助手，在「%s」那一行点「重试」，或者换一个模型。", name, name)
+}
+
+func relayModelMissingError(name string) (code, message string) {
+	return "relay_model_missing", fmt.Sprintf("「%s」的模型列表里现在没有这个模型，请换一个模型。", name)
+}
+
 type relayErrorDetail struct {
 	Message string `json:"message"`
 	Type    string `json:"type"`

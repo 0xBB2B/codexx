@@ -49,11 +49,14 @@ struct CoreFailure: Equatable, Sendable {
         if case CoreError.remote(let code, let keys) = error {
             self.init(code: code, keys: keys)
         } else {
-            self.init(code: "internal_error")
+            self.init(code: error as? CoreError == .processExited ? Self.coreStoppedCode : "internal_error")
         }
     }
 
+    static let coreStoppedCode = "core_stopped"
+
     var message: String {
+        if code == Self.coreStoppedCode { return "后台服务已停止，请退出后重新打开。" }
         let text = CoreProtocol.errorMessages[code] ?? CoreProtocol.errorMessages["internal_error"] ?? code
         return text.replacingOccurrences(of: "<keys[0]>", with: keys.first ?? "")
     }
@@ -154,13 +157,20 @@ private struct RefreshParams: Encodable, Sendable {
 private struct ForwardingParams: Encodable, Sendable { let enabled: Bool }
 private struct ShutdownParams: Encodable, Sendable { let restore: Bool }
 private struct UpdateParams: Encodable, Sendable { let manual: Bool }
+private enum SaveFailureText {
+    static let retryHint = "已填的内容都还在，改好后再保存。"
+    static let withoutHint: Set<String> = ["relay_5xx", "relay_4xx", "relay_bad_response", CoreFailure.coreStoppedCode]
+}
+
 private struct PersistError: Error {
     static let notRevokedLine = "\n已在本次运行中生效，但没能保存到本机，重启助手后会恢复成原来的样子。"
 
     let failure: StorageFailure
     let revoked: Bool
 
-    var message: String { failure.message + (revoked ? "" : Self.notRevokedLine) }
+    func message(withRetryHint: Bool) -> String {
+        failure.message + (withRetryHint ? SaveFailureText.retryHint : "") + (revoked ? "" : Self.notRevokedLine)
+    }
 }
 
 private struct SaveResult: Decodable { let id: String; let name: String; let modelCount: Int }
@@ -198,6 +208,7 @@ final class AppModel: ObservableObject {
     @Published private var dismissedBanners: Set<Banner> = []
     @Published var uninstallPhase: UninstallPhase = .idle
     @Published private(set) var isRecheckingUninstall = false
+    @Published private(set) var isRestoringOnQuit = false
     @Published var availableUpdate: UpdateInfo?
     @Published var loginStartEnabled = false
     @Published var mainWindowRequested = false
@@ -512,7 +523,7 @@ final class AppModel: ObservableObject {
         do {
             try await persistDraft(saved, draft)
         } catch {
-            setupPhase = .failed(title: "没有保存", detail: (error as? PersistError)?.message ?? "")
+            setupPhase = .failed(title: "没有保存", detail: (error as? PersistError)?.message(withRetryHint: false) ?? "")
             return
         }
         removeNotices(titled: Self.settingsBackedUpTitle, Self.settingsUnreadableTitle)
@@ -622,15 +633,16 @@ final class AppModel: ObservableObject {
             saved = try await saveToCore(draft)
         } catch {
             let failure = CoreFailure(error)
-            let suffix = failure.code == "relay_401" ? "。已填的内容都还在，改好后再保存。" : ""
-            relaySaveAlert = DialogAlert(title: "没有保存", message: failure.message + suffix, severity: .danger)
+            let sentence = failure.message.hasSuffix("。") ? failure.message : failure.message + "。"
+            let message = SaveFailureText.withoutHint.contains(failure.code) ? failure.message : sentence + SaveFailureText.retryHint
+            relaySaveAlert = DialogAlert(title: "没有保存", message: message, severity: .danger)
             return
         }
         let adding = editingRelayID == nil
         do {
             try await persistDraft(saved, draft)
         } catch {
-            relaySaveAlert = DialogAlert(title: "没有保存", message: (error as? PersistError)?.message ?? "", severity: .danger)
+            relaySaveAlert = DialogAlert(title: "没有保存", message: (error as? PersistError)?.message(withRetryHint: true) ?? "", severity: .danger)
             return
         }
         removeNotices(titled: Self.keychainDeniedTitle)
@@ -685,8 +697,13 @@ final class AppModel: ObservableObject {
                 confirmLabel: "还原并退出"
             )
         } else {
-            await shutdown(restore: status?.forwarding ?? false)
+            if await shutdown(restore: status?.forwarding ?? false) { onTerminate() }
         }
+    }
+
+    var quitDialogContent: (any DialogContent)? {
+        guard let pending = pendingConfirmation, pending.kind == .quit else { return nil }
+        return ConfirmDialogModel(confirmation: pending, busyLabel: isRestoringOnQuit ? "正在还原" : nil)
     }
 
     func uninstall() async {
@@ -756,12 +773,12 @@ final class AppModel: ObservableObject {
     }
 
     func cancelPending() {
-        guard !isDeletingRelay, uninstallPhase != .running else { return }
+        guard !isDeletingRelay, uninstallPhase != .running, !isRestoringOnQuit else { return }
         pendingConfirmation = nil
     }
 
     func confirmPending() async {
-        guard let pending = pendingConfirmation, !isDeletingRelay, uninstallPhase != .running else { return }
+        guard let pending = pendingConfirmation, !isDeletingRelay, uninstallPhase != .running, !isRestoringOnQuit else { return }
         if case .deleteRelay(let id) = pending.kind {
             await deleteRelay(id: id)
             pendingConfirmation = nil
@@ -772,12 +789,16 @@ final class AppModel: ObservableObject {
             pendingConfirmation = nil
             return
         }
-        pendingConfirmation = nil
-        switch pending.kind {
-        case .deleteRelay, .uninstall: break
-        case .loginStartOff: applyLoginStart(false)
-        case .quit: await shutdown(restore: true)
+        if pending.kind == .quit {
+            isRestoringOnQuit = true
+            let succeeded = await shutdown(restore: true)
+            isRestoringOnQuit = false
+            pendingConfirmation = nil
+            if succeeded { onTerminate() }
+            return
         }
+        pendingConfirmation = nil
+        if pending.kind == .loginStartOff { applyLoginStart(false) }
     }
 
     func dismissNotice(_ id: UUID) { removeNotice(id) }
@@ -884,16 +905,16 @@ final class AppModel: ObservableObject {
         uninstallPhase = .finished
     }
 
-    private func shutdown(restore: Bool) async {
+    private func shutdown(restore: Bool) async -> Bool {
         do {
             _ = try await core.call("shutdown", params: ShutdownParams(restore: restore))
         } catch CoreError.remote(let code, let keys) {
             if code == "restore_blocked" { coreRunning = false }
             recordFailure(CoreFailure(code: code, keys: keys))
-            return
+            return false
         } catch {}
         coreRunning = false
-        onTerminate()
+        return true
     }
 
     private func recordFailure(_ failure: CoreFailure) {
@@ -936,7 +957,7 @@ final class AppModel: ObservableObject {
 
     private func validateDraft() -> Bool {
         var errors: [RelayField: String] = [:]
-        let name = draftName.trimmingCharacters(in: .whitespaces)
+        let name = draftName.trimmingCharacters(in: .whitespacesAndNewlines)
         if name.isEmpty {
             errors[.name] = CoreProtocol.errorMessages["name_empty"]
         } else if name.count > 16 {
@@ -946,22 +967,22 @@ final class AppModel: ObservableObject {
         } else if let same = relays.first(where: { $0.id != editingRelayID && $0.name.lowercased() == name.lowercased() }) {
             errors[.name] = CoreFailure(code: "name_duplicate", keys: [same.name]).message
         }
-        let url = draftBaseURL.trimmingCharacters(in: .whitespaces)
+        let url = draftBaseURL.trimmingCharacters(in: .whitespacesAndNewlines)
         if url.isEmpty {
             errors[.baseURL] = "请填写 Base URL。"
         } else if !url.hasPrefix("https://") {
             errors[.baseURL] = CoreProtocol.errorMessages["invalid_base_url"]
         }
-        if draftAPIKey.trimmingCharacters(in: .whitespaces).isEmpty { errors[.apiKey] = "请填写 API Key。" }
+        if draftAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { errors[.apiKey] = "请填写 API Key。" }
         relayFieldErrors = errors
         return errors.isEmpty
     }
 
     private func snapshotDraft() -> DraftSnapshot {
         DraftSnapshot(
-            name: draftName.trimmingCharacters(in: .whitespaces),
-            baseURL: draftBaseURL.trimmingCharacters(in: .whitespaces),
-            apiKey: draftAPIKey
+            name: draftName.trimmingCharacters(in: .whitespacesAndNewlines),
+            baseURL: draftBaseURL.trimmingCharacters(in: .whitespacesAndNewlines),
+            apiKey: draftAPIKey.trimmingCharacters(in: .whitespacesAndNewlines)
         )
     }
 

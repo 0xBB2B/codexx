@@ -1679,6 +1679,12 @@ type stubTimer struct {
 	ch chan time.Time
 }
 
+func (c *stubClock) Now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC).Add(c.now)
+}
+
 func (c *stubClock) After(d time.Duration) <-chan time.Time {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -2820,5 +2826,90 @@ func TestForwardingOn_ChatGPTUnsupported_RestoreFailsForOtherReason_NotReportedA
 	}
 	if st.Proxy.Error != nil {
 		t.Errorf("Proxy.Error = %q, want nil", *st.Proxy.Error)
+	}
+}
+
+func TestStatus_RestartTimeoutReportsProxyStartTimeout(t *testing.T) {
+	setRestartTimeout(t, time.Second)
+	addr, release := holdPort(t)
+	e := newEnv(t, true, func(e *env) { e.listenAddr = addr })
+	hang := newHangingRelay(t)
+	c := startServe(t, e.opts)
+	c.result("init", hangingInitParams(hang))
+	release()
+
+	st := c.result("status", nil)
+	if got := nested(t, st, "proxy", "error"); got != "proxy_start_timeout" {
+		t.Errorf("proxy.error = %v, want proxy_start_timeout", got)
+	}
+}
+
+func TestInit_RestartTimeoutReportsProxyStartTimeout(t *testing.T) {
+	setRestartTimeout(t, time.Second)
+	e := newEnv(t, true)
+	hang := newHangingRelay(t)
+
+	st, err := e.svc.Init(context.Background(), initParamsOf(t, hangingInitParams(hang)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.Proxy.Error == nil || *st.Proxy.Error != "proxy_start_timeout" {
+		t.Errorf("Proxy.Error = %v, want proxy_start_timeout", st.Proxy.Error)
+	}
+}
+
+func relayErrorOf(t *testing.T, addr, model string) (code, message string) {
+	t.Helper()
+	status, body := postStatusBody(t, addr, model)
+	if status < 400 {
+		t.Fatalf("状态码 = %d, 响应 %q", status, body)
+	}
+	var m struct {
+		Error struct{ Code, Message string } `json:"error"`
+	}
+	if err := json.Unmarshal([]byte(body), &m); err != nil {
+		t.Fatalf("响应不是错误体: %q", body)
+	}
+	return m.Error.Code, m.Error.Message
+}
+
+func TestForwarding_RelayModelErrors(t *testing.T) {
+	ctx := context.Background()
+	tests := []struct {
+		name        string
+		prepare     func(t *testing.T, e *env, second *fakeRelay)
+		model       string
+		wantCode    string
+		wantMessage string
+	}{
+		{"配置已删除", func(t *testing.T, e *env, _ *fakeRelay) {
+			if _, err := e.svc.DeleteRelay(ctx, "2"); err != nil {
+				t.Fatal(err)
+			}
+		}, "relay2-deepseek-flash", "relay_deleted", "这个模型所在的中转配置已删除，请换一个模型。"},
+		{"配置还在但模型列表从没获取到", func(t *testing.T, e *env, second *fakeRelay) {
+			second.setStatus(http.StatusInternalServerError)
+		}, "relay2-deepseek-flash", "relay_not_fetched", "还没获取到「备用」的模型列表。请打开模型接入助手，在「备用」那一行点「重试」，或者换一个模型。"},
+		{"配置还在但列表里没有这个模型", func(*testing.T, *env, *fakeRelay) {}, "relay-no-such-model", "relay_model_missing", "「中转」的模型列表里现在没有这个模型，请换一个模型。"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newEnv(t, true)
+			second := newFakeRelay(t, []string{"deepseek-flash"}, keyA)
+			if tc.wantCode == "relay_not_fetched" {
+				tc.prepare(t, e, second)
+			}
+			if _, err := e.svc.Init(ctx, initParamsOf(t, twoRelayParams(e, second))); err != nil {
+				t.Fatal(err)
+			}
+			if tc.wantCode != "relay_not_fetched" {
+				tc.prepare(t, e, second)
+			}
+
+			code, msg := relayErrorOf(t, e.listenAddr, tc.model)
+			if code != tc.wantCode || msg != tc.wantMessage {
+				t.Errorf("code = %q, message = %q\nwant code = %q, message = %q", code, msg, tc.wantCode, tc.wantMessage)
+			}
+		})
 	}
 }

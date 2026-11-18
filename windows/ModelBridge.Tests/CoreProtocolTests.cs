@@ -100,4 +100,10 @@ public class CoreProtocolTests
 
         CollectionAssert.AreEqual(Array.Empty<string>(), extra);
     }
+
+    [TestMethod]
+    public void ErrorMessages_ProxyStartTimeout_HasConfirmedCopy()
+    {
+        Assert.AreEqual("启动转发超过 30 秒还没完成，请重试", CoreErrorMessages.Messages["proxy_start_timeout"]);
+    }
 }

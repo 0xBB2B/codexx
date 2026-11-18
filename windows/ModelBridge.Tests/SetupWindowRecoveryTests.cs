@@ -287,7 +287,7 @@ public class SetupWindowRecoveryTests
     public async Task Window_BackedUp_ShowsWarningWithDetailButtonAndEmptyForm()
     {
         File.WriteAllText(SettingsPath, Corrupt);
-        var (_, model) = ModelOnRealSettings();
+        var (h, model) = ModelOnRealSettings();
         await model.StartAsync();
 
         await UiHost.RunAsync(async () =>
@@ -305,6 +305,7 @@ public class SetupWindowRecoveryTests
             }
             finally
             {
+                h.ForwardingOff();
                 window.Close();
             }
         });
@@ -314,7 +315,7 @@ public class SetupWindowRecoveryTests
     public async Task Window_ClickDetail_ShowsBackupPathAndGotItClosesOnlyTheDialog()
     {
         File.WriteAllText(SettingsPath, Corrupt);
-        var (_, model) = ModelOnRealSettings();
+        var (h, model) = ModelOnRealSettings();
         await model.StartAsync();
 
         await UiHost.RunAsync(async () =>
@@ -343,6 +344,7 @@ public class SetupWindowRecoveryTests
             finally
             {
                 dialog?.ForceClose();
+                h.ForwardingOff();
                 window.Close();
             }
         });
@@ -353,7 +355,7 @@ public class SetupWindowRecoveryTests
     {
         File.WriteAllText(SettingsPath, Corrupt);
         Directory.CreateDirectory(BackupPath);
-        var (_, model) = ModelOnRealSettings();
+        var (h, model) = ModelOnRealSettings();
         await model.StartAsync();
 
         await UiHost.RunAsync(async () =>
@@ -375,6 +377,7 @@ public class SetupWindowRecoveryTests
             finally
             {
                 dialog?.ForceClose();
+                h.ForwardingOff();
                 window.Close();
             }
         });
@@ -384,7 +387,7 @@ public class SetupWindowRecoveryTests
     public async Task Window_DismissWarning_RemovesItAndKeepsFilledInput()
     {
         File.WriteAllText(SettingsPath, Corrupt);
-        var (_, model) = ModelOnRealSettings();
+        var (h, model) = ModelOnRealSettings();
         await model.StartAsync();
         model.BaseUrlInput = "https://relay.example.com/v1";
 
@@ -403,6 +406,7 @@ public class SetupWindowRecoveryTests
             }
             finally
             {
+                h.ForwardingOff();
                 window.Close();
             }
         });
@@ -441,6 +445,7 @@ public class SetupWindowRecoveryTests
             {
                 gate.TrySetException(new CoreCallException("relay_401", []));
                 if (submit != null) await submit;
+                h.ForwardingOff();
                 if (window.IsVisible) window.Close();
             }
         });
@@ -471,6 +476,7 @@ public class SetupWindowRecoveryTests
                 await submit;
                 Assert.IsFalse(h.Model.IsConnecting);
 
+                h.ForwardingOff();
                 window.Close();
 
                 Assert.IsTrue(closed);
@@ -479,6 +485,7 @@ public class SetupWindowRecoveryTests
             {
                 gate.TrySetException(new CoreCallException("relay_401", []));
                 if (submit != null) await submit;
+                h.ForwardingOff();
                 if (window.IsVisible) window.Close();
             }
         });
@@ -525,6 +532,7 @@ public class SetupWindowRecoveryTests
             {
                 gate.TrySetException(new CoreCallException("relay_401", []));
                 if (submit != null) await submit;
+                h.ForwardingOff();
                 if (window.IsVisible) window.Close();
             }
         });
@@ -554,8 +562,142 @@ public class SetupWindowRecoveryTests
             }
             finally
             {
+                h.ForwardingOff();
                 if (window.IsVisible) window.Close();
             }
         });
     }
+
+    async Task<(MultiHarness Harness, AppModel Model)> SetupPageWithForwardingAsync(bool forwarding)
+    {
+        File.WriteAllText(SettingsPath, Corrupt);
+        var (h, model) = ModelOnRealSettings();
+        await model.StartAsync();
+        h.Core.RaiseStatus(RelayJson.Status(forwarding, []));
+        Assert.AreEqual(AppPage.Setup, model.Page);
+        Assert.AreEqual(forwarding, model.ForwardingEnabled);
+        return (h, model);
+    }
+
+    [TestMethod]
+    public async Task CloseSetupWindow_ForwardingOn_OpensShowQuitDialogThatTurnsRestoring_ExitsAfterShutdown()
+    {
+        var (h, model) = await SetupPageWithForwardingAsync(true);
+        var gate = new TaskCompletionSource<JsonElement>();
+        h.Core.OnAsync("shutdown", _ => gate.Task);
+        var exits = 0;
+        model.ExitRequested += () => exits++;
+
+        await UiHost.RunAsync(async () =>
+        {
+            var window = new SetupWindow(model);
+            await UiHost.ShowAsync(window);
+            var before = Application.Current.Windows.OfType<DialogWindow>().ToList();
+            var closing = System.Windows.Threading.Dispatcher.CurrentDispatcher.InvokeAsync(() => window.Close()).Task;
+            await UiHost.Settle();
+            var dialog = Application.Current.Windows.OfType<DialogWindow>().Except(before).SingleOrDefault();
+            try
+            {
+                Assert.IsNotNull(dialog, "关闭首次设置窗口应弹出 ShowQuit 的确认窗口");
+                Assert.IsNotNull(UiHost.FindText(dialog, "退出模型接入助手？"));
+
+                UiHost.FindButton(dialog, "还原并退出")!.RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
+                await UiHost.Settle();
+
+                Assert.IsTrue(dialog.IsVisible);
+                Assert.IsFalse(UiHost.FindButton(dialog, "取消")!.IsEnabled);
+                var busy = UiHost.FindButton(dialog, "正在还原");
+                Assert.IsNotNull(busy);
+                Assert.IsFalse(busy.IsEnabled);
+                Assert.IsTrue(UiHost.All<Spinner>(busy).Any());
+                Assert.AreEqual(0, exits);
+
+                gate.SetResult(Json.Parse("{}"));
+                await closing;
+                await UiHost.Settle();
+
+                Assert.IsFalse(dialog.IsVisible);
+                Assert.AreEqual(1, exits);
+            }
+            finally
+            {
+                gate.TrySetResult(Json.Parse("{}"));
+                dialog?.ForceClose();
+                await closing;
+                h.ForwardingOff();
+                if (window.IsVisible) window.Close();
+            }
+        });
+    }
+
+    [TestMethod]
+    public async Task CloseSetupWindow_AfterRestoredAndExited_SecondCloseClosesWithoutNewDialogOrShutdown()
+    {
+        var (h, model) = await SetupPageWithForwardingAsync(true);
+        var exits = 0;
+        model.ExitRequested += () => exits++;
+
+        await UiHost.RunAsync(async () =>
+        {
+            var window = new SetupWindow(model);
+            await UiHost.ShowAsync(window);
+            var before = Application.Current.Windows.OfType<DialogWindow>().ToList();
+            var first = System.Windows.Threading.Dispatcher.CurrentDispatcher.InvokeAsync(() => window.Close()).Task;
+            await UiHost.Settle();
+            var dialog = Application.Current.Windows.OfType<DialogWindow>().Except(before).SingleOrDefault();
+            Task? second = null;
+            try
+            {
+                Assert.IsNotNull(dialog, "关闭首次设置窗口应弹出 ShowQuit 的确认窗口");
+                UiHost.FindButton(dialog, "还原并退出")!.RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
+                await UiHost.Settle();
+                await first;
+                Assert.AreEqual(1, exits);
+
+                var beforeSecond = Application.Current.Windows.OfType<DialogWindow>().ToList();
+                second = System.Windows.Threading.Dispatcher.CurrentDispatcher.InvokeAsync(() => window.Close()).Task;
+                await UiHost.Settle();
+                var extra = Application.Current.Windows.OfType<DialogWindow>().Except(beforeSecond).ToList();
+                foreach (var d in extra) d.ForceClose();
+
+                Assert.AreEqual(0, extra.Count, "退出后再次关闭窗口不应再弹出确认框");
+                Assert.IsFalse(window.IsVisible);
+                Assert.AreEqual(1, h.Core.Count("shutdown"));
+                Assert.AreEqual(1, exits);
+            }
+            finally
+            {
+                dialog?.ForceClose();
+                if (second != null) await second;
+                if (window.IsVisible)
+                {
+                    h.ForwardingOff();
+                    window.Close();
+                }
+            }
+        });
+    }
+
+    [TestMethod]
+    public async Task CloseSetupWindow_ForwardingOff_ExitsDirectlyWithoutDialog()
+    {
+        var (h, model) = await SetupPageWithForwardingAsync(false);
+        var exits = 0;
+        model.ExitRequested += () => exits++;
+
+        await UiHost.RunAsync(async () =>
+        {
+            var window = new SetupWindow(model);
+            await UiHost.ShowAsync(window);
+            var before = Application.Current.Windows.OfType<DialogWindow>().ToList();
+
+            window.Close();
+            await UiHost.Settle();
+
+            Assert.AreEqual(0, Application.Current.Windows.OfType<DialogWindow>().Except(before).Count());
+            Assert.AreEqual(1, exits);
+            Assert.AreEqual(1, h.Core.Count("shutdown"));
+        });
+    }
 }
+

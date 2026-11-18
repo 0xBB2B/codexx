@@ -70,6 +70,7 @@ func New(cfg Config) *Server {
 	}
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.ResponseHeaderTimeout = ResponseHeaderTimeout
+	transport.DisableCompression = true
 	s.transport = transport
 	summaryTransport := transport.Clone()
 	summaryTransport.ResponseHeaderTimeout = SummaryResponseHeaderTimeout
@@ -198,11 +199,11 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	if rt.reject || rt.deleted {
+	if rt.reject || rt.failCode != "" {
 		dest = "rejected"
 		code, msg := officialUnavailableError()
-		if rt.deleted {
-			code, msg = relayDeletedError()
+		if rt.failCode != "" {
+			code, msg = rt.failCode, rt.failMsg
 		}
 		sw.Header().Set("Content-Type", "application/json")
 		sw.WriteHeader(http.StatusBadRequest)

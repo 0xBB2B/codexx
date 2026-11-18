@@ -3,6 +3,7 @@ package proxy_test
 import (
 	"bufio"
 	"bytes"
+	"compress/gzip"
 	"errors"
 	"fmt"
 	"io"
@@ -556,5 +557,51 @@ func TestRelayOnly_HealthAndWebSocketUnchanged(t *testing.T) {
 	}
 	if n := e.upstreamHitCount(); n != 0 {
 		t.Fatalf("不应有上游收到请求，实际 %d 次", n)
+	}
+}
+
+func TestForward_DoesNotAddAcceptEncoding(t *testing.T) {
+	t.Parallel()
+	body := []byte(`{"model":"%s","input":[]}`)
+	tests := []struct {
+		name  string
+		model string
+		hdr   map[string]string
+		hit   func(e *testEnv) upstreamHit
+	}{
+		{"中转", relayModel, map[string]string{"Content-Type": "application/json"}, func(e *testEnv) upstreamHit { return e.relay.onlyHit(t) }},
+		{"官方", "official-model", jsonHdr, func(e *testEnv) upstreamHit { return e.api.onlyHit(t) }},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			e := newEnv(t, nil)
+			e.do(t, http.MethodPost, "/v1/responses", tc.hdr, []byte(fmt.Sprintf(string(body), tc.model)))
+			if got := tc.hit(e).Header.Get("Accept-Encoding"); got != "" {
+				t.Fatalf("上游收到的 Accept-Encoding = %q，转发不该自己加", got)
+			}
+		})
+	}
+}
+
+func TestForward_OfficialCompressedBodyPassedThroughUntouched(t *testing.T) {
+	t.Parallel()
+	var packed bytes.Buffer
+	zw := gzip.NewWriter(&packed)
+	_, _ = zw.Write([]byte(upstreamReply))
+	_ = zw.Close()
+
+	e := newEnv(t, nil)
+	e.api.setHandler(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Content-Encoding", "gzip")
+		_, _ = w.Write(packed.Bytes())
+	})
+	resp, got := e.do(t, http.MethodPost, "/v1/responses", jsonHdr, []byte(`{"model":"official-model","input":[]}`))
+	if resp.Header.Get("Content-Encoding") != "gzip" {
+		t.Errorf("Content-Encoding = %q，应保留 gzip", resp.Header.Get("Content-Encoding"))
+	}
+	if !bytes.Equal(got, packed.Bytes()) {
+		t.Errorf("Codex 收到的应是上游的压缩字节，实际 %q", got)
 	}
 }

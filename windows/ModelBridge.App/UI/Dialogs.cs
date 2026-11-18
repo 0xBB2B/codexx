@@ -55,12 +55,19 @@ static class Dialogs
         var request = model.UninstallConfirmRequest();
         var dialog = new DialogWindow(DialogModel.ForConfirm(request));
         UninstallPause? pause = null;
+        var coreNotStarted = false;
         var code = 1;
 
         async Task RunAsync(bool startCore)
         {
             pause = null;
             code = await model.RunHeldUninstallAsync(startCore);
+            if (code == AppModel.UninstallCoreNotStarted)
+            {
+                coreNotStarted = true;
+                dialog.Apply(DialogModel.ForUninstallCoreStartFailed());
+                return;
+            }
             if (code == 2)
             {
                 pause = model.UninstallPause!;
@@ -72,6 +79,11 @@ static class Dialogs
 
         dialog.ButtonHandler = async index =>
         {
+            if (coreNotStarted)
+            {
+                dialog.Close();
+                return;
+            }
             if (pause == null)
             {
                 if (index == 0)
@@ -101,6 +113,30 @@ static class Dialogs
         try { Show(dialog); }
         finally { model.ReleaseUninstall(); }
         return Task.FromResult(pause != null ? 2 : code);
+    }
+
+    public static Task<bool> ShowQuit(AppModel model)
+    {
+        if (!model.TryBeginQuit()) return Task.FromResult(false);
+
+        var request = model.QuitConfirmRequest()!;
+        var dialog = new DialogWindow(DialogModel.ForConfirm(request));
+        var exited = false;
+        dialog.ButtonHandler = async index =>
+        {
+            if (index == 0)
+            {
+                dialog.Close();
+                return;
+            }
+            dialog.Apply(DialogModel.ForConfirm(request, busy: true, busyLabel: "正在还原"));
+            exited = await model.RunHeldQuitAsync();
+            dialog.ForceClose();
+        };
+
+        try { Show(dialog); }
+        finally { model.ReleaseQuit(); }
+        return Task.FromResult(exited);
     }
 
     static int Show(DialogWindow dialog)

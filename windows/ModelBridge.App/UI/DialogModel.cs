@@ -18,13 +18,13 @@ public sealed record DialogModel(
     int EscapeButtonIndex,
     DialogAlert? Alert = null)
 {
-    public static DialogModel ForConfirm(ConfirmRequest request, bool busy = false) => new(
+    public static DialogModel ForConfirm(ConfirmRequest request, bool busy = false, string busyLabel = "正在卸载") => new(
         520,
         request.Title,
         request.Message,
         [
             new(request.CancelText, DialogButtonRole.Secondary, IsDefault: true, IsEnabled: !busy),
-            new(busy ? "正在卸载" : request.ConfirmText, DialogButtonRole.Primary, IsEnabled: !busy, IsBusy: busy),
+            new(busy ? busyLabel : request.ConfirmText, DialogButtonRole.Primary, IsEnabled: !busy, IsBusy: busy),
         ],
         0);
 
@@ -91,6 +91,10 @@ public sealed record DialogModel(
             [new("好", DialogButtonRole.Primary, IsDefault: true)],
             0);
     }
+
+    public static DialogModel ForUninstallCoreStartFailed() => ForInfo(
+        "没能卸载",
+        "后台服务没能启动，卸载没有开始：Codex 配置还没有还原，本助手和它保存的设置都还在。\n\n可以稍后再卸载一次；还是不行的话，重启电脑后再试。");
 
     public static DialogModel ForUninstallLaunchFailed() => new(
         520,

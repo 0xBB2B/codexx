@@ -82,24 +82,25 @@ private final class FreshFittingHostingView<Content: View>: NSHostingView<Conten
     }
 }
 
-private struct UninstallDialogHost: View {
+private struct ModelDialogHost: View {
     @ObservedObject var model: AppModel
+    let currentContent: (AppModel) -> (any DialogContent)?
     let onAction: (DialogAction) -> Void
     let onClosed: () -> Void
     let onContentChanged: () -> Void
 
     private var contentKey: String {
-        guard let content = model.uninstallDialogContent else { return "" }
+        guard let content = currentContent(model) else { return "" }
         return content.title + content.message + content.buttons.map(\.label).joined()
     }
 
     var body: some View {
         Group {
-            if let content = model.uninstallDialogContent {
+            if let content = currentContent(model) {
                 DialogView(model: content, onAction: onAction)
             }
         }
-        .onChange(of: model.uninstallDialogContent == nil) { closed in
+        .onChange(of: currentContent(model) == nil) { closed in
             if closed { onClosed() }
         }
         .onChange(of: contentKey) { _ in onContentChanged() }
@@ -180,8 +181,11 @@ final class DialogPresenter {
 
     init(model: AppModel) {
         self.model = model
-        model.$pendingConfirmation.compactMap { $0 }.filter { !$0.kind.isDeleteRelay && $0.kind != .uninstall }.sink { [weak self] value in
+        model.$pendingConfirmation.compactMap { $0 }.filter { $0.kind == .loginStartOff }.sink { [weak self] value in
             Task { @MainActor in await self?.present(value) }
+        }.store(in: &subscriptions)
+        model.$pendingConfirmation.compactMap { $0 }.filter { $0.kind == .quit }.sink { [weak self] _ in
+            Task { @MainActor in await self?.presentQuit() }
         }.store(in: &subscriptions)
         model.$pendingConfirmation.compactMap { $0 }.filter { $0.kind == .uninstall }.sink { [weak self] _ in
             Task { @MainActor in await self?.presentUninstall() }
@@ -240,6 +244,27 @@ final class DialogPresenter {
         }
     }
 
+    private func presentQuit() async {
+        guard !presenting, model.quitDialogContent != nil else { return }
+        presenting = true
+        let panel = Self.makeModelPanel(
+            model: model,
+            content: { $0.quitDialogContent },
+            onAction: { [model] action in
+                switch action {
+                case .cancel: model.cancelPending()
+                case .confirm: Task { await model.confirmPending() }
+                default: break
+                }
+            },
+            onClosed: { NSApp.stopModal() }
+        )
+        NSApp.activate(ignoringOtherApps: true)
+        NSApp.runModal(for: panel)
+        panel.orderOut(nil)
+        presenting = false
+    }
+
     private func presentUninstall() async {
         guard !presenting, model.uninstallDialogContent != nil else { return }
         presenting = true
@@ -268,9 +293,16 @@ final class DialogPresenter {
     static func makeUninstallPanel(
         model: AppModel, onAction: @escaping (DialogAction) -> Void, onClosed: @escaping () -> Void
     ) -> DialogPanel {
+        makeModelPanel(model: model, content: { $0.uninstallDialogContent }, onAction: onAction, onClosed: onClosed)
+    }
+
+    private static func makeModelPanel(
+        model: AppModel, content: @escaping (AppModel) -> (any DialogContent)?,
+        onAction: @escaping (DialogAction) -> Void, onClosed: @escaping () -> Void
+    ) -> DialogPanel {
         let panel = DialogPanel(contentRect: .zero, styleMask: [.borderless], backing: .buffered, defer: false)
-        let host = FreshFittingHostingView(rootView: UninstallDialogHost(
-            model: model, onAction: onAction, onClosed: onClosed,
+        let host = FreshFittingHostingView(rootView: ModelDialogHost(
+            model: model, currentContent: content, onAction: onAction, onClosed: onClosed,
             onContentChanged: { [weak panel] in
                 DispatchQueue.main.async {
                     guard let panel, let content = panel.contentView else { return }

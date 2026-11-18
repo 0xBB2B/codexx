@@ -106,7 +106,8 @@ public sealed class TrayMenu : IDisposable
                 await uninstall();
                 break;
             case TrayMenuCommand.Quit:
-                await ShowIfNewNoticeAsync(model.QuitAsync);
+                if (model.QuitConfirmRequest() == null) await model.QuitAsync();
+                else await Dialogs.ShowQuit(model);
                 break;
         }
     }
