@@ -69,7 +69,8 @@ a{color:var(--pri)}:focus-visible{outline:2px solid var(--pri);outline-offset:3p
 .ic{width:24px;height:24px;flex:none}
 .nav{position:sticky;top:0;z-index:9;background:var(--bg);border-bottom:1px solid var(--line)}
 .nav-in{height:64px;display:flex;align-items:center;gap:24px}
-.brand{display:flex;align-items:center;gap:8px;text-decoration:none;color:var(--text);min-height:44px}
+.brand{display:flex;align-items:center;gap:8px;text-decoration:none;color:var(--text);min-height:44px;border-radius:8px;padding:0 8px;margin:0 -8px}
+.brand:hover{background:var(--alt)}.brand:active{background:var(--press)}
 .brand .ic{color:var(--pri)}.brand b{font-size:16px}.brand .sub{font-size:14px;color:var(--muted)}
 .links{display:flex;gap:4px;margin-left:auto}
 .links a{font-size:14px;color:var(--muted);text-decoration:none;padding:0 12px;line-height:44px;border-radius:8px}
@@ -145,7 +146,7 @@ button.btn{font-family:inherit;cursor:pointer}
 .small{font-size:12px;margin-top:4px}
 @media (max-width:900px){.links{display:none}.nav-r{margin-left:auto}h1{font-size:36px}.steps,.modes,.safe,.gets{grid-template-columns:1fr}.sec{padding:64px 0}.flow{flex-direction:column}.arrow{transform:rotate(90deg)}}
 @media (max-width:600px){.brand .sub{display:none}.nav-in{gap:12px}.nav-r{gap:8px;margin-left:auto}.wrap{padding:0 16px}.hero{padding:64px 0 48px}h1{font-size:32px}.node{min-width:0}.first{padding:24px}.first dl{grid-template-columns:1fr}.tabs button{padding:0 12px}}
-@media (max-width:400px){.lang button{padding:0 4px}.nav-in{gap:8px}.nav-r{gap:4px}.brand b{font-size:14px}.gh{padding:0}}
+@media (max-width:400px){.lang button{padding:0 4px}.nav-in{gap:8px}.nav-r{gap:4px}.brand b{font-size:14px}.brand{padding-left:4px;padding-right:4px;margin-left:-4px;margin-right:-4px}.gh{padding:0}}
 </style>
 <script>
 const LANG_KEY = 'modelbridge-site-lang';

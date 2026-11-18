@@ -344,3 +344,37 @@ final class CoreRestartSettingsTests: XCTestCase {
         XCTAssertEqual(params.relays, [CoreRelayInit(id: "1", name: "中转", baseURL: "https://a.example.com", apiKey: "sk-a")])
     }
 }
+
+@MainActor
+final class UninstallConfirmationTextTests: XCTestCase {
+    private let body = "卸载会：\n· 关闭转发，把 Codex 配置还原成安装前的样子\n· 从系统钥匙串删除中转 API Key，删除本助手保存的 Base URL\n· 取消「登录时启动」，删除本助手\n\n不会删除 ChatGPT、聊天记录，以及你自己的其他 Codex 设置。"
+
+    private func confirmation(chatGPTRunning: Bool) async -> Confirmation? {
+        let log = CallLog()
+        let model = AppModel(
+            core: FakeCore(log: log), keychain: RelayFakeKeychain(log: log), settings: RelayFakeSettings(log: log),
+            loginItem: FakeLoginItem(log: log), chatGPT: FakeChatGPT(running: chatGPTRunning)
+        )
+        await model.uninstall()
+        return model.pendingConfirmation
+    }
+
+    func testUninstallConfirmation_ChatGPTRunning_BodyEndsWithRestartLine() async throws {
+        let pending = await confirmation(chatGPTRunning: true)
+        let shown = try XCTUnwrap(pending)
+        XCTAssertEqual(shown.kind, .uninstall)
+        XCTAssertEqual(shown.title, "卸载模型接入助手？")
+        XCTAssertEqual(shown.message, body + "\nChatGPT 正在运行，卸载后请重启 ChatGPT。")
+        XCTAssertEqual(shown.cancelLabel, "取消")
+        XCTAssertEqual(shown.confirmLabel, "卸载")
+    }
+
+    func testUninstallConfirmation_ChatGPTNotRunning_BodyHasNoRestartLine() async throws {
+        let pending = await confirmation(chatGPTRunning: false)
+        let shown = try XCTUnwrap(pending)
+        XCTAssertEqual(shown.title, "卸载模型接入助手？")
+        XCTAssertEqual(shown.message, body)
+        XCTAssertEqual(shown.cancelLabel, "取消")
+        XCTAssertEqual(shown.confirmLabel, "卸载")
+    }
+}

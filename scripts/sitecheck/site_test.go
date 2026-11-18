@@ -848,3 +848,87 @@ func TestSite_ButtonGrowsWhenTextWraps(t *testing.T) {
 		}
 	}
 }
+
+func sideValues(rules []map[string]string, prop string) (left, right string) {
+	if v := declared(rules, prop); v != "" {
+		f := strings.Fields(v)
+		switch len(f) {
+		case 1:
+			return f[0], f[0]
+		case 2:
+			return f[1], f[1]
+		case 3:
+			return f[1], f[1]
+		case 4:
+			return f[3], f[1]
+		}
+	}
+	return declared(rules, prop+"-left"), declared(rules, prop+"-right")
+}
+
+func brandBackground(rules []map[string]string) string {
+	if bg := declared(rules, "background"); bg != "" {
+		return bg
+	}
+	return declared(rules, "background-color")
+}
+
+func TestSite_BrandLinkStateColors(t *testing.T) {
+	t.Parallel()
+	html := readSite(t)
+	tests := []struct {
+		pseudo string
+		want   string
+	}{
+		{":hover", "#f5f7fa"},
+		{":active", "#e9edf1"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.pseudo, func(t *testing.T) {
+			t.Parallel()
+			rules := cssDeclarations(html, func(sel string) bool { return sel == ".brand"+tt.pseudo })
+			if len(rules) == 0 {
+				t.Fatalf("没有 .brand%s 规则", tt.pseudo)
+			}
+			if got := brandBackground(rules); got != tt.want {
+				t.Errorf(".brand%s 的背景 = %q，want %s", tt.pseudo, got, tt.want)
+			}
+			if got := declared(rules, "color"); got != "" {
+				t.Errorf(".brand%s 不应改 color，实际 %q", tt.pseudo, got)
+			}
+		})
+	}
+}
+
+func TestSite_BrandLinkBox(t *testing.T) {
+	t.Parallel()
+	rules := cssDeclarations(readSite(t), func(sel string) bool { return sel == ".brand" })
+	if got := declared(rules, "min-height"); got != "44px" {
+		t.Errorf(".brand 的 min-height = %q，want 44px", got)
+	}
+	if got := declared(rules, "border-radius"); got != "8px" {
+		t.Errorf(".brand 的 border-radius = %q，want 8px", got)
+	}
+	if l, r := sideValues(rules, "padding"); l != "8px" || r != "8px" {
+		t.Errorf(".brand 左右 padding = %q/%q，want 8px/8px", l, r)
+	}
+	if l, r := sideValues(rules, "margin"); l != "-8px" || r != "-8px" {
+		t.Errorf(".brand 左右 margin = %q/%q，want -8px/-8px", l, r)
+	}
+}
+
+func TestSite_BrandLinkNarrowScreen(t *testing.T) {
+	t.Parallel()
+	var found bool
+	for _, block := range regexp.MustCompile(`@media\s*\(max-width:\s*400px\)\s*\{(?:[^{}]*\{[^{}]*\})*\s*\}`).FindAllString(readSite(t), -1) {
+		rules := cssDeclarations(block, func(sel string) bool { return sel == ".brand" })
+		pl, pr := sideValues(rules, "padding")
+		ml, mr := sideValues(rules, "margin")
+		if pl == "4px" && pr == "4px" && ml == "-4px" && mr == "-4px" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("max-width:400px 媒体查询里没有把 .brand 的左右 padding 设为 4px、左右 margin 设为 -4px")
+	}
+}

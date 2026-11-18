@@ -75,6 +75,22 @@
       "source": "https://help.aliyun.com/zh/model-studio/text-generation-model（2026-11-11 核对）"
     },
     {
+      "id": "qwen4-max",
+      "context_window": 1000000,
+      "input_modalities": [
+        "text",
+        "image"
+      ],
+      "reasoning_levels": [
+        "none",
+        "low",
+        "high",
+        "xhigh"
+      ],
+      "default_reasoning_level": "high",
+      "source": "https://help.aliyun.com/zh/model-studio/qwen4-max 与 https://help.aliyun.com/zh/model-studio/qwen-api-via-openai-chat-completions（2026-11-18 核对：reasoning_effort 可选 low/high/xhigh，默认 high，none 关闭思考；1M 上下文；支持文字、图片和视频，视频在这里不记）"
+    },
+    {
       "id": "qwen3.8-flash",
       "context_window": 1000000,
       "input_modalities": [

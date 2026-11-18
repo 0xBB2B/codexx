@@ -96,9 +96,8 @@ public partial class App : Application
 
     async Task<int> RunHeadlessUninstallAsync()
     {
-        await model!.StartAsync();
         var before = NoticeIds();
-        var code = await RunUninstallAsync();
+        var code = await RunUninstallAsync(model!.RunHeadlessUninstallAsync);
         if (code == 1 && model.Notices.LastOrDefault(n => !before.Contains(n.Id)) is { } notice)
             Dialogs.Show(DialogModel.ForInfo(notice.Title, notice.Detail));
         await model.StopCoreAsync();
@@ -107,9 +106,12 @@ public partial class App : Application
 
     HashSet<Guid> NoticeIds() => model!.Notices.Select(n => n.Id).ToHashSet();
 
-    async Task<int> RunUninstallAsync()
+    Task<int> RunUninstallAsync() => RunUninstallAsync(model!.UninstallAsync);
+
+    async Task<int> RunUninstallAsync(Func<Task<int>> first)
     {
-        var code = await model!.UninstallAsync();
+        var code = await first();
+        var model = this.model!;
         while (code == 2)
         {
             var pause = model.UninstallPause!;

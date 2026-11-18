@@ -693,7 +693,8 @@ final class AppModel: ObservableObject {
         pendingConfirmation = Confirmation(
             kind: .uninstall,
             title: "卸载模型接入助手？",
-            message: "会还原 Codex 配置，删除钥匙串里保存的 API Key、助手的设置文件，并取消登录时启动。不会删除 ChatGPT 和 Codex 自己的文件。",
+            message: "卸载会：\n· 关闭转发，把 Codex 配置还原成安装前的样子\n· 从系统钥匙串删除中转 API Key，删除本助手保存的 Base URL\n· 取消「登录时启动」，删除本助手\n\n不会删除 ChatGPT、聊天记录，以及你自己的其他 Codex 设置。"
+                + (chatGPT.isRunning() ? "\nChatGPT 正在运行，卸载后请重启 ChatGPT。" : ""),
             confirmLabel: "卸载"
         )
     }

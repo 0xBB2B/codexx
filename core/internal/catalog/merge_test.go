@@ -257,3 +257,40 @@ func TestMerge_MaxLevelWrittenAsUltraAcrossGroups(t *testing.T) {
 		t.Errorf("default_reasoning_level = %v", got)
 	}
 }
+
+func TestMerge_RelayQwen4MaxFromBuiltinParams(t *testing.T) {
+	t.Parallel()
+	params, err := catalog.BuiltinParams()
+	if err != nil {
+		t.Fatal(err)
+	}
+	official := officialFixture()
+	paramOnly, sameName := catalog.RelayNames([]string{"qwen4-max"}, params, official)
+	if len(paramOnly) != 1 || len(sameName) != 0 {
+		t.Fatalf("paramOnly = %v, sameName = %v，qwen4-max 应只命中参数表", paramOnly, sameName)
+	}
+	res, err := catalog.MergeRelay(official, []catalog.RelayGroup{{ID: "1", Name: "主力", ParamOnly: paramOnly}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	models := roundtrip(t, res.Models)
+	if len(models) != 4 {
+		t.Fatalf("len = %d，应为官方 3 条加 qwen4-max", len(models))
+	}
+	e := models[3]
+	if e["slug"] != "relay-qwen4-max" {
+		t.Fatalf("slug = %v", e["slug"])
+	}
+	if e["default_reasoning_level"] != "high" {
+		t.Errorf("default_reasoning_level = %v", e["default_reasoning_level"])
+	}
+	wantLevels := []any{
+		map[string]any{"effort": "none", "description": "none"},
+		map[string]any{"effort": "low", "description": "low"},
+		map[string]any{"effort": "high", "description": "high"},
+		map[string]any{"effort": "xhigh", "description": "xhigh"},
+	}
+	if !reflect.DeepEqual(e["supported_reasoning_levels"], wantLevels) {
+		t.Errorf("supported_reasoning_levels = %#v", e["supported_reasoning_levels"])
+	}
+}

@@ -15,6 +15,7 @@ sealed class FakeCore(List<string> log) : ICoreClient
     public List<(string Method, Params Params)> Calls { get; } = [];
     public Exception? StartException { get; set; }
     public CoreInitParams? StartedWith { get; private set; }
+    public int StartCount { get; private set; }
 
     public event Action<JsonElement>? StatusReceived;
     public event Action<string>? Failed;
@@ -22,6 +23,7 @@ sealed class FakeCore(List<string> log) : ICoreClient
     public Task StartAsync(CoreInitParams init)
     {
         StartedWith = init;
+        StartCount++;
         return StartException is { } ex ? Task.FromException(ex) : Task.CompletedTask;
     }
 
@@ -1045,6 +1047,103 @@ public class AppModelTests
 
         Assert.AreEqual(1, h.Confirmer.Requests.Count);
         Assert.IsFalse(h.Model.Uninstalled!.ChatGptRunning);
+    }
+
+    [TestMethod]
+    public async Task HeadlessUninstall_Cancel_Returns1_CoreNeverStartedNorCalled()
+    {
+        var h = new Harness();
+        h.Seed("1", "中转", "https://relay.example.com", "sk-example-0001");
+        h.Confirmer.Answer = _ => false;
+
+        var code = await h.Model.RunHeadlessUninstallAsync();
+
+        Assert.AreEqual(1, code);
+        Assert.AreEqual(1, h.Confirmer.Requests.Count);
+        Assert.IsNull(h.Core.StartedWith);
+        Assert.AreEqual(0, h.Core.Calls.Count);
+        Assert.AreEqual(0, h.Vault.DeleteAllCount);
+        Assert.AreEqual(0, h.Settings.DeleteCount);
+        Assert.AreEqual(0, h.Login.DisableCount);
+        Assert.AreEqual(1, h.Vault.Keys.Count);
+        Assert.AreEqual(1, h.Settings.Relays.Count);
+    }
+
+    [TestMethod]
+    public async Task HeadlessUninstall_CancelWithForwardingOn_NoCoreStartNoForwardingRewrite()
+    {
+        var h = new Harness();
+        h.Seed("1", "中转", "https://relay.example.com", "sk-example-0001");
+        h.ForwardingOn();
+        h.Confirmer.Answer = _ => false;
+
+        var code = await h.Model.RunHeadlessUninstallAsync();
+
+        Assert.AreEqual(1, code);
+        Assert.IsNull(h.Core.StartedWith);
+        Assert.AreEqual(0, h.Core.Count("set_forwarding"));
+        Assert.AreEqual(0, h.Core.Calls.Count);
+        Assert.AreEqual(0, h.Core.StopCount);
+    }
+
+    [TestMethod]
+    public async Task HeadlessUninstall_Confirm_StartsCoreAfterConfirm_ThenPreparesAndCleans_ExitCode0()
+    {
+        var h = new Harness();
+        h.Seed("1", "中转", "https://relay.example.com", "sk-example-0001");
+
+        var code = await h.Model.RunHeadlessUninstallAsync();
+
+        Assert.AreEqual(0, code);
+        Assert.IsNotNull(h.Core.StartedWith);
+        var confirm = h.Log.IndexOf("confirm");
+        var prepare = h.Log.IndexOf("call:prepare_uninstall");
+        Assert.IsTrue(confirm >= 0 && prepare > confirm);
+        Assert.AreEqual(1, h.Confirmer.Requests.Count);
+        Assert.AreEqual(1, h.Vault.DeleteAllCount);
+        Assert.AreEqual(1, h.Settings.DeleteCount);
+        Assert.AreEqual(1, h.Login.DisableCount);
+    }
+
+    [TestMethod]
+    public async Task HeadlessUninstall_ConfirmThenRestoreBlocked_Returns2_NothingCleaned()
+    {
+        var h = new Harness();
+        h.Seed("1", "中转", "https://relay.example.com", "sk-example-0001");
+        h.Core.Fail("prepare_uninstall", "restore_blocked", "model_provider");
+
+        var code = await h.Model.RunHeadlessUninstallAsync();
+
+        Assert.AreEqual(2, code);
+        Assert.AreEqual(0, h.Vault.DeleteAllCount);
+        Assert.AreEqual(0, h.Settings.DeleteCount);
+    }
+
+    [TestMethod]
+    public async Task HeadlessUninstall_RestoreBlockedThenRecheck_CoreStartedOnce_NoSecondConfirm_CleansOnce()
+    {
+        var h = new Harness();
+        h.Seed("1", "中转", "https://relay.example.com", "sk-example-0001");
+        var attempts = 0;
+        h.Core.OnAsync("prepare_uninstall", _ => ++attempts == 1
+            ? Task.FromException<JsonElement>(new CoreCallException("restore_blocked", ["model_provider"]))
+            : Task.FromResult(Json.Parse("{}")));
+
+        var first = await h.Model.RunHeadlessUninstallAsync();
+
+        Assert.AreEqual(2, first);
+        Assert.AreEqual(1, h.Core.StartCount);
+        Assert.IsNotNull(h.Model.UninstallPause);
+
+        var second = await h.Model.RecheckUninstallAsync();
+
+        Assert.AreEqual(0, second);
+        Assert.AreEqual(1, h.Confirmer.Requests.Count);
+        Assert.AreEqual(1, h.Core.StartCount);
+        Assert.AreEqual(2, h.Core.Count("prepare_uninstall"));
+        Assert.AreEqual(1, h.Vault.DeleteAllCount);
+        Assert.AreEqual(1, h.Settings.DeleteCount);
+        Assert.AreEqual(1, h.Login.DisableCount);
     }
 
     #endregion

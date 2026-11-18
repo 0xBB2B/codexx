@@ -124,3 +124,26 @@ func TestLoadParams_ParsesFields(t *testing.T) {
 		t.Errorf("default_reasoning_level 不对")
 	}
 }
+
+func TestBuiltinParams_ContainsQwen4Max(t *testing.T) {
+	t.Parallel()
+	params, err := catalog.BuiltinParams()
+	if err != nil {
+		t.Fatalf("BuiltinParams: %v", err)
+	}
+	for _, p := range params {
+		if p.ID != "qwen4-max" {
+			continue
+		}
+		if p.ContextWindow != 1000000 || !reflect.DeepEqual(p.InputModalities, []string{"text", "image"}) ||
+			!reflect.DeepEqual(p.ReasoningLevels, []string{"none", "low", "high", "xhigh"}) ||
+			p.DefaultReasoningLevel == nil || *p.DefaultReasoningLevel != "high" {
+			t.Errorf("qwen4-max 参数不对: %+v", p)
+		}
+		if p.Source == "" {
+			t.Errorf("source 为空")
+		}
+		return
+	}
+	t.Fatal("参数表缺少 qwen4-max")
+}

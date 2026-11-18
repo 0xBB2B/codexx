@@ -979,6 +979,8 @@ public sealed class AppModel : IRelayFields
 
     public Task<int> UninstallAsync() => RunUninstallAsync(true);
 
+    public Task<int> RunHeadlessUninstallAsync() => RunUninstallAsync(true, true);
+
     public Task<int> RecheckUninstallAsync() => RunUninstallAsync(false);
 
     bool RejectWhileConnecting()
@@ -988,7 +990,7 @@ public sealed class AppModel : IRelayFields
         return true;
     }
 
-    async Task<int> RunUninstallAsync(bool askFirst)
+    async Task<int> RunUninstallAsync(bool askFirst, bool startCoreAfterConfirm = false)
     {
         if (RejectWhileConnecting() || busy) return 1;
 
@@ -1005,6 +1007,8 @@ public sealed class AppModel : IRelayFields
                     "卸载");
                 if (!await confirmer.ConfirmAsync(request)) return 1;
             }
+
+            if (startCoreAfterConfirm) await StartAsync();
 
             UninstallPause = null;
             ProgressText = "正在卸载";
