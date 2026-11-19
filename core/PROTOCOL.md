@@ -24,7 +24,7 @@
 | refresh_models | {"id": 字符串或 null} | Status（id 为 null 刷新全部配置；转发开但本机转发服务没在运行时先重试启动） |
 | detect_access | {} | Status（只检测登录状态，更新 access.target 和 access.detect，不改 Codex 配置） |
 | apply_access | {} | Status（转发开着且 access.target 与 access.mode 不同时，按 target 切换接入方式；否则不改动） |
-| check_update | {"manual": 布尔} | {"latest_version": 字符串或 null, "url": 字符串或 null, "is_newer": 布尔} |
+| check_update | {"manual": 布尔} | {"latest_version": 字符串或 null, "url": 字符串或 null, "installer": 布尔, "is_newer": 布尔} |
 | prepare_uninstall | {} | {} |
 | shutdown | {"restore": 布尔} | {}（随后进程退出） |
 
@@ -42,9 +42,11 @@
   "taken_over": ["openai_base_url"],
   "restore_blocked": [],
   "config_path": "/Users/x/.codex/config.toml",
-  "update": {"latest_version": null, "url": null},
+  "update": {"latest_version": null, "url": null, "installer": false},
   "access": {"mode": "both", "target": "relay", "detect": "not_logged_in"}
 }
+
+`update.url` 在 `installer` 为 true 时是本平台安装包（macOS `model-bridge-<版本>-macos.dmg`，Windows `model-bridge-<版本>-windows-setup.exe`）的下载地址；为 false 时是这个版本的发布页。
 
 `relays` 按配置顺序列出每个中转配置这次的模型情况：`model_count` 是这次 Codex 里可用的模型数（获取失败时为沿用的缓存数，从没成功过为 0），`fetched_at` 是最近一次成功获取的时间（从没成功过为 null），`stale` 为 true 表示这次没获取成功，`error` 是失败原因的错误码。`default_relay` 是「只用中转」方式下默认模型所在配置的名字，没有任何配置有 auto 时为 null。
 

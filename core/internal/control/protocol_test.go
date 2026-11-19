@@ -297,6 +297,9 @@ func TestServe_StatusShape(t *testing.T) {
 	if v, ok := update["latest_version"]; !ok || v != nil {
 		t.Errorf("update = %v", update)
 	}
+	if v, ok := update["installer"]; !ok || v != false {
+		t.Errorf("update.installer = %v (存在=%v), want false", v, ok)
+	}
 
 	again := c.result("status", map[string]any{})
 	if !reflect.DeepEqual(again, res) {
@@ -438,6 +441,35 @@ func TestServe_CheckUpdate(t *testing.T) {
 		if res["is_newer"] != false || res["latest_version"] != nil || res["url"] != nil {
 			t.Errorf("manual=%v res=%v", manual, res)
 		}
+		if v, ok := res["installer"]; !ok || v != false {
+			t.Errorf("manual=%v installer = %v (存在=%v), want false", manual, v, ok)
+		}
+	}
+}
+
+func TestServe_CheckUpdateAndStatusCarryInstaller(t *testing.T) {
+	e := newEnv(t, false)
+	g := newGitHubStub(t, "v1.3.0")
+	g.setBody(releaseBodyWithInstaller("v1.3.0"))
+	c := startServe(t, withUpdate(e.opts, g, nil))
+	c.result("init", initParams(e))
+
+	wantURL, wantInstaller := wantInstallerURL("v1.3.0")
+	res := c.result("check_update", map[string]any{"manual": true})
+	if v, ok := res["installer"]; !ok || v != wantInstaller {
+		t.Errorf("check_update installer = %v (存在=%v), want %v", v, ok, wantInstaller)
+	}
+	if res["url"] != wantURL {
+		t.Errorf("check_update url = %v, want %q", res["url"], wantURL)
+	}
+
+	st := c.result("status", map[string]any{})
+	up, _ := st["update"].(map[string]any)
+	if v, ok := up["installer"]; !ok || v != wantInstaller {
+		t.Errorf("status.update installer = %v (存在=%v), want %v", v, ok, wantInstaller)
+	}
+	if up["url"] != wantURL {
+		t.Errorf("status.update url = %v, want %q", up["url"], wantURL)
 	}
 }
 

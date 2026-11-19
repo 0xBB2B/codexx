@@ -484,3 +484,66 @@ func TestCheck_EmptyTagNotNewerAndNoError(t *testing.T) {
 		t.Errorf("缺失 tag_name: res=%+v err=%v", res, err)
 	}
 }
+
+func TestCheck_InstallerAsset(t *testing.T) {
+	const (
+		htmlURL = "https://github.com/o/r/releases/tag/v0.1.2"
+		dmgURL  = "https://github.com/o/r/releases/download/v0.1.2/model-bridge-0.1.2-macos.dmg"
+		exeURL  = "https://github.com/o/r/releases/download/v0.1.2/model-bridge-0.1.2-windows-setup.exe"
+	)
+	asset := func(name, url string) string {
+		return fmt.Sprintf(`{"name":%q,"browser_download_url":%q}`, name, url)
+	}
+	both := "[" + asset("model-bridge-0.1.2-macos.dmg", dmgURL) + "," + asset("model-bridge-0.1.2-windows-setup.exe", exeURL) + "]"
+	tests := []struct {
+		name          string
+		current       string
+		assets        string
+		suffix        string
+		wantURL       string
+		wantInstaller bool
+		wantNewer     bool
+	}{
+		{name: "macOS 找到 dmg", assets: both, suffix: "-macos.dmg", wantURL: dmgURL, wantInstaller: true, wantNewer: true},
+		{name: "Windows 找到 setup.exe", assets: both, suffix: "-windows-setup.exe", wantURL: exeURL, wantInstaller: true, wantNewer: true},
+		{name: "版本号对不上", assets: "[" + asset("model-bridge-0.1.1-macos.dmg", dmgURL) + "]", suffix: "-macos.dmg", wantURL: htmlURL, wantNewer: true},
+		{name: "文件名不规范", assets: "[" + asset("ModelBridge.dmg", dmgURL) + "]", suffix: "-macos.dmg", wantURL: htmlURL, wantNewer: true},
+		{name: "文件名带多余前缀", assets: "[" + asset("x-model-bridge-0.1.2-macos.dmg", dmgURL) + "]", suffix: "-macos.dmg", wantURL: htmlURL, wantNewer: true},
+		{name: "平台后缀对不上", assets: "[" + asset("model-bridge-0.1.2-macos.dmg", dmgURL) + "]", suffix: "-windows-setup.exe", wantURL: htmlURL, wantNewer: true},
+		{name: "下载地址不是 github", assets: "[" + asset("model-bridge-0.1.2-macos.dmg", "https://example.com/model-bridge-0.1.2-macos.dmg") + "]", suffix: "-macos.dmg", wantURL: htmlURL, wantNewer: true},
+		{name: "下载地址是 http", assets: "[" + asset("model-bridge-0.1.2-macos.dmg", "http://github.com/o/r/releases/download/v0.1.2/model-bridge-0.1.2-macos.dmg") + "]", suffix: "-macos.dmg", wantURL: htmlURL, wantNewer: true},
+		{name: "附件为空数组", assets: "[]", suffix: "-macos.dmg", wantURL: htmlURL, wantNewer: true},
+		{name: "附件缺失", assets: "", suffix: "-macos.dmg", wantURL: htmlURL, wantNewer: true},
+		{name: "后缀为空串", assets: both, suffix: "", wantURL: htmlURL, wantNewer: true},
+		{name: "不是新版", current: "0.1.2", assets: both, suffix: "-macos.dmg"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			g := newFakeGitHub(t, "v0.1.2")
+			body := fmt.Sprintf(`{"tag_name":"v0.1.2","html_url":%q`, htmlURL)
+			if tt.assets != "" {
+				body += `,"assets":` + tt.assets
+			}
+			g.respond(200, body+"}")
+			cfg := g.cfg()
+			cfg.CurrentVersion = "0.1.1"
+			if tt.current != "" {
+				cfg.CurrentVersion = tt.current
+			}
+			cfg.AssetSuffix = tt.suffix
+			res, err := update.Check(context.Background(), cfg)
+			if err != nil {
+				t.Fatalf("Check: %v", err)
+			}
+			if res.IsNewer != tt.wantNewer {
+				t.Fatalf("IsNewer = %v, want %v", res.IsNewer, tt.wantNewer)
+			}
+			if res.Installer != tt.wantInstaller {
+				t.Errorf("Installer = %v, want %v", res.Installer, tt.wantInstaller)
+			}
+			if res.URL != tt.wantURL {
+				t.Errorf("URL = %q, want %q", res.URL, tt.wantURL)
+			}
+		})
+	}
+}

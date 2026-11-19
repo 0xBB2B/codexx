@@ -28,12 +28,14 @@ type Config struct {
 	APIBase        string
 	Repository     string
 	CurrentVersion string
+	AssetSuffix    string
 }
 
 type Result struct {
 	IsNewer       bool
 	LatestVersion string
 	URL           string
+	Installer     bool
 }
 
 type Clock interface {
@@ -68,8 +70,9 @@ func Check(ctx context.Context, cfg Config) (Result, error) {
 		return Result{}, fmt.Errorf("release 接口返回 %d", resp.StatusCode)
 	}
 	var rel struct {
-		TagName string `json:"tag_name"`
-		HTMLURL string `json:"html_url"`
+		TagName string  `json:"tag_name"`
+		HTMLURL string  `json:"html_url"`
+		Assets  []asset `json:"assets"`
 	}
 	if err := json.NewDecoder(io.LimitReader(resp.Body, maxBodyBytes)).Decode(&rel); err != nil {
 		return Result{}, err
@@ -83,7 +86,30 @@ func Check(ctx context.Context, cfg Config) (Result, error) {
 	if !ok || !(latest.Newer(current) || preRelease && latest == current) || !strings.HasPrefix(rel.HTMLURL, releaseURLBase) {
 		return Result{}, nil
 	}
-	return Result{IsNewer: true, LatestVersion: strings.TrimPrefix(rel.TagName, "v"), URL: rel.HTMLURL}, nil
+	version := strings.TrimPrefix(rel.TagName, "v")
+	res := Result{IsNewer: true, LatestVersion: version, URL: rel.HTMLURL}
+	if u, ok := installerURL(rel.Assets, version, cfg.AssetSuffix); ok {
+		res.URL, res.Installer = u, true
+	}
+	return res, nil
+}
+
+type asset struct {
+	Name string `json:"name"`
+	URL  string `json:"browser_download_url"`
+}
+
+func installerURL(assets []asset, version, suffix string) (string, bool) {
+	if suffix == "" {
+		return "", false
+	}
+	want := "model-bridge-" + version + suffix
+	for _, a := range assets {
+		if a.Name == want && strings.HasPrefix(a.URL, releaseURLBase) {
+			return a.URL, true
+		}
+	}
+	return "", false
 }
 
 func Loop(ctx context.Context, clock Clock, check func(context.Context)) {
