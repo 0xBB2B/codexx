@@ -7,7 +7,8 @@ using System.Diagnostics;
 
 namespace ModelBridge.Services;
 
-public sealed class ChatGptLocator(string localAppData, Func<IEnumerable<string>> runningPaths)
+public sealed class ChatGptLocator(
+    string localAppData, Func<IEnumerable<string>> runningPaths, Func<IEnumerable<string>> storePackageDirs)
 {
     static readonly string[][] InstallDirs =
     [
@@ -43,6 +44,23 @@ public sealed class ChatGptLocator(string localAppData, Func<IEnumerable<string>
                     var candidate = Path.Combine(searchDir, exe);
                     if (File.Exists(candidate)) return candidate;
                 }
+        }
+        return FindInStorePackages();
+    }
+
+    string? FindInStorePackages()
+    {
+        try
+        {
+            foreach (var packageDir in storePackageDirs())
+            {
+                var candidate = Path.Combine(packageDir, "app", "ChatGPT.exe");
+                if (File.Exists(candidate)) return candidate;
+            }
+        }
+        catch (Exception)
+        {
+            // 商店包查询依赖系统接口，失败时当作没装商店版，不影响其他安装位置的结果
         }
         return null;
     }
@@ -87,8 +105,17 @@ public sealed class ChatGptApp
         this.sessionId = sessionId;
     }
 
-    public string? Locate() => new ChatGptLocator(
-        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), RunningPaths).Find();
+    public string? Locate()
+    {
+        var exe = new ChatGptLocator(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), RunningPaths, StorePackageDirs).Find();
+        return exe is null ? null : Path.GetDirectoryName(exe);
+    }
+
+    static IEnumerable<string> StorePackageDirs() =>
+        new Windows.Management.Deployment.PackageManager()
+            .FindPackagesForUser(string.Empty, "OpenAI.Codex_2p2nqsd0c76g0")
+            .Select(p => p.InstalledLocation.Path);
 
     public bool IsRunning()
     {

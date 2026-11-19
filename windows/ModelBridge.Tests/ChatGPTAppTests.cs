@@ -29,7 +29,12 @@ public class ChatGPTAppTests
         return path;
     }
 
-    ChatGptLocator Locator(params string[] runningPaths) => new(localAppData, () => runningPaths);
+    ChatGptLocator Locator(params string[] runningPaths) => new(localAppData, () => runningPaths, () => []);
+
+    ChatGptLocator LocatorWithStore(Func<IEnumerable<string>> storePackageDirs, params string[] runningPaths) =>
+        new(localAppData, () => runningPaths, storePackageDirs);
+
+    const string StorePackage = "WindowsApps/OpenAI.Codex_26.1111.2228.0_x64__2p2nqsd0c76g0";
 
     [TestMethod]
     [DataRow("Programs/ChatGPT/ChatGPT.exe")]
@@ -86,6 +91,59 @@ public class ChatGPTAppTests
         Assert.AreEqual(running, Locator(running).Find());
     }
 
+    [TestMethod]
+    public void Find_StorePackageInstalled_ReturnsAppExePath()
+    {
+        var expected = Touch(StorePackage + "/app/ChatGPT.exe");
+        var packageDir = Path.GetDirectoryName(Path.GetDirectoryName(expected))!;
+
+        Assert.AreEqual(expected, LocatorWithStore(() => [packageDir]).Find());
+    }
+
+    [TestMethod]
+    public void Find_StorePackageWithoutAppExe_ReturnsNull()
+    {
+        var packageDir = Path.Combine(localAppData, StorePackage.Replace('/', Path.DirectorySeparatorChar));
+        Directory.CreateDirectory(packageDir);
+        Touch(StorePackage + "/other/ChatGPT.exe");
+
+        Assert.IsNull(LocatorWithStore(() => [packageDir]).Find());
+    }
+
+    [TestMethod]
+    public void Find_StorePackageQueryThrows_ReturnsNull()
+    {
+        Assert.IsNull(LocatorWithStore(() => throw new InvalidOperationException("系统接口失败")).Find());
+    }
+
+    [TestMethod]
+    public void Find_StorePackageQueryThrows_StillFindsKnownDirectory()
+    {
+        var expected = Touch("Programs/ChatGPT/ChatGPT.exe");
+
+        Assert.AreEqual(expected, LocatorWithStore(() => throw new InvalidOperationException("系统接口失败")).Find());
+    }
+
+    [TestMethod]
+    public void Find_RunningProcessPath_TakesPrecedenceOverStorePackage()
+    {
+        var running = Touch("Elsewhere/Codex.exe");
+        var storeExe = Touch(StorePackage + "/app/ChatGPT.exe");
+        var packageDir = Path.GetDirectoryName(Path.GetDirectoryName(storeExe))!;
+
+        Assert.AreEqual(running, LocatorWithStore(() => [packageDir], running).Find());
+    }
+
+    [TestMethod]
+    public void Find_KnownDirectory_TakesPrecedenceOverStorePackage()
+    {
+        var known = Touch("Programs/ChatGPT/ChatGPT.exe");
+        var storeExe = Touch(StorePackage + "/app/ChatGPT.exe");
+        var packageDir = Path.GetDirectoryName(Path.GetDirectoryName(storeExe))!;
+
+        Assert.AreEqual(known, LocatorWithStore(() => [packageDir]).Find());
+    }
+
     sealed class FakeProcess(int sessionId, string? path) : IChatGptProcess
     {
         public bool Disposed;
@@ -123,18 +181,18 @@ public class ChatGPTAppTests
         var otherPath = Touch("Elsewhere/Codex.exe");
         var other = new FakeProcess(OtherSession, otherPath);
 
-        Assert.AreNotEqual(otherPath, AppWith(other).Locate());
+        Assert.AreNotEqual(Path.GetDirectoryName(otherPath), AppWith(other).Locate());
         Assert.IsTrue(other.Disposed);
     }
 
     [TestMethod]
-    public void Locate_RunningPathInOwnSession_IsReturnedAndEveryProcessDisposed()
+    public void Locate_RunningPathInOwnSession_ReturnsItsFolderAndEveryProcessDisposed()
     {
         var ownPath = Touch("Elsewhere/Codex.exe");
         var first = new FakeProcess(MySession, ownPath);
         var second = new FakeProcess(MySession, ownPath);
 
-        Assert.AreEqual(ownPath, AppWith(first, second).Locate());
+        Assert.AreEqual(Path.GetDirectoryName(ownPath), AppWith(first, second).Locate());
         Assert.IsTrue(first.Disposed);
         Assert.IsTrue(second.Disposed);
     }
@@ -170,13 +228,13 @@ public class ChatGPTAppTests
     }
 
     [TestMethod]
-    public void Locate_ProcessExitsWhileReadingSessionId_SkipsItAndReturnsOwnPath()
+    public void Locate_ProcessExitsWhileReadingSessionId_SkipsItAndReturnsOwnFolder()
     {
         var ownPath = Touch("Elsewhere/Codex.exe");
         var gone = new SessionGoneProcess();
         var own = new FakeProcess(MySession, ownPath);
 
-        Assert.AreEqual(ownPath, new ChatGptApp(() => new IChatGptProcess[] { gone, own }, MySession).Locate());
+        Assert.AreEqual(Path.GetDirectoryName(ownPath), new ChatGptApp(() => new IChatGptProcess[] { gone, own }, MySession).Locate());
         Assert.IsTrue(gone.Disposed);
         Assert.IsTrue(own.Disposed);
     }
