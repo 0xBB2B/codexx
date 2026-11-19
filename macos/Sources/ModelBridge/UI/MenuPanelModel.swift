@@ -21,7 +21,7 @@ struct MenuPanelModel {
         subtitle = model.menuStatusLine
         let update: MenuPanelItem
         if let available = model.availableUpdate {
-            update = MenuPanelItem(id: .update, title: "发现新版本 \(available.version)", subtitle: "打开下载页")
+            update = MenuPanelItem(id: .update, title: "发现新版本 \(available.version)", subtitle: available.installer ? "下载安装包" : "打开下载页")
         } else {
             update = MenuPanelItem(id: .update, title: "检查更新")
         }

@@ -92,6 +92,7 @@ struct CoreStatus: Codable, Sendable, Equatable {
     struct Update: Codable, Sendable, Equatable {
         var latestVersion: String?
         var url: String?
+        var installer: Bool?
     }
 
     struct Access: Codable, Sendable, Equatable {

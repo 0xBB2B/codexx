@@ -215,7 +215,7 @@ struct StatusFooter: View {
                     Text("新版本 \(update.version)").lineLimit(1).fixedSize(horizontal: true, vertical: false)
                 }
                 .linkAction()
-                .accessibilityLabel("发现新版本 \(update.version)，打开下载页")
+                .accessibilityLabel("发现新版本 \(update.version)，\(update.installer ? "下载安装包" : "打开下载页")")
             } else {
                 Button("检查更新") { Task { await model.checkUpdate() } }.linkAction()
             }

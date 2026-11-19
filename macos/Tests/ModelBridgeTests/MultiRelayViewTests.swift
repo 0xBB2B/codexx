@@ -507,6 +507,48 @@ final class StatusFooterUpdateTests: XCTestCase {
         XCTAssertFalse(view.hasExactly("打开下载页"))
     }
 
+    private func footerAfterCheckUpdate(url: String, installer: String) async -> RenderedView {
+        let f = await ViewFixture.make(responses: [
+            "check_update": .success(Data(#"{"latest_version":"0.1.2","url":"\#(url)",\#(installer)"is_newer":true}"#.utf8)),
+        ])
+        await f.model.checkUpdate()
+        return RenderedView(StatusFooter(model: f.model).frame(width: 760))
+    }
+
+    func testFooter_InstallerTrue_LabelSaysDownloadInstaller() async {
+        let view = await footerAfterCheckUpdate(
+            url: "https://github.com/o/r/releases/download/v0.1.2/model-bridge-0.1.2-macos.dmg", installer: #""installer":true,"#
+        )
+        XCTAssertTrue(view.hasExactly("发现新版本 0.1.2，下载安装包"))
+        XCTAssertTrue(view.has("新版本 0.1.2"))
+        XCTAssertFalse(view.hasExactly("发现新版本 0.1.2，打开下载页"))
+    }
+
+    func testFooter_InstallerFalse_LabelSaysOpenDownloadPage() async {
+        let view = await footerAfterCheckUpdate(url: "https://github.com/o/r/releases/tag/v0.1.2", installer: #""installer":false,"#)
+        XCTAssertTrue(view.hasExactly("发现新版本 0.1.2，打开下载页"))
+        XCTAssertTrue(view.has("新版本 0.1.2"))
+    }
+
+    func testFooter_InstallerMissing_LabelSaysOpenDownloadPage() async {
+        let view = await footerAfterCheckUpdate(url: "https://github.com/o/r/releases/tag/v0.1.2", installer: "")
+        XCTAssertTrue(view.hasExactly("发现新版本 0.1.2，打开下载页"))
+    }
+
+    func testFooter_StatusPushInstallerTrue_LabelSaysDownloadInstaller() async {
+        let f = await ViewFixture.make()
+        let json = ViewFixture.statusJSON(forwarding: true, relayCount: 1)
+            .replacingOccurrences(
+                of: #""update":{"latest_version":null,"url":null}"#,
+                with: #""update":{"latest_version":"0.1.2","url":"https://github.com/o/r/releases/download/v0.1.2/model-bridge-0.1.2-macos.dmg","installer":true}"#
+            )
+        f.core.statusContinuation.yield(Self.decode(json))
+        await awaitUntil { f.model.availableUpdate != nil }
+        let view = RenderedView(StatusFooter(model: f.model).frame(width: 760))
+        XCTAssertTrue(view.hasExactly("发现新版本 0.1.2，下载安装包"))
+        XCTAssertTrue(view.has("新版本 0.1.2"))
+    }
+
     func testFooter_NoUpdate_RightmostIsCheckUpdate() async throws {
         let f = await ViewFixture.make()
         let view = RenderedView(StatusFooter(model: f.model).frame(width: 760))

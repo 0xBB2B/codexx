@@ -533,6 +533,76 @@ final class AppModelTests: XCTestCase {
         XCTAssertEqual(h.model.availableUpdate, UpdateInfo(version: "1.3.0", url: "https://relay.example.com/releases/1.3.0"))
     }
 
+    private static let dmgURL = "https://github.com/o/r/releases/download/v0.1.2/model-bridge-0.1.2-macos.dmg"
+    private static let pageURL = "https://github.com/o/r/releases/tag/v0.1.2"
+
+    private func updateSubtitle(_ model: AppModel) -> String? {
+        MenuPanelModel(model: model).groups.flatMap { $0 }.first { $0.id == .update }?.subtitle
+    }
+
+    private func checkUpdateJSON(url: String, installer: String) -> Result<Data, CoreError> {
+        resultJSON(#"{"latest_version":"0.1.2","url":"\#(url)",\#(installer)"is_newer":true}"#)
+    }
+
+    private func statusWithUpdate(url: String, installer: String) -> CoreStatus {
+        let json = """
+        {"version":"0.1.1","forwarding":true,"proxy":{"running":true,"error":null},\
+        "chatgpt":{"found":true,"error":null},"default_relay":null,"relays":[],\
+        "taken_over":[],"restore_blocked":[],"config_path":null,\
+        "update":{"latest_version":"0.1.2","url":"\(url)"\(installer)}}
+        """
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        return try! decoder.decode(CoreStatus.self, from: Data(json.utf8))
+    }
+
+    func testCheckUpdate_InstallerTrue_KeepsDmgURLAndShowsDownloadInstaller() async {
+        let h = Harness(responses: ["check_update": checkUpdateJSON(url: Self.dmgURL, installer: #""installer":true,"#)])
+        await h.model.checkUpdate()
+        XCTAssertEqual(h.model.availableUpdate?.version, "0.1.2")
+        XCTAssertEqual(h.model.availableUpdate?.url, Self.dmgURL)
+        XCTAssertEqual(updateSubtitle(h.model), "下载安装包")
+    }
+
+    func testCheckUpdate_InstallerFalse_ShowsOpenDownloadPage() async {
+        let h = Harness(responses: ["check_update": checkUpdateJSON(url: Self.pageURL, installer: #""installer":false,"#)])
+        await h.model.checkUpdate()
+        XCTAssertEqual(h.model.availableUpdate?.url, Self.pageURL)
+        XCTAssertEqual(updateSubtitle(h.model), "打开下载页")
+    }
+
+    func testCheckUpdate_InstallerMissing_TreatedAsFalse() async {
+        let h = Harness(responses: ["check_update": checkUpdateJSON(url: Self.pageURL, installer: "")])
+        await h.model.checkUpdate()
+        XCTAssertEqual(h.model.availableUpdate?.url, Self.pageURL)
+        XCTAssertEqual(updateSubtitle(h.model), "打开下载页")
+    }
+
+    func testStatusUpdate_InstallerTrue_ShowsDownloadInstaller() async {
+        let h = Harness()
+        await h.model.start()
+        h.core.statusContinuation.yield(statusWithUpdate(url: Self.dmgURL, installer: #","installer":true"#))
+        await waitUntil { h.model.availableUpdate != nil }
+        XCTAssertEqual(h.model.availableUpdate?.url, Self.dmgURL)
+        XCTAssertEqual(updateSubtitle(h.model), "下载安装包")
+    }
+
+    func testStatusUpdate_InstallerFalse_ShowsOpenDownloadPage() async {
+        let h = Harness()
+        await h.model.start()
+        h.core.statusContinuation.yield(statusWithUpdate(url: Self.pageURL, installer: #","installer":false"#))
+        await waitUntil { h.model.availableUpdate != nil }
+        XCTAssertEqual(updateSubtitle(h.model), "打开下载页")
+    }
+
+    func testStatusUpdate_InstallerMissing_TreatedAsFalse() async {
+        let h = Harness()
+        await h.model.start()
+        h.core.statusContinuation.yield(statusWithUpdate(url: Self.pageURL, installer: ""))
+        await waitUntil { h.model.availableUpdate != nil }
+        XCTAssertEqual(updateSubtitle(h.model), "打开下载页")
+    }
+
     func testCheckUpdate_NotNewer_ShowsAlreadyLatest() async {
         let h = Harness(responses: [
             "check_update": resultJSON(#"{"latest_version":"1.2.0","url":null,"is_newer":false}"#),
