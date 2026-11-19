@@ -1,3 +1,4 @@
+using System.Windows;
 using System.Windows.Controls;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using ModelBridge.UI;
@@ -30,6 +31,30 @@ public class SetupWindowNameTests
                 var firstBox = UiHost.All<TextBox>(window).First(t => t.IsVisible);
                 Assert.AreEqual("中转", firstBox.Text);
                 Assert.AreEqual("中转", h.Model.NameInput);
+            }
+            finally
+            {
+                h.ForwardingOff();
+                window.Close();
+            }
+        });
+    }
+
+    [TestMethod]
+    public async Task Setup_WidthIs760_NotMaximizable()
+    {
+        var h = new MultiHarness();
+        await h.Model.StartAsync();
+
+        await UiHost.RunAsync(async () =>
+        {
+            var window = new SetupWindow(h.Model);
+            try
+            {
+                await UiHost.ShowAsync(window);
+
+                Assert.AreEqual(760, window.ActualWidth, 0.5);
+                Assert.IsTrue(window.ResizeMode is ResizeMode.NoResize or ResizeMode.CanMinimize, window.ResizeMode.ToString());
             }
             finally
             {

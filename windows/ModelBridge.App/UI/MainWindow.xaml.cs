@@ -5,6 +5,7 @@ using System.ComponentModel;
 using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Interop;
+using System.Windows.Automation;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 
@@ -73,9 +74,8 @@ public partial class MainWindow : Window
         RelayValue.Text = note < 0 ? rest : rest[..note];
         RelayNote.Text = note < 0 ? "" : rest[note..];
         RelayNote.Margin = new Thickness(note < 0 ? 0 : 4, 0, 0, 0);
-        UpdateText.Text = model.UpdateVersion == null ? "" : $"发现新版本 {model.UpdateVersion}";
-        UpdateText.Margin = new Thickness(0, 0, model.UpdateVersion == null ? 0 : 12, 0);
-        UpdateButton.Content = model.UpdateVersion == null ? "检查更新" : "打开下载页";
+        UpdateButton.Content = model.UpdateVersion == null ? "检查更新" : $"新版本 {model.UpdateVersion}";
+        AutomationProperties.SetName(UpdateButton, model.UpdateVersion == null ? "检查更新" : $"发现新版本 {model.UpdateVersion}，打开下载页");
 
         if (ReferenceEquals(shownBanners, model.Banners) && ReferenceEquals(shownNotices, model.Notices) && shownRechecking == model.IsRechecking)
             return;
@@ -129,8 +129,6 @@ public partial class MainWindow : Window
     }
 
     void MinimizeClick(object sender, RoutedEventArgs e) => WindowState = WindowState.Minimized;
-
-    void MaximizeClick(object sender, RoutedEventArgs e) => WindowState = WindowState == WindowState.Maximized ? WindowState.Normal : WindowState.Maximized;
 
     void CloseClick(object sender, RoutedEventArgs e) => Close();
 

@@ -41,15 +41,102 @@ public class MainWindowLayoutTests
     }
 
     [TestMethod]
-    public async Task Window_WidthIs620_AndThreeRelaysHeightAbout633()
+    public async Task Window_WidthIs760_AndThreeRelaysHeightAbout633()
     {
         var h = await StartAsync(3);
 
         await WithWindowAsync(h, window =>
         {
-            Assert.AreEqual(620, window.ActualWidth, 0.5);
+            Assert.AreEqual(760, window.ActualWidth, 0.5);
             Assert.IsTrue(window.ActualHeight is >= 621 and <= 645, "height=" + window.ActualHeight);
             return Task.CompletedTask;
+        });
+    }
+
+    [TestMethod]
+    public async Task Window_WidthCannotBeChangedByUser()
+    {
+        var h = await StartAsync(3);
+
+        await WithWindowAsync(h, window =>
+        {
+            var fixedByMode = window.ResizeMode is not (ResizeMode.CanResize or ResizeMode.CanResizeWithGrip);
+            var fixedByLimits = window.MinWidth == 760 && window.MaxWidth == 760;
+            Assert.IsTrue(fixedByMode || fixedByLimits, $"ResizeMode={window.ResizeMode} MinWidth={window.MinWidth} MaxWidth={window.MaxWidth}");
+            Assert.AreEqual(new Thickness(0), System.Windows.Shell.WindowChrome.GetWindowChrome(window).ResizeBorderThickness);
+            return Task.CompletedTask;
+        });
+    }
+
+    [TestMethod]
+    public async Task TitleBar_MaximizeButtonDisabled()
+    {
+        var h = await StartAsync(3);
+
+        await WithWindowAsync(h, window =>
+        {
+            var maximize = (Button)window.FindName("MaximizeButton");
+            Assert.IsNotNull(maximize);
+            Assert.IsFalse(maximize.IsEnabled);
+            return Task.CompletedTask;
+        });
+    }
+
+    static void SetNewVersion(MultiHarness h) =>
+        h.Core.OnAsync("check_update", _ => Task.FromResult(RelayJson.Parse(
+            """{"latest_version":"0.2.0","url":"https://relay.example.com/download","is_newer":true}""")));
+
+    [TestMethod]
+    public async Task UpdateButton_NoNewVersion_ShowsCheckUpdate()
+    {
+        var h = await StartAsync(3);
+
+        await WithWindowAsync(h, window =>
+        {
+            Assert.AreEqual("检查更新", window.UpdateButton.Content);
+            Assert.AreEqual("检查更新", System.Windows.Automation.AutomationProperties.GetName(window.UpdateButton));
+            return Task.CompletedTask;
+        });
+    }
+
+    [TestMethod]
+    public async Task UpdateButton_NewVersion_ShowsVersionOnlyAndNoSeparateNoticeText()
+    {
+        var h = await StartAsync(3);
+        SetNewVersion(h);
+
+        await WithWindowAsync(h, async window =>
+        {
+            await h.Model.CheckUpdateAsync();
+            await UiHost.Settle();
+
+            Assert.AreEqual("新版本 0.2.0", window.UpdateButton.Content);
+            Assert.AreEqual("发现新版本 0.2.0，打开下载页", System.Windows.Automation.AutomationProperties.GetName(window.UpdateButton));
+            Assert.IsNull(UiHost.FindText(window, "发现新版本 0.2.0"));
+            Assert.IsNull(UiHost.FindText(window, "打开下载页"));
+            Assert.IsFalse(UiHost.Joined(window).Contains("打开下载页"), UiHost.Joined(window));
+        });
+    }
+
+    [TestMethod]
+    public async Task StatusRow_HeightSameWithAndWithoutNewVersion()
+    {
+        var h = await StartAsync(3);
+        var before = 0.0;
+        double HeightOf(MainWindow w) => UiHost.Ancestors(w.VersionText).OfType<Border>().First().ActualHeight;
+
+        await WithWindowAsync(h, async window =>
+        {
+            before = HeightOf(window);
+            SetNewVersion(h);
+            await h.Model.CheckUpdateAsync();
+            await UiHost.Settle();
+
+            Assert.AreEqual(before, HeightOf(window), 0.5);
+            var left = (FrameworkElement)VisualTreeHelper.GetParent(window.VersionText);
+            left.Measure(new System.Windows.Size(double.PositiveInfinity, double.PositiveInfinity));
+            Assert.IsTrue(left.DesiredSize.Width <= left.ActualWidth + 0.5, $"左侧需要 {left.DesiredSize.Width}，实际 {left.ActualWidth}");
+            Assert.IsTrue(UiHost.PositionIn(window, left).X + left.DesiredSize.Width <= UiHost.PositionIn(window, window.UpdateButton).X, "左侧与新版本按钮重叠");
         });
     }
 
