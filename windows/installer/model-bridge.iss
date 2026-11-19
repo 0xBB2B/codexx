@@ -34,8 +34,15 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 [Messages]
 WindowsVersionNotSupported=需要 Windows 10 或更高版本。
 
+[Tasks]
+Name: "desktopicon"; Description: "创建桌面快捷方式"
+
 [Files]
 Source: "{#SourceDir}\*"; DestDir: "{app}"; Flags: recursesubdirs ignoreversion
+
+[Icons]
+Name: "{autoprograms}\模型接入助手"; Filename: "{app}\ModelBridge.exe"
+Name: "{autodesktop}\模型接入助手"; Filename: "{app}\ModelBridge.exe"; Tasks: desktopicon
 
 [Run]
 Filename: "{app}\ModelBridge.exe"; Flags: nowait postinstall skipifsilent
