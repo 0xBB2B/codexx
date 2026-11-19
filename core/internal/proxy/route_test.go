@@ -368,22 +368,22 @@ func TestRoute_ConcurrentSetRelay_KeysNeverCross(t *testing.T) {
 	}
 }
 
-func TestRoute_ParamModel_UltraRewrittenToMax(t *testing.T) {
+func TestRoute_UltraToMax_UltraRewrittenToMax(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
 		name       string
-		fromParams bool
+		ultraToMax bool
 		wantEffort string
 	}{
-		{"参数表模型 ultra 改回 max", true, "max"},
-		{"非参数表模型 ultra 不变", false, "ultra"},
+		{"UltraToMax 为真时 ultra 改回 max", true, "max"},
+		{"UltraToMax 为假时 ultra 不变", false, "ultra"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			e := newEnv(t, nil)
 			target := e.target("auto")
-			target.FromParams = tt.fromParams
+			target.UltraToMax = tt.ultraToMax
 			e.srv.SetRelay(proxy.RelayConfig{Routes: map[string]proxy.RelayTarget{"relay-auto": target}})
 			e.do(t, http.MethodPost, "/v1/responses", nil, []byte(`{"model":"relay-auto","reasoning":{"effort":"ultra"}}`))
 			var sent struct {

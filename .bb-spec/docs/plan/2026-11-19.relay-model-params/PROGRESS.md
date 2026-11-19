@@ -2,9 +2,9 @@
 | 序号 | Plan | 状态 | 完成时间 |
 |---|---|---|---|
 | 01 | 01-catalog-relay-params | done | 2026-11-19 |
-| 02 | 02-control-proxy-wiring | pending | — |
+| 02 | 02-control-proxy-wiring | done | 2026-11-19 |
 ## 当前
-准备执行 `02-control-proxy-wiring.md`。
+全部完成，进入收尾。
 ## 阻塞
 （无）
 ## 重试与自修（每次记一条）

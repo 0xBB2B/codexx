@@ -307,7 +307,7 @@ func (s *Service) SaveRelay(ctx context.Context, p SaveRelayParams) (SaveRelayRe
 	if p.APIKey == "" {
 		return SaveRelayResult{}, &Error{Code: "bad_params"}
 	}
-	ids, err := catalog.FetchRelayIDs(ctx, p.BaseURL, p.APIKey, catalog.RelayTimeout)
+	models, err := catalog.FetchRelayModels(ctx, p.BaseURL, p.APIKey, catalog.RelayTimeout)
 	if err != nil {
 		return SaveRelayResult{}, toError(err)
 	}
@@ -331,7 +331,7 @@ func (s *Service) SaveRelay(ctx context.Context, p SaveRelayParams) (SaveRelayRe
 	}
 	shownKnown := s.shownKnown
 	plan := cacheAll(candidate)
-	plan.mode[cfg.id], plan.ids[cfg.id] = catalog.UseGiven, ids
+	plan.mode[cfg.id], plan.models[cfg.id] = catalog.UseGiven, models
 	s.relays = candidate
 	if err := s.refreshRelay(ctx, plan); err != nil {
 		s.rollback(prev)
@@ -745,12 +745,8 @@ func writeFileAtomic(path string, data []byte) error {
 	return os.Rename(tmp.Name(), path)
 }
 
-// 转发没开时不碰 Codex 配置也不写合并目录，找不到 ChatGPT 时只按参数表计数
+// 转发没开时不碰 Codex 配置也不写合并目录，找不到 ChatGPT 时 official 为空，按全部可见计数
 func (s *Service) probe(ctx context.Context, plan relayPlan) error {
-	params, err := catalog.BuiltinParams()
-	if err != nil {
-		return err
-	}
 	var official []catalog.Entry
 	if codex, err := s.locateCodex(); err == nil {
 		official, _ = catalog.LoadOfficial(ctx, codex)
@@ -761,36 +757,35 @@ func (s *Service) probe(ctx context.Context, plan relayPlan) error {
 	defaultModel, defaultRelay := "", ""
 	for _, r := range s.relays {
 		info := relayInfo{}
-		var ids []string
+		var models []catalog.RelayModel
 		fromCache := func() {
 			cached, at, ok, err := store.LoadRelayModels(r.id)
 			if err != nil && info.err == "" {
 				info.err = errCode(err)
 			}
 			if err == nil && ok {
-				ids, info.fetchedAt = cached, at
+				models, info.fetchedAt = cached, at
 			}
 		}
 		switch plan.mode[r.id] {
 		case catalog.UseGiven:
-			ids, info.fetchedAt = plan.ids[r.id], time.Now()
+			models, info.fetchedAt = plan.models[r.id], time.Now()
 		case catalog.FetchRemote:
-			fetched, err := catalog.FetchRelayIDs(ctx, r.baseURL, r.apiKey, catalog.RelayTimeout)
+			fetched, err := catalog.FetchRelayModels(ctx, r.baseURL, r.apiKey, catalog.RelayTimeout)
 			if err != nil {
 				info.err = errCode(err)
 				fromCache()
 			} else {
-				ids, info.fetchedAt = fetched, time.Now()
+				models, info.fetchedAt = fetched, time.Now()
 			}
 		default:
 			info.err = s.relayInfos[r.id].err
 			fromCache()
 		}
 		if info.err == "" && !info.fetchedAt.IsZero() && plan.mode[r.id] != catalog.CacheOnly {
-			_ = store.SaveRelayModels(r.id, ids, info.fetchedAt)
+			_ = store.SaveRelayModels(r.id, models, info.fetchedAt)
 		}
-		paramOnly, sameName := catalog.RelayNames(ids, params, official)
-		names := catalog.ShownRelayNames(paramOnly, sameName, official)
+		names := catalog.ShownRelayNames(models, official)
 		info.modelCount = len(names)
 		info.fetchedAt = trimTime(info.fetchedAt)
 		infos[r.id] = info
@@ -811,15 +806,11 @@ func (s *Service) rebuild(ctx context.Context, plan relayPlan) error {
 	if err != nil {
 		return err
 	}
-	params, err := catalog.BuiltinParams()
-	if err != nil {
-		return err
-	}
 	sources := make([]catalog.RelaySource, 0, len(s.relays))
 	for _, r := range s.relays {
 		sources = append(sources, catalog.RelaySource{
 			ID: r.id, Name: r.name, BaseURL: r.baseURL, Key: r.apiKey,
-			Mode: plan.mode[r.id], IDs: plan.ids[r.id],
+			Mode: plan.mode[r.id], Models: plan.models[r.id],
 		})
 	}
 	res, err := catalog.Build(ctx, catalog.BuildOptions{
@@ -828,7 +819,6 @@ func (s *Service) rebuild(ctx context.Context, plan relayPlan) error {
 		RelayTimeout:    catalog.RelayTimeout,
 		DataDir:         s.opts.DataDir,
 		ModelsCachePath: s.modelsCachePath(),
-		Params:          params,
 		RelayOnly:       s.accessMode == modeRelay,
 	})
 	if err != nil {
@@ -861,7 +851,7 @@ func (s *Service) pushRelay() {
 	routes := make(map[string]proxy.RelayTarget, len(s.routes))
 	for slug, r := range s.routes {
 		if i := s.relayIndex(r.ID); i >= 0 {
-			routes[slug] = proxy.RelayTarget{BaseURL: s.relays[i].baseURL, Key: s.relays[i].apiKey, Model: r.Model, FromParams: r.FromParams}
+			routes[slug] = proxy.RelayTarget{BaseURL: s.relays[i].baseURL, Key: s.relays[i].apiKey, Model: r.Model, UltraToMax: r.UltraToMax}
 		}
 	}
 	configs := make(map[string]proxy.RelayInfo, len(s.relays))
@@ -882,8 +872,8 @@ type relayInfo struct {
 }
 
 type relayPlan struct {
-	mode map[string]catalog.RelayMode
-	ids  map[string][]string
+	mode   map[string]catalog.RelayMode
+	models map[string][]catalog.RelayModel
 }
 
 func fetchAll(relays []relayConfig) relayPlan {
@@ -896,7 +886,7 @@ func fetchAll(relays []relayConfig) relayPlan {
 
 // RelayMode 零值是 FetchRemote，每个配置都要显式填
 func cacheAll(relays []relayConfig) relayPlan {
-	p := relayPlan{mode: make(map[string]catalog.RelayMode, len(relays)), ids: map[string][]string{}}
+	p := relayPlan{mode: make(map[string]catalog.RelayMode, len(relays)), models: map[string][]catalog.RelayModel{}}
 	for _, r := range relays {
 		p.mode[r.id] = catalog.CacheOnly
 	}

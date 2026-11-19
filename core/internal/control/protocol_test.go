@@ -368,6 +368,39 @@ func TestServe_SaveRelayResult(t *testing.T) {
 	}
 }
 
+func TestServe_SaveRelay_InterfaceModelParamsReachCacheAndCatalog(t *testing.T) {
+	e := newEnv(t, true)
+	c := startServe(t, e.opts)
+	c.result("init", initParams(e))
+	e.relay.setModelsJSON(relayModelJSON("model-a", "low", "high", "max"))
+	c.result("save_relay", relayJSON("1", "中转", e.relay.baseURL(), keyA))
+
+	var cache struct {
+		Models []map[string]any `json:"models"`
+	}
+	if err := json.Unmarshal(fileBytes(relayCachePath(e, "1")), &cache); err != nil || len(cache.Models) != 1 {
+		t.Fatalf("缓存应有 1 个模型: %v %+v", err, cache)
+	}
+	if m := cache.Models[0]; m["id"] != "model-a" || m["context_length"] != float64(1048576) || !reflect.DeepEqual(m["reasoning_efforts"], []any{"low", "high", "max"}) {
+		t.Errorf("缓存里的模型 = %v", m)
+	}
+	var entry map[string]any
+	for _, m := range catalogModels(t, e) {
+		if m["slug"] == "relay-model-a" {
+			entry = m
+		}
+	}
+	if entry == nil {
+		t.Fatal("目录里没有 relay-model-a")
+	}
+	if entry["context_window"] != float64(1048576) {
+		t.Errorf("context_window = %v, want 1048576", entry["context_window"])
+	}
+	if levels, _ := entry["supported_reasoning_levels"].([]any); len(levels) != 3 {
+		t.Errorf("supported_reasoning_levels = %v, want 3 档", entry["supported_reasoning_levels"])
+	}
+}
+
 func TestServe_SetForwardingPushesStatusEvent(t *testing.T) {
 	e := newEnv(t, false)
 	c := startServe(t, e.opts)
@@ -1107,37 +1140,85 @@ func TestServe_RefreshModels(t *testing.T) {
 }
 
 func TestServe_ModelCount(t *testing.T) {
-	t.Run("转发开着和关着数量一致", func(t *testing.T) {
+	t.Run("转发开着和关着数量一致，陌生模型名也计数", func(t *testing.T) {
 		e := newEnv(t, true)
 		e.relay.setIDs("deepseek-flash", "gpt-a", "unknown-model-x")
 		c := startServe(t, e.opts)
 		st := c.result("init", initParams(e))
-		if n := relayList(t, st)[0]["model_count"]; n != float64(2) {
-			t.Fatalf("转发开着: model_count = %v, want 2（参数表 1 个 + 官方同名 1 个）", n)
+		if n := relayList(t, st)[0]["model_count"]; n != float64(3) {
+			t.Fatalf("转发开着: model_count = %v, want 3", n)
 		}
 		c.result("set_forwarding", map[string]any{"enabled": false})
 		st = c.result("refresh_models", map[string]any{"id": nil})
-		if n := relayList(t, st)[0]["model_count"]; n != float64(2) {
-			t.Errorf("转发关着刷新: model_count = %v, want 2", n)
+		if n := relayList(t, st)[0]["model_count"]; n != float64(3) {
+			t.Errorf("转发关着刷新: model_count = %v, want 3", n)
 		}
 		res := c.result("save_relay", relayJSON("1", "中转", e.relay.baseURL(), keyA))
-		if res["model_count"] != float64(2) || res["models_changed"] != false {
+		if res["model_count"] != float64(3) || res["models_changed"] != false {
 			t.Errorf("转发关着保存: %v", res)
 		}
 	})
 
-	t.Run("转发关着且找不到 codex 只按参数表计数", func(t *testing.T) {
+	t.Run("转发关着且找不到 codex 接口返回的全部计数", func(t *testing.T) {
 		e := newEnv(t, false, func(e *env) { e.codexPath = filepath.Join(t.TempDir(), "no-such-codex") })
-		e.relay.setIDs("deepseek-flash", "gpt-a")
+		e.relay.setIDs("model-a", "auto", "review-x")
 		c := startServe(t, e.opts)
 		c.result("init", initParams(e))
 		st := c.result("refresh_models", map[string]any{"id": nil})
-		if n := relayList(t, st)[0]["model_count"]; n != float64(1) {
-			t.Errorf("model_count = %v, want 1", n)
+		if n := relayList(t, st)[0]["model_count"]; n != float64(3) {
+			t.Errorf("model_count = %v, want 3", n)
 		}
 		res := c.result("save_relay", relayJSON("1", "中转", e.relay.baseURL(), keyA))
-		if res["model_count"] != float64(1) || res["models_changed"] != false {
+		if res["model_count"] != float64(3) || res["models_changed"] != false {
 			t.Errorf("save_relay = %v", res)
+		}
+	})
+
+	t.Run("save_relay 返回陌生模型名时计入模型数并写进目录", func(t *testing.T) {
+		e := newEnv(t, true)
+		c := startServe(t, e.opts)
+		c.result("init", initParams(e))
+		e.relay.setIDs("never-seen-model")
+		res := c.result("save_relay", relayJSON("1", "中转", e.relay.baseURL(), keyA))
+		if res["model_count"] != float64(1) || res["models_changed"] != true {
+			t.Errorf("save_relay = %v", res)
+		}
+		if !strings.Contains(readFile(t, e.catalogPath()), "relay-never-seen-model") {
+			t.Errorf("目录里应有 relay-never-seen-model: %s", readFile(t, e.catalogPath()))
+		}
+	})
+
+	const reviewHidden = `{"models":[{"slug":"gpt-a","priority":3,"display_name":"A"},{"slug":"review-x","priority":7,"display_name":"R","visibility":"hide"}]}`
+	t.Run("转发开着：同名官方隐藏模型不计数，默认模型是 relay-auto", func(t *testing.T) {
+		e := newEnv(t, true, func(e *env) { e.codexPath = writeFakeCodex(t, reviewHidden, 0) })
+		e.relay.setIDs("model-a", "auto", "review-x")
+		c := startServe(t, e.opts)
+		st := c.result("init", initParams(e))
+		if n := relayList(t, st)[0]["model_count"]; n != float64(2) {
+			t.Errorf("model_count = %v, want 2", n)
+		}
+		if !strings.Contains(e.config(t), `model = "relay-auto"`) {
+			t.Errorf("默认模型应为 relay-auto: %s", e.config(t))
+		}
+	})
+
+	t.Run("转发关着：同名官方隐藏模型不计数，找不到 ChatGPT 时全计", func(t *testing.T) {
+		e := newEnv(t, false, func(e *env) { e.codexPath = writeFakeCodex(t, reviewHidden, 0) })
+		e.relay.setIDs("model-a", "auto", "review-x")
+		c := startServe(t, e.opts)
+		c.result("init", initParams(e))
+		st := c.result("refresh_models", map[string]any{"id": nil})
+		if n := relayList(t, st)[0]["model_count"]; n != float64(2) {
+			t.Errorf("找到 ChatGPT: model_count = %v, want 2", n)
+		}
+
+		e2 := newEnv(t, false, func(e *env) { e.codexPath = filepath.Join(t.TempDir(), "no-such-codex") })
+		e2.relay.setIDs("model-a", "auto", "review-x")
+		c2 := startServe(t, e2.opts)
+		c2.result("init", initParams(e2))
+		st = c2.result("refresh_models", map[string]any{"id": nil})
+		if n := relayList(t, st)[0]["model_count"]; n != float64(3) {
+			t.Errorf("找不到 ChatGPT: model_count = %v, want 3", n)
 		}
 	})
 
@@ -1596,11 +1677,11 @@ func TestServe_SaveRelay_UnreadableCacheNotDeletedOnFailure(t *testing.T) {
 	c.result("init", twoRelayInit(e, other))
 	cache := relayCachePath(e, "2")
 	type cacheFile struct {
-		FetchedAt string   `json:"fetched_at"`
-		IDs       []string `json:"ids"`
+		FetchedAt string           `json:"fetched_at"`
+		Models    []map[string]any `json:"models"`
 	}
 	var want cacheFile
-	if err := json.Unmarshal(fileBytes(cache), &want); err != nil || len(want.IDs) == 0 {
+	if err := json.Unmarshal(fileBytes(cache), &want); err != nil || len(want.Models) == 0 {
 		t.Fatalf("初始化后应有配置 2 的合法缓存文件: %v", err)
 	}
 	breakConfig(t, e)
@@ -1618,8 +1699,8 @@ func TestServe_SaveRelay_UnreadableCacheNotDeletedOnFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 	var got cacheFile
-	if err := json.Unmarshal(fileBytes(cache), &got); err != nil || got.FetchedAt == "" || !reflect.DeepEqual(got.IDs, want.IDs) {
-		t.Errorf("缓存应是合法 JSON 且 ids 不变: %+v (%v), 原 %+v", got, err, want)
+	if err := json.Unmarshal(fileBytes(cache), &got); err != nil || got.FetchedAt == "" || !reflect.DeepEqual(got.Models, want.Models) {
+		t.Errorf("缓存应是合法 JSON 且 models 不变: %+v (%v), 原 %+v", got, err, want)
 	}
 }
 
