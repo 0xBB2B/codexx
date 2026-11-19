@@ -22,7 +22,7 @@ public sealed record TrayPanelModel(
     {
         var idle = !model.IsBusy;
         var update = model.UpdateVersion is { } version
-            ? new TrayMenuItem(TrayMenuCommand.CheckUpdate, $"发现新版本 {version}", "打开下载页", IsEnabled: idle)
+            ? new TrayMenuItem(TrayMenuCommand.CheckUpdate, $"发现新版本 {version}", model.UpdateIsInstaller ? "下载安装包" : "打开下载页", IsEnabled: idle)
             : new TrayMenuItem(TrayMenuCommand.CheckUpdate, "检查更新", IsEnabled: idle);
 
         return new TrayPanelModel(

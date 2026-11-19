@@ -1159,6 +1159,130 @@ public class AppModelTests
         Assert.AreEqual("https://relay.example.com/download", h.Model.UpdateUrl);
     }
 
+    const string SetupUrl = "https://github.com/o/r/releases/download/v0.1.2/model-bridge-0.1.2-windows-setup.exe";
+    const string ReleasePageUrl = "https://github.com/o/r/releases/tag/v0.1.2";
+
+    static void SetCheckUpdate(Harness h, string url, string? installerField) =>
+        h.Core.On("check_update", _ => Json.Parse(
+            $$"""{"latest_version":"0.1.2","url":"{{url}}",{{installerField}}"is_newer":true}"""));
+
+    static void PushUpdate(Harness h, string url, bool? installer) =>
+        h.Push(s =>
+        {
+            var update = new JsonObject { ["latest_version"] = "0.1.2", ["url"] = url };
+            if (installer != null) update["installer"] = installer;
+            s["update"] = update;
+        });
+
+    [TestMethod]
+    public async Task CheckUpdate_InstallerTrue_RecordsSetupUrlAndInstallerFlag()
+    {
+        var h = new Harness();
+        SetCheckUpdate(h, SetupUrl, "\"installer\":true,");
+
+        await h.Model.CheckUpdateAsync();
+
+        Assert.AreEqual("0.1.2", h.Model.UpdateVersion);
+        Assert.AreEqual(SetupUrl, h.Model.UpdateUrl);
+        Assert.IsTrue(h.Model.UpdateIsInstaller);
+    }
+
+    [TestMethod]
+    public async Task CheckUpdate_InstallerFalse_RecordsReleasePageUrlAndFlagFalse()
+    {
+        var h = new Harness();
+        SetCheckUpdate(h, ReleasePageUrl, "\"installer\":false,");
+
+        await h.Model.CheckUpdateAsync();
+
+        Assert.AreEqual(ReleasePageUrl, h.Model.UpdateUrl);
+        Assert.IsFalse(h.Model.UpdateIsInstaller);
+    }
+
+    [TestMethod]
+    public async Task CheckUpdate_InstallerMissing_TreatedAsFalse()
+    {
+        var h = new Harness();
+        SetCheckUpdate(h, ReleasePageUrl, "");
+
+        await h.Model.CheckUpdateAsync();
+
+        Assert.AreEqual("0.1.2", h.Model.UpdateVersion);
+        Assert.IsFalse(h.Model.UpdateIsInstaller);
+    }
+
+    [TestMethod]
+    public async Task CheckUpdate_AlreadyLatestAfterInstaller_ClearsInstallerFlag()
+    {
+        var h = new Harness();
+        SetCheckUpdate(h, SetupUrl, "\"installer\":true,");
+        await h.Model.CheckUpdateAsync();
+        h.Core.On("check_update", _ => Json.Parse("""{"latest_version":null,"url":null,"is_newer":false}"""));
+
+        await h.Model.CheckUpdateAsync();
+
+        Assert.IsNull(h.Model.UpdateVersion);
+        Assert.IsFalse(h.Model.UpdateIsInstaller);
+    }
+
+    [TestMethod]
+    public void NoUpdate_InstallerFlagFalse()
+    {
+        Assert.IsFalse(new Harness().Model.UpdateIsInstaller);
+    }
+
+    [TestMethod]
+    public async Task Status_InstallerTrue_RecordsSetupUrlAndInstallerFlag()
+    {
+        var h = new Harness();
+        await h.Model.StartAsync();
+
+        PushUpdate(h, SetupUrl, true);
+
+        Assert.AreEqual("0.1.2", h.Model.UpdateVersion);
+        Assert.AreEqual(SetupUrl, h.Model.UpdateUrl);
+        Assert.IsTrue(h.Model.UpdateIsInstaller);
+    }
+
+    [TestMethod]
+    public async Task Status_InstallerFalse_FlagFalse()
+    {
+        var h = new Harness();
+        await h.Model.StartAsync();
+
+        PushUpdate(h, ReleasePageUrl, false);
+
+        Assert.AreEqual(ReleasePageUrl, h.Model.UpdateUrl);
+        Assert.IsFalse(h.Model.UpdateIsInstaller);
+    }
+
+    [TestMethod]
+    public async Task Status_InstallerMissing_TreatedAsFalse()
+    {
+        var h = new Harness();
+        await h.Model.StartAsync();
+
+        PushUpdate(h, ReleasePageUrl, null);
+
+        Assert.AreEqual("0.1.2", h.Model.UpdateVersion);
+        Assert.IsFalse(h.Model.UpdateIsInstaller);
+    }
+
+    [TestMethod]
+    public async Task StatusAndCheckUpdate_SameInstallerUpdate_SameResult()
+    {
+        var viaStatus = new Harness();
+        await viaStatus.Model.StartAsync();
+        PushUpdate(viaStatus, SetupUrl, true);
+        var viaCheck = new Harness();
+        SetCheckUpdate(viaCheck, SetupUrl, "\"installer\":true,");
+        await viaCheck.Model.CheckUpdateAsync();
+
+        Assert.AreEqual(viaStatus.Model.UpdateVersion, viaCheck.Model.UpdateVersion);
+        Assert.AreEqual(viaStatus.Model.UpdateUrl, viaCheck.Model.UpdateUrl);
+        Assert.AreEqual(viaStatus.Model.UpdateIsInstaller, viaCheck.Model.UpdateIsInstaller);
+    }
+
     [TestMethod]
     public async Task CheckUpdate_AlreadyLatest_NoticeAndNoUpdateRecorded()
     {

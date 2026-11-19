@@ -2946,3 +2946,87 @@ func TestForwarding_RelayModelErrors(t *testing.T) {
 		})
 	}
 }
+
+func platformAssetSuffix() string {
+	switch runtime.GOOS {
+	case "darwin":
+		return "-macos.dmg"
+	case "windows":
+		return "-windows-setup.exe"
+	}
+	return ""
+}
+
+func releaseBodyWithInstaller(tag string) string {
+	v := strings.TrimPrefix(tag, "v")
+	base := "https://github.com/acme/model-bridge/releases"
+	return fmt.Sprintf(`{"tag_name":%q,"html_url":"%s/tag/%s","assets":[`+
+		`{"name":"model-bridge-%s-macos.dmg","browser_download_url":"%s/download/%s/model-bridge-%s-macos.dmg"},`+
+		`{"name":"model-bridge-%s-windows-setup.exe","browser_download_url":"%s/download/%s/model-bridge-%s-windows-setup.exe"}]}`,
+		tag, base, tag, v, base, tag, v, v, base, tag, v)
+}
+
+func wantInstallerURL(tag string) (url string, installer bool) {
+	base := "https://github.com/acme/model-bridge/releases"
+	v := strings.TrimPrefix(tag, "v")
+	if suffix := platformAssetSuffix(); suffix != "" {
+		return base + "/download/" + tag + "/model-bridge-" + v + suffix, true
+	}
+	return base + "/tag/" + tag, false
+}
+
+func TestCheckUpdate_InstallerFollowsPlatform(t *testing.T) {
+	e := newEnv(t, false)
+	g := newGitHubStub(t, "v1.3.0")
+	g.setBody(releaseBodyWithInstaller("v1.3.0"))
+	svc := control.NewService(withUpdate(e.opts, g, nil))
+	t.Cleanup(func() { _ = svc.Shutdown(context.Background(), false) })
+
+	wantURL, wantInstaller := wantInstallerURL("v1.3.0")
+	res, err := svc.CheckUpdate(context.Background(), true)
+	if err != nil {
+		t.Fatalf("CheckUpdate: %v", err)
+	}
+	if !res.IsNewer || res.Installer != wantInstaller || res.URL == nil || *res.URL != wantURL {
+		t.Errorf("result = %+v, want URL %q installer %v", res, wantURL, wantInstaller)
+	}
+	up := svc.Status().Update
+	if up.Installer != wantInstaller || up.URL == nil || *up.URL != wantURL {
+		t.Errorf("Status.Update = %+v, want URL %q installer %v", up, wantURL, wantInstaller)
+	}
+}
+
+func TestCheckUpdate_NoInstallerAssetFallsBackToReleasePage(t *testing.T) {
+	e := newEnv(t, false)
+	g := newGitHubStub(t, "v1.3.0")
+	svc := control.NewService(withUpdate(e.opts, g, nil))
+	t.Cleanup(func() { _ = svc.Shutdown(context.Background(), false) })
+
+	res, err := svc.CheckUpdate(context.Background(), true)
+	if err != nil {
+		t.Fatalf("CheckUpdate: %v", err)
+	}
+	wantURL := "https://github.com/acme/model-bridge/releases/tag/v1.3.0"
+	if !res.IsNewer || res.Installer || res.URL == nil || *res.URL != wantURL {
+		t.Errorf("result = %+v", res)
+	}
+	if up := svc.Status().Update; up.Installer || up.URL == nil || *up.URL != wantURL {
+		t.Errorf("Status.Update = %+v", up)
+	}
+}
+
+func TestCheckUpdate_NoNewVersionInstallerFalse(t *testing.T) {
+	e := newEnv(t, false)
+	g := newGitHubStub(t, "v1.2.3")
+	g.setBody(releaseBodyWithInstaller("v1.2.3"))
+	svc := control.NewService(withUpdate(e.opts, g, nil))
+	t.Cleanup(func() { _ = svc.Shutdown(context.Background(), false) })
+
+	res, err := svc.CheckUpdate(context.Background(), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.IsNewer || res.Installer || svc.Status().Update.Installer {
+		t.Errorf("result = %+v, Status.Update = %+v", res, svc.Status().Update)
+	}
+}

@@ -119,6 +119,41 @@ public class MainWindowLayoutTests
     }
 
     [TestMethod]
+    public async Task UpdateButton_InstallerTrue_AccessibleNameSaysDownloadInstaller()
+    {
+        var h = await StartAsync(3);
+        h.Core.OnAsync("check_update", _ => Task.FromResult(RelayJson.Parse(
+            """{"latest_version":"0.1.2","url":"https://github.com/o/r/releases/download/v0.1.2/model-bridge-0.1.2-windows-setup.exe","installer":true,"is_newer":true}""")));
+
+        await WithWindowAsync(h, async window =>
+        {
+            await h.Model.CheckUpdateAsync();
+            await UiHost.Settle();
+
+            Assert.AreEqual("新版本 0.1.2", window.UpdateButton.Content);
+            Assert.AreEqual("发现新版本 0.1.2，下载安装包", System.Windows.Automation.AutomationProperties.GetName(window.UpdateButton));
+            Assert.IsFalse(UiHost.Joined(window).Contains("下载安装包"), UiHost.Joined(window));
+        });
+    }
+
+    [TestMethod]
+    public async Task UpdateButton_InstallerFalse_AccessibleNameSaysOpenDownloadPage()
+    {
+        var h = await StartAsync(3);
+        h.Core.OnAsync("check_update", _ => Task.FromResult(RelayJson.Parse(
+            """{"latest_version":"0.1.2","url":"https://github.com/o/r/releases/tag/v0.1.2","installer":false,"is_newer":true}""")));
+
+        await WithWindowAsync(h, async window =>
+        {
+            await h.Model.CheckUpdateAsync();
+            await UiHost.Settle();
+
+            Assert.AreEqual("新版本 0.1.2", window.UpdateButton.Content);
+            Assert.AreEqual("发现新版本 0.1.2，打开下载页", System.Windows.Automation.AutomationProperties.GetName(window.UpdateButton));
+        });
+    }
+
+    [TestMethod]
     public async Task StatusRow_HeightSameWithAndWithoutNewVersion()
     {
         var h = await StartAsync(3);

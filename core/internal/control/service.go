@@ -100,6 +100,7 @@ type RelayEntryStatus struct {
 type UpdateInfo struct {
 	LatestVersion *string `json:"latest_version"`
 	URL           *string `json:"url"`
+	Installer     bool    `json:"installer"`
 }
 
 type Status struct {
@@ -145,6 +146,7 @@ type SaveRelayResult struct {
 type UpdateResult struct {
 	LatestVersion *string `json:"latest_version"`
 	URL           *string `json:"url"`
+	Installer     bool    `json:"installer"`
 	IsNewer       bool    `json:"is_newer"`
 }
 
@@ -510,10 +512,18 @@ func (s *Service) RefreshModels(ctx context.Context, id *string) (Status, error)
 }
 
 func (s *Service) CheckUpdate(ctx context.Context, manual bool) (UpdateResult, error) {
+	var assetSuffix string
+	switch runtime.GOOS {
+	case "darwin":
+		assetSuffix = "-macos.dmg"
+	case "windows":
+		assetSuffix = "-windows-setup.exe"
+	}
 	res, err := update.Check(ctx, update.Config{
 		APIBase:        s.opts.UpdateAPIBase,
 		Repository:     s.opts.UpdateRepository,
 		CurrentVersion: s.opts.Version,
+		AssetSuffix:    assetSuffix,
 	})
 	if err != nil {
 		if manual {
@@ -526,10 +536,10 @@ func (s *Service) CheckUpdate(ctx context.Context, manual bool) (UpdateResult, e
 		return UpdateResult{}, nil
 	}
 	s.mu.Lock()
-	s.update = UpdateInfo{LatestVersion: &res.LatestVersion, URL: &res.URL}
+	s.update = UpdateInfo{LatestVersion: &res.LatestVersion, URL: &res.URL, Installer: res.Installer}
 	s.notifyLocked()
 	s.mu.Unlock()
-	return UpdateResult{LatestVersion: &res.LatestVersion, URL: &res.URL, IsNewer: true}, nil
+	return UpdateResult{LatestVersion: &res.LatestVersion, URL: &res.URL, Installer: res.Installer, IsNewer: true}, nil
 }
 
 func (s *Service) logUpdateFailure(err error) {

@@ -120,6 +120,7 @@ private enum StorageFailure: Error {
 struct UpdateInfo: Equatable, Sendable {
     let version: String
     let url: String
+    var installer = false
 }
 
 private struct Empty: Encodable, Sendable {}
@@ -174,7 +175,7 @@ private struct PersistError: Error {
 }
 
 private struct SaveResult: Decodable { let id: String; let name: String; let modelCount: Int }
-private struct UpdateResult: Decodable { let latestVersion: String?; let url: String?; let isNewer: Bool }
+private struct UpdateResult: Decodable { let latestVersion: String?; let url: String?; let installer: Bool?; let isNewer: Bool }
 
 private extension JSONDecoder {
     static var snakeCase: JSONDecoder {
@@ -753,7 +754,7 @@ final class AppModel: ObservableObject {
             let result = try JSONDecoder.snakeCase.decode(UpdateResult.self, from: data)
             removeNotices(titled: Self.updateFailedTitle)
             if result.isNewer, let version = result.latestVersion, let url = result.url {
-                availableUpdate = UpdateInfo(version: version, url: url)
+                availableUpdate = UpdateInfo(version: version, url: url, installer: result.installer ?? false)
             } else {
                 availableUpdate = nil
                 addNotice(Notice(title: "已是最新版本", kind: .success))
@@ -942,7 +943,7 @@ final class AppModel: ObservableObject {
         status = value
         pruneDismissedBanners()
         if let version = value.update?.latestVersion, let url = value.update?.url {
-            availableUpdate = UpdateInfo(version: version, url: url)
+            availableUpdate = UpdateInfo(version: version, url: url, installer: value.update?.installer ?? false)
         }
     }
 
