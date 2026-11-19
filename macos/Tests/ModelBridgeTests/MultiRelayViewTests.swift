@@ -1,11 +1,18 @@
+import SwiftUI
 import XCTest
 @testable import ModelBridge
 
 @MainActor
 final class MainWindowLayoutTests: XCTestCase {
-    func testWidthIs620() async {
+    func testWidthIs760() async {
         let f = await ViewFixture.make()
-        XCTAssertEqual(RenderedView(MainWindow(model: f.model)).size.width, 620, accuracy: 1)
+        XCTAssertEqual(RenderedView(MainWindow(model: f.model)).size.width, 760, accuracy: 1)
+    }
+
+    func testSetupWindowWidthIs760() async {
+        let f = await ViewFixture.make()
+        f.model.beginSetup()
+        XCTAssertEqual(RenderedView(SetupWindow(model: f.model)).size.width, 760, accuracy: 1)
     }
 
     func testNoRunStatusOrConnectionCard() async {
@@ -388,7 +395,7 @@ final class ChatGPTUnsupportedViewTests: XCTestCase {
 
     func testStatusFooter_ChatGPTUnsupported_EveryItemStaysOnOneLine() async throws {
         let f = await unsupported()
-        let view = RenderedView(StatusFooter(model: f.model).frame(width: 620))
+        let view = RenderedView(StatusFooter(model: f.model).frame(width: 760))
         let reference = try XCTUnwrap(view.frame(ofExactText: "后台运行中")).height
         for text in ["版本暂不支持", "转发关闭时不获取"] {
             let frame = try XCTUnwrap(view.frame(ofExactText: text), text)
@@ -431,5 +438,82 @@ final class ChatGPTUnsupportedViewTests: XCTestCase {
         await gate.open()
         await task.value
         XCTAssertTrue(view.hasExactly("重新检测"))
+    }
+}
+
+@MainActor
+final class StatusFooterUpdateTests: XCTestCase {
+    private static func decode(_ text: String) -> CoreStatus {
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        return try! decoder.decode(CoreStatus.self, from: Data(text.utf8))
+    }
+
+    private func footerHeight(_ model: AppModel) -> CGFloat {
+        RenderedView(StatusFooter(model: model).frame(width: 760)).size.height
+    }
+
+    private func longestFixture() async -> ViewFixture {
+        let f = await ViewFixture.make(forwarding: false)
+        let json = ViewFixture.statusJSON(forwarding: false, relayCount: 1)
+            .replacingOccurrences(of: #""version":"1.3.0""#, with: #""version":"0.10.0-local""#)
+            .replacingOccurrences(of: #""chatgpt":{"found":true,"error":null}"#, with: #""chatgpt":{"found":true,"error":"chatgpt_unsupported"}"#)
+        f.model.status = Self.decode(json)
+        f.model.coreRunning = false
+        f.model.availableUpdate = UpdateInfo(version: "0.11.0", url: "https://example.com/dl")
+        return f
+    }
+
+    func testFooter_NewVersion_SingleLineSameHeightAsNormal() async {
+        let normal = await ViewFixture.make()
+        let updated = await ViewFixture.make()
+        updated.model.availableUpdate = UpdateInfo(version: "0.2.0", url: "https://example.com/dl")
+        XCTAssertEqual(footerHeight(updated.model), footerHeight(normal.model), accuracy: 1)
+        XCTAssertEqual(footerHeight(normal.model), 48, accuracy: 2)
+    }
+
+    func testFooter_LongestTexts_SingleLineSameHeightAsNormal() async {
+        let normal = await ViewFixture.make()
+        let longest = await longestFixture()
+        XCTAssertEqual(footerHeight(longest.model), footerHeight(normal.model), accuracy: 1)
+    }
+
+    func testFooter_LongestTexts_EveryItemStaysOnOneLine() async throws {
+        let f = await longestFixture()
+        let view = RenderedView(StatusFooter(model: f.model).frame(width: 760))
+        let reference = try XCTUnwrap(view.frame(ofExactText: "后台服务已停止")).height
+        for text in ["v0.10.0-local", "版本暂不支持", "转发关闭时不获取"] {
+            let frame = try XCTUnwrap(view.frame(ofText: text), text)
+            XCTAssertEqual(frame.height, reference, accuracy: 2, text)
+        }
+        // 按钮最小高 44，量不出折行；按钮宽度等于单行文字宽加左右 4px 内边距，折行或截断时会变窄
+        let button = try XCTUnwrap(view.frame(ofExactText: "发现新版本 0.11.0，打开下载页"))
+        let singleLine = RenderedView(Text("新版本 0.11.0").font(Fonts.label).fixedSize()).size.width
+        XCTAssertEqual(button.width, singleLine + 8, accuracy: 1)
+        XCTAssertLessThanOrEqual(button.maxX, 760 - 24 + 1)
+    }
+
+    func testFooter_NewVersion_ShowsShortButtonWithFullAccessibilityLabel() async {
+        let f = await ViewFixture.make()
+        f.model.availableUpdate = UpdateInfo(version: "0.2.0", url: "https://example.com/dl")
+        let view = RenderedView(StatusFooter(model: f.model).frame(width: 760))
+        XCTAssertTrue(view.hasExactly("发现新版本 0.2.0，打开下载页"))
+        XCTAssertNotNil(view.elements.first {
+            $0.axString("accessibilityLabel") == "发现新版本 0.2.0，打开下载页"
+                && $0.axString("accessibilityRole") == NSAccessibility.Role.button.rawValue
+        })
+        XCTAssertTrue(view.has("新版本 0.2.0"))
+        XCTAssertFalse(view.hasExactly("发现新版本 0.2.0"))
+        XCTAssertFalse(view.hasExactly("打开下载页"))
+    }
+
+    func testFooter_NoUpdate_RightmostIsCheckUpdate() async throws {
+        let f = await ViewFixture.make()
+        let view = RenderedView(StatusFooter(model: f.model).frame(width: 760))
+        let check = try XCTUnwrap(view.frame(ofExactText: "检查更新"))
+        for text in ["v1.3.0", "后台运行中", "已检测到", "转发关闭时不获取"] {
+            if let other = view.frame(ofText: text) { XCTAssertLessThan(other.maxX, check.minX + 0.5, text) }
+        }
+        XCTAssertFalse(view.has("新版本"))
     }
 }

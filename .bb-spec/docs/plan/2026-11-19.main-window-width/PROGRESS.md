@@ -1,11 +1,11 @@
 # 执行进度
 | 序号 | Plan | 状态 | 完成时间 |
 |---|---|---|---|
-| 01 | 01-macos-windows | in-progress | — |
+| 01 | 01-macos-windows | done | 2026-11-19 |
 | 02 | 02-windows-windows | in-progress | — |
 | 03 | 03-site-figure | done | 2026-11-19 |
 ## 当前
-并行组：01 Review；02 Review；03 done。
+并行组：01 done；02 Review；03 done。
 ## 阻塞
 （无）
 ## 重试与自修（每次记一条）

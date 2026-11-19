@@ -24,7 +24,7 @@ struct MainWindow: View {
                 }
             }
         }
-        .frame(width: 620)
+        .frame(width: 760)
         .background(Palette.background)
     }
 
@@ -200,7 +200,7 @@ struct StatusFooter: View {
 
     var body: some View {
         HStack(spacing: 16) {
-            Text("v\(model.status?.version ?? "—")").font(Fonts.mono).foregroundColor(Palette.textMuted)
+            Text("v\(model.status?.version ?? "—")").font(Fonts.mono).foregroundColor(Palette.textMuted).lineLimit(1).fixedSize(horizontal: true, vertical: false)
             HStack(spacing: 8) {
                 Circle().fill(model.coreRunning ? Palette.success : Palette.borderStrong).frame(width: 8, height: 8)
                 Text(model.runtimeText).font(Fonts.caption).foregroundColor(Palette.textMuted).lineLimit(1).fixedSize(horizontal: true, vertical: false)
@@ -209,11 +209,13 @@ struct StatusFooter: View {
             item("中转模型", model.modelCountValue, note: model.modelCountNote, good: modelsFetched)
             Spacer(minLength: 0)
             if let update = model.availableUpdate {
-                Text("发现新版本 \(update.version)").font(Fonts.caption).foregroundColor(Palette.info)
-                Button("打开下载页") {
+                Button {
                     if let url = URL(string: update.url) { NSWorkspace.shared.open(url) }
+                } label: {
+                    Text("新版本 \(update.version)").lineLimit(1).fixedSize(horizontal: true, vertical: false)
                 }
                 .linkAction()
+                .accessibilityLabel("发现新版本 \(update.version)，打开下载页")
             } else {
                 Button("检查更新") { Task { await model.checkUpdate() } }.linkAction()
             }
@@ -231,5 +233,7 @@ struct StatusFooter: View {
                 .foregroundColor(good ? Palette.success : Palette.textMuted)
             LabelValue(label: label, value: value, note: note, font: Fonts.caption)
         }
+        .lineLimit(1)
+        .fixedSize(horizontal: true, vertical: false)
     }
 }

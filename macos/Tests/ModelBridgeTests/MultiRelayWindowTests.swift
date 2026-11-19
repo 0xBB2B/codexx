@@ -12,6 +12,13 @@ final class MainWindowShellTests: XCTestCase {
         return (window, RenderedView(existing: window))
     }
 
+    func testMainAndSetupWindows_WidthNotResizable() async {
+        let f = await ViewFixture.make()
+        for window in [AppWindows.makeMain(model: f.model), AppWindows.makeSetup(model: f.model)] {
+            XCTAssertFalse(window.styleMask.contains(.resizable), window.title)
+        }
+    }
+
     func testWindowHeight_ThreeRelaysForwardingOn() async {
         let f = await ViewFixture.make()
         let (window, _) = await makeWindow(f)
