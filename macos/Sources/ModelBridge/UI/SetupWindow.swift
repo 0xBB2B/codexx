@@ -30,7 +30,7 @@ struct SetupWindow: View {
             }
         }
         .onAppear { model.beginSetup() }
-        .frame(width: 620)
+        .frame(width: 760)
         .background(Palette.background)
     }
 

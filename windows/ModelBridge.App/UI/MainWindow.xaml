@@ -3,12 +3,12 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:ui="clr-namespace:ModelBridge.UI"
         xmlns:shell="clr-namespace:System.Windows.Shell;assembly=PresentationFramework"
-        Title="模型接入助手" Width="620" MinWidth="450" SizeToContent="Height"
+        Title="模型接入助手" Width="760" ResizeMode="CanMinimize" SizeToContent="Height"
         MaxHeight="{x:Static SystemParameters.MaximizedPrimaryScreenHeight}"
         WindowStartupLocation="CenterScreen" FontSize="13"
         Background="{StaticResource BackgroundBrush}" Foreground="{StaticResource TextBrush}">
     <shell:WindowChrome.WindowChrome>
-        <shell:WindowChrome CaptionHeight="32" ResizeBorderThickness="6" GlassFrameThickness="0" CornerRadius="0"
+        <shell:WindowChrome CaptionHeight="32" ResizeBorderThickness="0" GlassFrameThickness="0" CornerRadius="0"
                             UseAeroCaptionButtons="False" />
     </shell:WindowChrome.WindowChrome>
     <Window.Resources>
@@ -30,7 +30,7 @@
             </StackPanel>
             <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" shell:WindowChrome.IsHitTestVisibleInChrome="True">
                 <Button Style="{StaticResource TitleButton}" Content="&#xE921;" Click="MinimizeClick" AutomationProperties.Name="最小化" />
-                <Button x:Name="MaximizeButton" Style="{StaticResource TitleButton}" Content="&#xE922;" Click="MaximizeClick" AutomationProperties.Name="最大化" />
+                <Button x:Name="MaximizeButton" Style="{StaticResource TitleButton}" Content="&#xE922;" IsEnabled="False" Foreground="{StaticResource TextDisabledBrush}" AutomationProperties.Name="最大化" />
                 <Button Style="{StaticResource TitleCloseButton}" Content="&#xE8BB;" Click="CloseClick" AutomationProperties.Name="关闭" />
             </StackPanel>
         </Grid>
@@ -57,10 +57,7 @@
                         <TextBlock x:Name="RelayNote" Style="{StaticResource LabelText}" FontSize="12" FontWeight="Normal" />
                     </StackPanel>
                 </StackPanel>
-                <StackPanel Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
-                    <TextBlock x:Name="UpdateText" Style="{StaticResource StatusText}" />
-                    <Button x:Name="UpdateButton" Style="{StaticResource LinkButton}" Click="UpdateClick" />
-                </StackPanel>
+                <Button x:Name="UpdateButton" Grid.Column="1" Style="{StaticResource LinkButton}" HorizontalAlignment="Right" VerticalAlignment="Center" Click="UpdateClick" />
             </Grid>
         </Border>
 
