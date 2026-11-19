@@ -11,117 +11,156 @@ import (
 	"modelbridge/internal/catalog"
 )
 
-func TestStore_RelayModels_RoundTripPerID(t *testing.T) {
+const fullAPIModel = `{"id":"model-a","context_length":1048576,"architecture":{"input_modalities":["text"]},"reasoning":{"supported_efforts":["low","high","max"]}}`
+
+func readJSONMap(t *testing.T, path string) map[string]any {
+	t.Helper()
+	var out map[string]any
+	if err := json.Unmarshal([]byte(readFileT(t, path)), &out); err != nil {
+		t.Fatal(err)
+	}
+	return out
+}
+
+func TestStore_CacheFileHoldsModelsAndParamsAfterFetch(t *testing.T) {
 	t.Parallel()
-	dir := t.TempDir()
-	s := catalog.NewStore(dir)
-	at := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
-	for id, ids := range map[string][]string{"1": {"auto", "deepseek-v3.2"}, "2": {"glm-5.3"}} {
-		if err := s.SaveRelayModels(id, ids, at); err != nil {
-			t.Fatalf("SaveRelayModels(%s): %v", id, err)
-		}
-	}
-
-	raw, err := os.ReadFile(filepath.Join(dir, "relay-models-1.json"))
-	if err != nil {
+	codex, _ := writeFakeCodex(t, officialJSON, 0)
+	a := newRelayStub(t, 200, modelsBody(fullAPIModel, `{"id":"auto"}`, `{"id":"m-empty","reasoning":{"supported_efforts":[]}}`))
+	b := idStub(t, "glm-5.3")
+	dataDir := t.TempDir()
+	oldFormat := `{"fetched_at":"2026-01-02T03:04:05Z","ids":["stale-model"]}`
+	if err := os.WriteFile(filepath.Join(dataDir, "relay-models-1.json"), []byte(oldFormat), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	var file struct {
-		FetchedAt string   `json:"fetched_at"`
-		IDs       []string `json:"ids"`
-	}
-	if err := json.Unmarshal(raw, &file); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := time.Parse(time.RFC3339, file.FetchedAt); err != nil {
-		t.Errorf("fetched_at 不是 RFC3339: %q", file.FetchedAt)
-	}
-	if !reflect.DeepEqual(file.IDs, []string{"auto", "deepseek-v3.2"}) {
-		t.Errorf("ids = %v", file.IDs)
-	}
+	build(t, buildOpts(t, codex, dataDir, source("1", "主力", a.URL), source("2", "备用", b.URL)))
 
-	for id, want := range map[string][]string{"1": {"auto", "deepseek-v3.2"}, "2": {"glm-5.3"}} {
-		ids, fetchedAt, ok, err := s.LoadRelayModels(id)
-		if err != nil || !ok || !reflect.DeepEqual(ids, want) || !fetchedAt.Equal(at) {
-			t.Errorf("Load(%s) = %v, %v, %v, %v", id, ids, fetchedAt, ok, err)
-		}
+	file := readJSONMap(t, filepath.Join(dataDir, "relay-models-1.json"))
+	at, _ := file["fetched_at"].(string)
+	if _, err := time.Parse(time.RFC3339, at); err != nil {
+		t.Errorf("fetched_at 不是 RFC3339: %q", at)
 	}
-	if _, err := os.Stat(filepath.Join(dir, "relay-models-2.json")); err != nil {
-		t.Errorf("编号 2 的缓存没写出: %v", err)
+	if _, ok := file["ids"]; ok {
+		t.Errorf("新格式不应再有 ids: %v", file)
+	}
+	want := []any{
+		map[string]any{"id": "model-a", "context_length": float64(1048576), "input_modalities": []any{"text"}, "reasoning_efforts": []any{"low", "high", "max"}},
+		map[string]any{"id": "auto", "context_length": float64(0), "input_modalities": nil, "reasoning_efforts": nil},
+		map[string]any{"id": "m-empty", "context_length": float64(0), "input_modalities": nil, "reasoning_efforts": []any{}},
+	}
+	if !reflect.DeepEqual(file["models"], want) {
+		t.Errorf("models = %#v, want %#v", file["models"], want)
+	}
+	if file2 := readJSONMap(t, filepath.Join(dataDir, "relay-models-2.json")); len(file2["models"].([]any)) != 1 {
+		t.Errorf("编号 2 的缓存 = %v", file2)
 	}
 }
 
-func TestStore_LoadRelayModels_NoRecord(t *testing.T) {
+func TestStore_FetchFailsAfterSuccess_UsesCachedParams(t *testing.T) {
 	t.Parallel()
-	ids, _, ok, err := catalog.NewStore(t.TempDir()).LoadRelayModels("1")
-	if err != nil || ok || len(ids) != 0 {
-		t.Errorf("Load = %v, %v, %v，没有记录时应返回 ok=false 且无错误", ids, ok, err)
+	codex, _ := writeFakeCodex(t, sameNameOfficialJSON, 0)
+	srv := newRelayStub(t, 200, modelsBody(
+		fullAPIModel,
+		`{"id":"gpt-x","context_length":1050000,"architecture":{"input_modalities":["text"]},"reasoning":{"supported_efforts":["low","high"]}}`,
+		`{"id":"auto","context_length":500}`,
+		`{"id":"m-empty","context_length":2000,"reasoning":{"supported_efforts":[]}}`))
+	dataDir := t.TempDir()
+	first := build(t, buildOpts(t, codex, dataDir, source("1", "主力", srv.URL)))
+	cacheBefore := readFileT(t, filepath.Join(dataDir, "relay-models-1.json"))
+	srv.status.Store(500)
+
+	second := build(t, buildOpts(t, codex, dataDir, source("1", "主力", srv.URL)))
+
+	if r := relayResult(t, second, "1"); !r.Stale || catalog.ErrorCode(r.Err) != "relay_5xx" {
+		t.Errorf("配置 1 = %+v", r)
+	}
+	if !reflect.DeepEqual(second.Models, first.Models) {
+		t.Errorf("获取失败后的目录应和成功那次一致（含接口参数）:\n got  %v\n want %v", roundtrip(t, second.Models), roundtrip(t, first.Models))
+	}
+	if !reflect.DeepEqual(second.Routes, first.Routes) || !reflect.DeepEqual(second.ReasoningLevels, first.ReasoningLevels) {
+		t.Errorf("Routes/ReasoningLevels 与成功那次不一致: %+v %v", second.Routes, second.ReasoningLevels)
+	}
+	e := bySlug(t, roundtrip(t, second.Models), "relay-gpt-x")
+	if e["context_window"] != float64(1050000) {
+		t.Errorf("缓存的接口参数没用上: context_window = %v", e["context_window"])
+	}
+	if got := readFileT(t, filepath.Join(dataDir, "relay-models-1.json")); got != cacheBefore {
+		t.Errorf("获取失败时不应覆盖缓存")
 	}
 }
 
-func TestStore_LoadRelayModels_LegacyFile(t *testing.T) {
+func TestStore_NewCache_KeepsMissingAndEmptyApart(t *testing.T) {
 	t.Parallel()
-	at := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
-	legacy := `{"fetched_at":"2026-01-02T03:04:05Z","ids":["auto"]}`
+	codex, _ := writeFakeCodex(t, sameNameOfficialJSON, 0)
+	dataDir := t.TempDir()
+	cache := `{"fetched_at":"2026-01-02T03:04:05Z","models":[
+{"id":"gpt-x","context_length":0,"input_modalities":null,"reasoning_efforts":null},
+{"id":"gpt-h","context_length":0,"input_modalities":null,"reasoning_efforts":[]},
+{"id":"model-a","context_length":1048576,"input_modalities":["text"],"reasoning_efforts":["low","high","max"]}]}`
+	if err := os.WriteFile(filepath.Join(dataDir, "relay-models-1.json"), []byte(cache), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	res := build(t, buildOpts(t, codex, dataDir, sourceMode("1", "主力", "", catalog.CacheOnly, nil)))
+	models := roundtrip(t, res.Models)
+
+	assertEntry(t, bySlug(t, models, "relay-gpt-x"), entryWant{400000, []any{"text", "image"}, []any{"low", "medium", "xhigh"}, "medium", nil, false})
+	assertEntry(t, bySlug(t, models, "relay-gpt-h"), entryWant{200000, []any{"text"}, nil, nil, false, false})
+	assertEntry(t, bySlug(t, models, "relay-model-a"), entryWant{1048576, []any{"text"}, []any{"low", "high", "ultra"}, "high", true, true})
+	if !res.Routes["relay-model-a"].UltraToMax || res.Routes["relay-gpt-x"].UltraToMax {
+		t.Errorf("Routes = %+v", res.Routes)
+	}
+	r := relayResult(t, res, "1")
+	if want, _ := time.Parse(time.RFC3339, "2026-01-02T03:04:05Z"); r.Err != nil || !r.FetchedAt.Equal(want) {
+		t.Errorf("配置 1 = %+v", r)
+	}
+}
+
+func TestStore_OldFormatCache_AllModelsKeptWithAllParamsMissing(t *testing.T) {
+	t.Parallel()
+	codex, _ := writeFakeCodex(t, sameNameOfficialJSON, 0)
+	failing := newRelayStub(t, 500, "")
 	tests := []struct {
-		name    string
-		id      string
-		prepare func(dir string) error
-		wantOK  bool
-		wantIDs []string
+		name string
+		file string
 	}{
-		{"编号 1 没有新文件时读旧文件", "1", func(string) error { return nil }, true, []string{"auto"}},
-		{"编号 1 有新文件时新文件优先", "1", func(dir string) error {
-			return catalog.NewStore(dir).SaveRelayModels("1", []string{"glm-5.3"}, at)
-		}, true, []string{"glm-5.3"}},
-		{"其他编号不读旧文件", "2", func(string) error { return nil }, false, nil},
+		{"编号 1 的新文件名里是旧格式", "relay-models-1.json"},
+		{"编号 1 的旧版单文件", "relay-models.json"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			dir := t.TempDir()
-			if err := os.WriteFile(filepath.Join(dir, "relay-models.json"), []byte(legacy), 0o644); err != nil {
+			dataDir := t.TempDir()
+			old := `{"fetched_at":"2026-01-02T03:04:05Z","ids":["model-a","gpt-x","auto"]}`
+			if err := os.WriteFile(filepath.Join(dataDir, tt.file), []byte(old), 0o644); err != nil {
 				t.Fatal(err)
 			}
-			if err := tt.prepare(dir); err != nil {
-				t.Fatal(err)
+
+			res := build(t, buildOpts(t, codex, dataDir, source("1", "主力", failing.URL)))
+			models := roundtrip(t, res.Models)
+
+			if got, want := slugsOf(models[4:]), []any{"relay-model-a", "relay-gpt-x", "relay-auto"}; !reflect.DeepEqual(got, want) {
+				t.Fatalf("中转条目 = %v, want %v", got, want)
 			}
-			ids, _, ok, err := catalog.NewStore(dir).LoadRelayModels(tt.id)
-			if err != nil || ok != tt.wantOK || !reflect.DeepEqual(ids, tt.wantIDs) {
-				t.Errorf("Load(%s) = %v, %v, %v", tt.id, ids, ok, err)
+			if r := relayResult(t, res, "1"); !r.Stale || r.ModelCount != 3 {
+				t.Errorf("配置 1 = %+v", r)
 			}
+			assertEntry(t, bySlug(t, models, "relay-model-a"), entryWant{400000, []any{"text", "image"}, nil, nil, false, false})
+			assertEntry(t, bySlug(t, models, "relay-gpt-x"), entryWant{400000, []any{"text", "image"}, []any{"low", "medium", "xhigh"}, "medium", nil, false})
+			assertEntry(t, bySlug(t, models, "relay-auto"), entryWant{1000000, []any{"text", "image"}, nil, nil, false, false})
 		})
 	}
 }
 
-func TestStore_LoadRelayModels_CorruptFileReturnsError(t *testing.T) {
+func TestStore_RepeatedFetchLeavesNoTempFiles(t *testing.T) {
 	t.Parallel()
-	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "relay-models-1.json"), []byte("not json"), 0o644); err != nil {
-		t.Fatal(err)
+	codex, _ := writeFakeCodex(t, officialJSON, 0)
+	srv := idStub(t, "a")
+	dataDir := t.TempDir()
+	for range 2 {
+		build(t, buildOpts(t, codex, dataDir, source("1", "主力", srv.URL)))
 	}
-	if _, _, _, err := catalog.NewStore(dir).LoadRelayModels("1"); err == nil {
-		t.Error("新文件损坏应返回错误")
-	}
-}
-
-func TestStore_SaveRelayModels_OverwritesAtomically(t *testing.T) {
-	t.Parallel()
-	dir := t.TempDir()
-	s := catalog.NewStore(dir)
-	now := time.Now()
-	if err := s.SaveRelayModels("1", []string{"a"}, now); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.SaveRelayModels("1", []string{"b"}, now); err != nil {
-		t.Fatal(err)
-	}
-	ids, _, _, _ := s.LoadRelayModels("1")
-	if !reflect.DeepEqual(ids, []string{"b"}) {
-		t.Errorf("ids = %v", ids)
-	}
-	entries, _ := os.ReadDir(dir)
-	if len(entries) != 1 || entries[0].Name() != "relay-models-1.json" {
+	entries, _ := os.ReadDir(dataDir)
+	if len(entries) != 2 {
 		t.Errorf("目录里有多余的临时文件: %v", entries)
 	}
 }

@@ -57,6 +57,7 @@ type fakeRelay struct {
 	*httptest.Server
 	mu        sync.Mutex
 	ids       []string
+	raw       []string
 	keys      map[string]bool
 	status    int
 	modelHits int
@@ -97,11 +98,15 @@ func (r *fakeRelay) serve(w http.ResponseWriter, req *http.Request) {
 		w.WriteHeader(http.StatusUnauthorized)
 		return
 	}
+	w.Header().Set("Content-Type", "application/json")
+	if r.raw != nil {
+		_, _ = io.WriteString(w, `{"data":[`+strings.Join(r.raw, ",")+`]}`)
+		return
+	}
 	data := make([]map[string]string, 0, len(r.ids))
 	for _, id := range r.ids {
 		data = append(data, map[string]string{"id": id})
 	}
-	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{"data": data})
 }
 
@@ -111,6 +116,20 @@ func (r *fakeRelay) setIDs(ids ...string) {
 	r.mu.Lock()
 	r.ids = ids
 	r.mu.Unlock()
+}
+
+func (r *fakeRelay) setModelsJSON(raw ...string) {
+	r.mu.Lock()
+	r.raw = raw
+	r.mu.Unlock()
+}
+
+func relayModelJSON(id string, efforts ...string) string {
+	quoted := make([]string, 0, len(efforts))
+	for _, e := range efforts {
+		quoted = append(quoted, strconv.Quote(e))
+	}
+	return `{"id":` + strconv.Quote(id) + `,"context_length":1048576,"architecture":{"input_modalities":["text"]},"reasoning":{"supported_efforts":[` + strings.Join(quoted, ",") + `]}}`
 }
 
 func (r *fakeRelay) setStatus(code int) {
@@ -750,7 +769,7 @@ func TestInit_RecoversRestoreBlockedAfterRestart(t *testing.T) {
 	}
 }
 
-func TestSetForwardingTrue_SameNameModelUsesPrefixedSlugAndOriginalNameUpstream(t *testing.T) {
+func TestSetForwardingTrue_RelayModelsUsePrefixedSlugAndOriginalNameUpstream(t *testing.T) {
 	e := newEnv(t, true)
 	e.relay.setIDs("gpt-a", "deepseek-flash", "unknown-model-x")
 	e.initRelay(t)
@@ -767,8 +786,8 @@ func TestSetForwardingTrue_SameNameModelUsesPrefixedSlugAndOriginalNameUpstream(
 		slugs = append(slugs, m["slug"])
 		display[m["slug"]] = m["display_name"]
 	}
-	if want := []any{"gpt-a", "gpt-b", "relay-deepseek-flash", "relay-gpt-a"}; !reflect.DeepEqual(slugs, want) {
-		t.Errorf("slugs = %v, want %v（两边都没有的 unknown-model-x 不出现）", slugs, want)
+	if want := []any{"gpt-a", "gpt-b", "relay-gpt-a", "relay-deepseek-flash", "relay-unknown-model-x"}; !reflect.DeepEqual(slugs, want) {
+		t.Errorf("slugs = %v, want %v（中转返回的陌生模型也进目录）", slugs, want)
 	}
 	if display["relay-gpt-a"] != "中转 · gpt-a" {
 		t.Errorf("display_name = %v", display["relay-gpt-a"])
@@ -817,7 +836,7 @@ func catalogSlugs(models []map[string]any) []any {
 func TestCatalog_OfficialLimitedToAccountModelsCache(t *testing.T) {
 	e := newEnv(t, true, func(e *env) { e.codexPath = writeFakeCodex(t, threeOfficialJSON, 0) })
 	writeModelsCache(t, e, `{"fetched_at":"2026-01-01T00:00:00Z","etag":"e","client_version":"0.0.0","identity":"placeholder","models":[{"slug":"gpt-c","visibility":"list"},{"slug":"ghost-not-in-full-set"},{"slug":"gpt-a","visibility":"list"}]}`)
-	e.relay.setIDs("gpt-b", "deepseek-flash")
+	e.relay.setIDs("deepseek-flash", "gpt-b")
 	st := e.initRelay(t)
 
 	models := catalogModels(t, e)
@@ -894,7 +913,7 @@ func postBodyViaProxy(t *testing.T, addr, body string, zstdBody bool) {
 	_, _ = io.Copy(io.Discard, resp.Body)
 }
 
-func TestForwarding_UltraEffortChangedBackToMaxOnlyForParamsTableModels(t *testing.T) {
+func TestForwarding_UltraEffortChangedBackToMaxOnlyForModelsWithMaxEffort(t *testing.T) {
 	tests := []struct {
 		name       string
 		model      string
@@ -902,15 +921,16 @@ func TestForwarding_UltraEffortChangedBackToMaxOnlyForParamsTableModels(t *testi
 		zstd       bool
 		wantEffort string
 	}{
-		{"参数表模型 ultra 改回 max", "relay-deepseek-flash", "ultra", false, "max"},
-		{"参数表模型 ultra 改回 max（zstd）", "relay-deepseek-flash", "ultra", true, "max"},
-		{"参数表模型 high 原样", "relay-deepseek-flash", "high", false, "high"},
-		{"官方同名中转模型 ultra 原样", "relay-gpt-a", "ultra", false, "ultra"},
+		{"接口声明 max 的模型 ultra 改回 max", "relay-deepseek-flash", "ultra", false, "max"},
+		{"接口声明 max 的模型 ultra 改回 max（zstd）", "relay-deepseek-flash", "ultra", true, "max"},
+		{"接口声明 max 的模型 high 原样", "relay-deepseek-flash", "high", false, "high"},
+		{"接口没声明 max 的模型 ultra 原样", "relay-no-max", "ultra", false, "ultra"},
+		{"接口没给思考等级的同名模型 ultra 原样", "relay-gpt-a", "ultra", false, "ultra"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			e := newEnv(t, true)
-			e.relay.setIDs("deepseek-flash", "gpt-a")
+			e.relay.setModelsJSON(relayModelJSON("deepseek-flash", "low", "high", "max"), relayModelJSON("no-max", "low", "high"), `{"id":"gpt-a"}`)
 			e.initRelay(t)
 			postBodyViaProxy(t, e.listenAddr, `{"model":"`+tt.model+`","reasoning":{"effort":"`+tt.effort+`"}}`, tt.zstd)
 			bodies := e.relay.forwardedBodies()
@@ -932,7 +952,7 @@ func TestForwarding_UltraEffortChangedBackToMaxOnlyForParamsTableModels(t *testi
 	}
 }
 
-func TestForwarding_ParamsTableModel_NoReasoningFieldsAdded(t *testing.T) {
+func TestForwarding_ModelWithMaxEffort_NoReasoningFieldsAdded(t *testing.T) {
 	tests := []struct {
 		name string
 		body string
@@ -945,7 +965,7 @@ func TestForwarding_ParamsTableModel_NoReasoningFieldsAdded(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			e := newEnv(t, true)
-			e.relay.setIDs("deepseek-flash")
+			e.relay.setModelsJSON(relayModelJSON("deepseek-flash", "low", "high", "max"))
 			e.initRelay(t)
 			postBodyViaProxy(t, e.listenAddr, tt.body, false)
 			bodies := e.relay.forwardedBodies()

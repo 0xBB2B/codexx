@@ -17,15 +17,15 @@ type Store struct{ dir string }
 
 func NewStore(dir string) *Store { return &Store{dir: dir} }
 
-func (s *Store) SaveRelayModels(id string, ids []string, at time.Time) error {
+func (s *Store) SaveRelayModels(id string, models []RelayModel, at time.Time) error {
 	return s.writeJSON(relayModelsFileName(id), map[string]any{
 		"fetched_at": at.UTC().Format(time.RFC3339),
-		"ids":        ids,
+		"models":     models,
 	})
 }
 
 // 编号 1 的新缓存不存在时退回旧版单文件缓存
-func (s *Store) LoadRelayModels(id string) ([]string, time.Time, bool, error) {
+func (s *Store) LoadRelayModels(id string) ([]RelayModel, time.Time, bool, error) {
 	raw, err := os.ReadFile(filepath.Join(s.dir, relayModelsFileName(id)))
 	if errors.Is(err, os.ErrNotExist) && id == "1" {
 		raw, err = os.ReadFile(filepath.Join(s.dir, legacyRelayModelsFile))
@@ -37,13 +37,19 @@ func (s *Store) LoadRelayModels(id string) ([]string, time.Time, bool, error) {
 		return nil, time.Time{}, false, err
 	}
 	var file struct {
-		FetchedAt time.Time `json:"fetched_at"`
-		IDs       []string  `json:"ids"`
+		FetchedAt time.Time    `json:"fetched_at"`
+		Models    []RelayModel `json:"models"`
+		IDs       []string     `json:"ids"`
 	}
 	if err := json.Unmarshal(raw, &file); err != nil {
 		return nil, time.Time{}, false, err
 	}
-	return file.IDs, file.FetchedAt, true, nil
+	if file.Models == nil {
+		for _, id := range file.IDs {
+			file.Models = append(file.Models, RelayModel{ID: id})
+		}
+	}
+	return file.Models, file.FetchedAt, true, nil
 }
 
 func relayModelsFileName(id string) string { return "relay-models-" + id + ".json" }
