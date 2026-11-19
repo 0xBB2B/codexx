@@ -31,7 +31,6 @@ type entryWant struct {
 	efforts    []any
 	def        any
 	updates    any
-	ultraToMax bool
 }
 
 func assertEntry(t *testing.T, e map[string]any, want entryWant) {
@@ -73,85 +72,86 @@ func TestRelayEntry_ParamsFromAPIAndFallback(t *testing.T) {
 		slug string
 		want entryWant
 	}{
-		{"不同名 接口给全参数 max 写成 ultra", apiFull("model-a", `["low","high","max"]`), "relay-model-a",
-			entryWant{1048576, text, []any{"low", "high", "ultra"}, "high", true, true}},
+		{"不同名 接口给全参数 max 原样", apiFull("model-a", `["low","high","max"]`), "relay-model-a",
+			entryWant{1048576, text, []any{"low", "high", "max"}, "high", true}},
+		{"不同名 完整等级 none 到 max 依次原样 默认 high", apiFull("example-model-a", `["none","low","medium","high","xhigh","max"]`), "relay-example-model-a",
+			entryWant{1048576, text, []any{"none", "low", "medium", "high", "xhigh", "max"}, "high", true}},
+		{"不同名 low 与 max 默认取最高档 max", apiFull("example-model-b", `["low","max"]`), "relay-example-model-b",
+			entryWant{1048576, text, []any{"low", "max"}, "max", true}},
 		{"同名 接口值覆盖官方值", `{"id":"gpt-x","context_length":1050000,"architecture":{"input_modalities":["text"]},"reasoning":{"supported_efforts":["low","high"]}}`, "relay-gpt-x",
-			entryWant{1050000, text, []any{"low", "high"}, "high", true, false}},
+			entryWant{1050000, text, []any{"low", "high"}, "high", true}},
 		{"丢弃不认识的等级", apiFull("model-a", `["low","turbo","medium"]`), "relay-model-a",
-			entryWant{1048576, text, []any{"low", "medium"}, "medium", true, false}},
+			entryWant{1048576, text, []any{"low", "medium"}, "medium", true}},
 		{"没有 high 时取最高", apiFull("model-a", `["none","low","medium","xhigh"]`), "relay-model-a",
-			entryWant{1048576, text, []any{"none", "low", "medium", "xhigh"}, "xhigh", true, false}},
-		{"只有 max 时默认也写成 ultra", apiFull("model-a", `["max"]`), "relay-model-a",
-			entryWant{1048576, text, []any{"ultra"}, "ultra", true, true}},
+			entryWant{1048576, text, []any{"none", "low", "medium", "xhigh"}, "xhigh", true}},
+		{"只有 max 时默认也是 max", apiFull("model-a", `["max"]`), "relay-model-a",
+			entryWant{1048576, text, []any{"max"}, "max", true}},
 		{"等级顺序按接口", apiFull("model-a", `["xhigh","low","high"]`), "relay-model-a",
-			entryWant{1048576, text, []any{"xhigh", "low", "high"}, "high", true, false}},
+			entryWant{1048576, text, []any{"xhigh", "low", "high"}, "high", true}},
 		{"等级只有 minimal 和 low 取 low", apiFull("model-a", `["minimal","low"]`), "relay-model-a",
-			entryWant{1048576, text, []any{"minimal", "low"}, "low", true, false}},
+			entryWant{1048576, text, []any{"minimal", "low"}, "low", true}},
 		{"接口给空等级列表", apiFull("model-a", `[]`), "relay-model-a",
-			entryWant{1048576, text, nil, nil, false, false}},
+			entryWant{1048576, text, nil, nil, false}},
 		{"接口等级全被丢弃", apiFull("model-a", `["turbo"]`), "relay-model-a",
-			entryWant{1048576, text, nil, nil, false, false}},
+			entryWant{1048576, text, nil, nil, false}},
 		{"同名 接口给空等级列表时不用官方等级", apiFull("gpt-x", `[]`), "relay-gpt-x",
-			entryWant{1048576, text, nil, nil, false, false}},
+			entryWant{1048576, text, nil, nil, false}},
 		{"同名 接口等级全被丢弃时不用官方等级", apiFull("gpt-x", `["turbo"]`), "relay-gpt-x",
-			entryWant{1048576, text, nil, nil, false, false}},
+			entryWant{1048576, text, nil, nil, false}},
 
 		{"同名 全缺参数用官方值", `{"id":"gpt-x"}`, "relay-gpt-x",
-			entryWant{400000, textImage, officialLevels, "medium", nil, false}},
+			entryWant{400000, textImage, officialLevels, "medium", nil}},
 		{"同名 context_length 为 0", `{"id":"gpt-x","context_length":0,"architecture":{"input_modalities":["text"]},"reasoning":{"supported_efforts":["high"]}}`, "relay-gpt-x",
-			entryWant{400000, text, []any{"high"}, "high", true, false}},
+			entryWant{400000, text, []any{"high"}, "high", true}},
 		{"同名 context_length 为负数", `{"id":"gpt-x","context_length":-1,"architecture":{"input_modalities":["text"]},"reasoning":{"supported_efforts":["high"]}}`, "relay-gpt-x",
-			entryWant{400000, text, []any{"high"}, "high", true, false}},
+			entryWant{400000, text, []any{"high"}, "high", true}},
 		{"同名 context_length 为 null", `{"id":"gpt-x","context_length":null,"architecture":{"input_modalities":["text"]},"reasoning":{"supported_efforts":["high"]}}`, "relay-gpt-x",
-			entryWant{400000, text, []any{"high"}, "high", true, false}},
+			entryWant{400000, text, []any{"high"}, "high", true}},
 		{"同名 input_modalities 为空列表", `{"id":"gpt-x","context_length":2000,"architecture":{"input_modalities":[]},"reasoning":{"supported_efforts":["high"]}}`, "relay-gpt-x",
-			entryWant{2000, textImage, []any{"high"}, "high", true, false}},
+			entryWant{2000, textImage, []any{"high"}, "high", true}},
 		{"同名 只缺等级时用官方等级和默认等级", `{"id":"gpt-x","context_length":2000,"architecture":{"input_modalities":["text"]}}`, "relay-gpt-x",
-			entryWant{2000, text, officialLevels, "medium", nil, false}},
+			entryWant{2000, text, officialLevels, "medium", nil}},
 		{"同名 reasoning 里没有 supported_efforts", `{"id":"gpt-x","context_length":2000,"architecture":{"input_modalities":["text"]},"reasoning":{}}`, "relay-gpt-x",
-			entryWant{2000, text, officialLevels, "medium", nil, false}},
+			entryWant{2000, text, officialLevels, "medium", nil}},
 		{"同名 全缺时官方的 max 与 ultra 原样", `{"id":"gpt-m"}`, "relay-gpt-m",
-			entryWant{1000, text, []any{"high", "max", "ultra"}, "max", nil, false}},
+			entryWant{1000, text, []any{"high", "max", "ultra"}, "max", nil}},
 
 		{"不同名 全缺参数用官方第一个条目", `{"id":"model-a"}`, "relay-model-a", noLevels},
 		{"不同名 context_length 为 0", `{"id":"model-a","context_length":0,"architecture":{"input_modalities":["text"]},"reasoning":{"supported_efforts":["high"]}}`, "relay-model-a",
-			entryWant{400000, text, []any{"high"}, "high", true, false}},
+			entryWant{400000, text, []any{"high"}, "high", true}},
 		{"不同名 context_length 为负数", `{"id":"model-a","context_length":-7,"architecture":{"input_modalities":["text"]},"reasoning":{"supported_efforts":["high"]}}`, "relay-model-a",
-			entryWant{400000, text, []any{"high"}, "high", true, false}},
+			entryWant{400000, text, []any{"high"}, "high", true}},
 		{"不同名 input_modalities 为空列表", `{"id":"model-a","context_length":2000,"architecture":{"input_modalities":[]},"reasoning":{"supported_efforts":["high"]}}`, "relay-model-a",
-			entryWant{2000, textImage, []any{"high"}, "high", true, false}},
+			entryWant{2000, textImage, []any{"high"}, "high", true}},
 		{"不同名 丢弃 Codex 不认识的输入类型", `{"id":"model-a","context_length":2000,"architecture":{"input_modalities":["text","file","audio","video"]},"reasoning":{"supported_efforts":["high"]}}`, "relay-model-a",
-			entryWant{2000, []any{"text", "audio"}, []any{"high"}, "high", true, false}},
+			entryWant{2000, []any{"text", "audio"}, []any{"high"}, "high", true}},
 		{"不同名 输入类型全不认识时用官方第一个条目", `{"id":"model-a","context_length":2000,"architecture":{"input_modalities":["file"]},"reasoning":{"supported_efforts":["high"]}}`, "relay-model-a",
-			entryWant{2000, textImage, []any{"high"}, "high", true, false}},
+			entryWant{2000, textImage, []any{"high"}, "high", true}},
 		{"同名 输入类型全不认识时用官方值", `{"id":"gpt-x","context_length":2000,"architecture":{"input_modalities":["file","video"]},"reasoning":{"supported_efforts":["high"]}}`, "relay-gpt-x",
-			entryWant{2000, textImage, []any{"high"}, "high", true, false}},
+			entryWant{2000, textImage, []any{"high"}, "high", true}},
 		{"不同名 只缺等级时没有等级", `{"id":"model-a","context_length":2000,"architecture":{"input_modalities":["text"]}}`, "relay-model-a",
-			entryWant{2000, text, nil, nil, false, false}},
+			entryWant{2000, text, nil, nil, false}},
 
 		{"auto 接口给 500 也用固定值", `{"id":"auto","context_length":500,"architecture":{"input_modalities":["text"]},"reasoning":{"supported_efforts":["low","max"]}}`, "relay-auto",
-			entryWant{1000000, textImage, nil, nil, false, false}},
+			entryWant{1000000, textImage, nil, nil, false}},
 		{"auto 接口什么都不给", `{"id":"auto"}`, "relay-auto",
-			entryWant{1000000, textImage, nil, nil, false, false}},
+			entryWant{1000000, textImage, nil, nil, false}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			res, models := buildOne(t, paramsOfficialJSON, tt.item)
+			_, models := buildOne(t, paramsOfficialJSON, tt.item)
 			assertEntry(t, bySlug(t, models, tt.slug), tt.want)
-			if got := res.Routes[tt.slug].UltraToMax; got != tt.want.ultraToMax {
-				t.Errorf("UltraToMax = %v, want %v", got, tt.want.ultraToMax)
-			}
 		})
 	}
 }
 
-func TestRelayEntry_ReasoningLevelsFollowAPIAndAreWrittenAsUltra(t *testing.T) {
+func TestRelayEntry_ReasoningLevelsFollowAPIWithMaxUnchanged(t *testing.T) {
 	t.Parallel()
 	res, _ := buildOne(t, paramsOfficialJSON,
 		`{"id":"model-a","reasoning":{"supported_efforts":["low","high","max"]}}`)
-	if want := []string{"low", "high", "ultra"}; !reflect.DeepEqual(res.ReasoningLevels, want) {
-		t.Errorf("ReasoningLevels = %v, want %v（写 Codex 配置用 ultra，不含 max）", res.ReasoningLevels, want)
+	if want := []string{"low", "high", "max"}; !reflect.DeepEqual(res.ReasoningLevels, want) {
+		t.Errorf("ReasoningLevels = %v, want %v", res.ReasoningLevels, want)
 	}
 }
 
@@ -340,7 +340,7 @@ func TestRelayEntry_RoutesRelayModelsAndShownAcrossConfigs(t *testing.T) {
 	wantRoutes := map[string]catalog.RelayRoute{
 		"relay-auto":           {ID: "1", Model: "auto"},
 		"relay-gpt-h":          {ID: "1", Model: "gpt-h"},
-		"relay-gpt-x":          {ID: "1", Model: "gpt-x", UltraToMax: true},
+		"relay-gpt-x":          {ID: "1", Model: "gpt-x"},
 		"relay2-deepseek-v3.2": {ID: "2", Model: "deepseek-v3.2"},
 		"relay2-gpt-y":         {ID: "2", Model: "gpt-y"},
 	}
@@ -356,7 +356,7 @@ func TestRelayEntry_RoutesRelayModelsAndShownAcrossConfigs(t *testing.T) {
 	}
 }
 
-func TestRelayEntry_SameNameFromOfficialUsesNoUltraRewrite(t *testing.T) {
+func TestRelayEntry_SameNameFromOfficialKeepsOfficialLevels(t *testing.T) {
 	t.Parallel()
 	const official = `{"models":[{"slug":"gpt-x","priority":3,"supported_reasoning_levels":[{"effort":"high","description":"h"},{"effort":"max","description":"m"},{"effort":"ultra","description":"u"}],"default_reasoning_level":"max"}]}`
 	res, models := buildOne(t, official, `{"id":"gpt-x"}`)
@@ -366,9 +366,6 @@ func TestRelayEntry_SameNameFromOfficialUsesNoUltraRewrite(t *testing.T) {
 	}
 	if e["default_reasoning_level"] != "max" {
 		t.Errorf("default_reasoning_level = %v, want max", e["default_reasoning_level"])
-	}
-	if res.Routes["relay-gpt-x"].UltraToMax {
-		t.Error("等级取自官方时 UltraToMax 应为 false")
 	}
 	if want := []string{"high", "max", "ultra"}; !reflect.DeepEqual(res.ReasoningLevels, want) {
 		t.Errorf("ReasoningLevels = %v, want %v", res.ReasoningLevels, want)

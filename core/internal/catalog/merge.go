@@ -35,9 +35,8 @@ type RelayResult struct {
 }
 
 type RelayRoute struct {
-	ID         string
-	Model      string
-	UltraToMax bool
+	ID    string
+	Model string
 }
 
 type RelayGroup struct {
@@ -76,7 +75,7 @@ func MergeRelay(official []Entry, groups []RelayGroup) (*Result, error) {
 			if m.ID == "" {
 				continue
 			}
-			e, ultraToMax := relayEntry(m, official[0], bySlug[m.ID], hidden[m.ID])
+			e := relayEntry(m, official[0], bySlug[m.ID], hidden[m.ID])
 			slug := RelaySlug(g.ID, m.ID)
 			applyRelayOverrides(e, slug, g.Name, m.ID, next)
 			next++
@@ -89,7 +88,7 @@ func MergeRelay(official []Entry, groups []RelayGroup) (*Result, error) {
 				}
 			}
 			res.Models = append(res.Models, e)
-			res.Routes[slug] = RelayRoute{ID: g.ID, Model: m.ID, UltraToMax: ultraToMax}
+			res.Routes[slug] = RelayRoute{ID: g.ID, Model: m.ID}
 			res.RelayModels = append(res.RelayModels, slug)
 			if !hidden[m.ID] {
 				res.RelayShown = append(res.RelayShown, slug)
@@ -100,7 +99,7 @@ func MergeRelay(official []Entry, groups []RelayGroup) (*Result, error) {
 }
 
 // sameName 为同名官方条目，没有时为 nil；缺参数时同名取它的值，不同名取 first 的值
-func relayEntry(m RelayModel, first, sameName Entry, hidden bool) (Entry, bool) {
+func relayEntry(m RelayModel, first, sameName Entry, hidden bool) Entry {
 	base := first
 	if sameName != nil {
 		base = sameName
@@ -117,7 +116,7 @@ func relayEntry(m RelayModel, first, sameName Entry, hidden bool) (Entry, bool) 
 		e["max_context_window"] = autoContextWindow
 		e["input_modalities"] = []string{"text", "image"}
 		setNoLevels(e)
-		return e, false
+		return e
 	}
 	if m.ContextLength > 0 {
 		e["context_window"] = m.ContextLength
@@ -130,28 +129,21 @@ func relayEntry(m RelayModel, first, sameName Entry, hidden bool) (Entry, bool) 
 		if sameName == nil {
 			setNoLevels(e)
 		}
-		return e, false
+		return e
 	}
 	levels, def := relayLevels(m.Efforts)
 	if len(levels) == 0 {
 		setNoLevels(e)
-		return e, false
+		return e
 	}
-	ultraToMax := false
 	supported := make([]any, 0, len(levels))
 	for _, l := range levels {
-		if l == "max" {
-			l, ultraToMax = "ultra", true
-		}
 		supported = append(supported, map[string]any{"effort": l, "description": l})
-	}
-	if def == "max" {
-		def = "ultra"
 	}
 	e["supported_reasoning_levels"] = supported
 	e["default_reasoning_level"] = def
 	e["supports_reasoning_effort_updates"] = true
-	return e, ultraToMax
+	return e
 }
 
 // Codex 读目录时遇到不认识的输入类型会整份目录加载失败

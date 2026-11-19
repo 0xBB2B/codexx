@@ -103,12 +103,9 @@ func TestStore_NewCache_KeepsMissingAndEmptyApart(t *testing.T) {
 	res := build(t, buildOpts(t, codex, dataDir, sourceMode("1", "主力", "", catalog.CacheOnly, nil)))
 	models := roundtrip(t, res.Models)
 
-	assertEntry(t, bySlug(t, models, "relay-gpt-x"), entryWant{400000, []any{"text", "image"}, []any{"low", "medium", "xhigh"}, "medium", nil, false})
-	assertEntry(t, bySlug(t, models, "relay-gpt-h"), entryWant{200000, []any{"text"}, nil, nil, false, false})
-	assertEntry(t, bySlug(t, models, "relay-model-a"), entryWant{1048576, []any{"text"}, []any{"low", "high", "ultra"}, "high", true, true})
-	if !res.Routes["relay-model-a"].UltraToMax || res.Routes["relay-gpt-x"].UltraToMax {
-		t.Errorf("Routes = %+v", res.Routes)
-	}
+	assertEntry(t, bySlug(t, models, "relay-gpt-x"), entryWant{400000, []any{"text", "image"}, []any{"low", "medium", "xhigh"}, "medium", nil})
+	assertEntry(t, bySlug(t, models, "relay-gpt-h"), entryWant{200000, []any{"text"}, nil, nil, false})
+	assertEntry(t, bySlug(t, models, "relay-model-a"), entryWant{1048576, []any{"text"}, []any{"low", "high", "max"}, "high", true})
 	r := relayResult(t, res, "1")
 	if want, _ := time.Parse(time.RFC3339, "2026-01-02T03:04:05Z"); r.Err != nil || !r.FetchedAt.Equal(want) {
 		t.Errorf("配置 1 = %+v", r)
@@ -144,9 +141,9 @@ func TestStore_OldFormatCache_AllModelsKeptWithAllParamsMissing(t *testing.T) {
 			if r := relayResult(t, res, "1"); !r.Stale || r.ModelCount != 3 {
 				t.Errorf("配置 1 = %+v", r)
 			}
-			assertEntry(t, bySlug(t, models, "relay-model-a"), entryWant{400000, []any{"text", "image"}, nil, nil, false, false})
-			assertEntry(t, bySlug(t, models, "relay-gpt-x"), entryWant{400000, []any{"text", "image"}, []any{"low", "medium", "xhigh"}, "medium", nil, false})
-			assertEntry(t, bySlug(t, models, "relay-auto"), entryWant{1000000, []any{"text", "image"}, nil, nil, false, false})
+			assertEntry(t, bySlug(t, models, "relay-model-a"), entryWant{400000, []any{"text", "image"}, nil, nil, false})
+			assertEntry(t, bySlug(t, models, "relay-gpt-x"), entryWant{400000, []any{"text", "image"}, []any{"low", "medium", "xhigh"}, "medium", nil})
+			assertEntry(t, bySlug(t, models, "relay-auto"), entryWant{1000000, []any{"text", "image"}, nil, nil, false})
 		})
 	}
 }
