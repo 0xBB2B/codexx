@@ -22,6 +22,10 @@
 
 升级到新版本后，钥匙串可能会问一次是否允许访问，选允许即可。
 
+## 选 Max 思考等级
+
+中转模型支持 Max 时，如果已登录 ChatGPT，Codex 里能选哪几档思考等级，由 ChatGPT 设置里的「Available reasoning efforts」决定，默认没勾 Max。去那里勾上 Max 就能选。没登录 ChatGPT（只用中转）时，这一步可以跳过。选了 Max，中转收到的思考等级就是 `max`。
+
 ## 卸载
 
 - macOS：用菜单里的「卸载模型接入助手…」。不要直接把 App 拖进废纸篓，否则 Codex 配置不会被还原。

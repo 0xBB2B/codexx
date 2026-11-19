@@ -211,8 +211,8 @@ func TestSite_FaqDetails(t *testing.T) {
 	t.Parallel()
 	html := readSite(t)
 	tags := regexp.MustCompile(`<details\b[^>]*>`).FindAllString(html, -1)
-	if len(tags) != 7 {
-		t.Fatalf("details 数量 = %d，want 7", len(tags))
+	if len(tags) != 8 {
+		t.Fatalf("details 数量 = %d，want 8", len(tags))
 	}
 	openAttr := regexp.MustCompile(`\sopen\b`)
 	for i, tag := range tags {
@@ -220,6 +220,75 @@ func TestSite_FaqDetails(t *testing.T) {
 		if want := i == 0; got != want {
 			t.Errorf("第 %d 个 details 的 open = %v，want %v（%s）", i+1, got, want, tag)
 		}
+	}
+}
+
+const (
+	maxQuestionZh = `中转模型怎么选 Max 思考等级？`
+	maxQuestionEn = `How do I select the Max reasoning effort for a relay model?`
+	maxAnswerZh   = `中转模型支持 Max 时，如果已登录 ChatGPT，Codex 里能选哪几档思考等级，由 ChatGPT 设置里的「Available reasoning efforts」决定，默认没勾 Max。去那里勾上 Max 就能选。没登录 ChatGPT（只用中转）时，这一步可以跳过。选了 Max，中转收到的思考等级就是 <code>max</code>。`
+	maxAnswerEn   = `If the relay model supports Max and you are signed in to ChatGPT, the reasoning efforts you can select in Codex come from “Available reasoning efforts” in ChatGPT settings, and Max is unchecked by default. Check Max there and you can select it. When you are not signed in (Relay only), skip this step. With Max selected, the relay receives <code>max</code> as the reasoning effort.`
+)
+
+func TestSite_FaqThirdIsMaxEffort(t *testing.T) {
+	t.Parallel()
+	all := regexp.MustCompile(`(?s)<details\b[^>]*>.*?</details>`).FindAllString(readSite(t), -1)
+	if len(all) < 3 {
+		t.Fatalf("details 数量 = %d", len(all))
+	}
+	third := all[2]
+	tests := []struct {
+		name string
+		text string
+	}{
+		{"中文问题", `<summary><span data-l="zh">` + maxQuestionZh + `</span>`},
+		{"英文问题", `<span data-l="en">` + maxQuestionEn + `</span></summary>`},
+		{"中文回答", `<p><span data-l="zh">` + maxAnswerZh + `</span>`},
+		{"英文回答", `<span data-l="en">` + maxAnswerEn + `</span></p></details>`},
+		{"回答含 code max", `<code>max</code>`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if !strings.Contains(third, tt.text) {
+				t.Errorf("第 3 个 details 缺少 %s", tt.text)
+			}
+		})
+	}
+	if n := strings.Count(third, "<code>max</code>"); n != 2 {
+		t.Errorf("第 3 个 details 里 <code>max</code> 出现 %d 次，want 2", n)
+	}
+}
+
+func TestReadme_MaxEffortSection(t *testing.T) {
+	t.Parallel()
+	b, err := os.ReadFile("../../README.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	readme := string(b)
+	const heading = "## 选 Max 思考等级"
+	const body = "中转模型支持 Max 时，如果已登录 ChatGPT，Codex 里能选哪几档思考等级，由 ChatGPT 设置里的「Available reasoning efforts」决定，默认没勾 Max。去那里勾上 Max 就能选。没登录 ChatGPT（只用中转）时，这一步可以跳过。选了 Max，中转收到的思考等级就是 `max`。"
+
+	pos := strings.Index(readme, "\n"+heading+"\n")
+	if pos < 0 {
+		t.Fatalf("README 缺少 %q 一节", heading)
+	}
+	section := readme[pos+1:]
+	if end := strings.Index(section[len(heading):], "\n## "); end >= 0 {
+		section = section[:len(heading)+end]
+	}
+	if got, want := strings.TrimSpace(section), heading+"\n\n"+body; got != want {
+		t.Errorf("README 该节内容 = %q，want %q", got, want)
+	}
+
+	first := strings.Index(readme, "\n## 首次打开")
+	uninstall := strings.Index(readme, "\n## 卸载")
+	if first < 0 || uninstall < 0 {
+		t.Fatalf("README 缺少「## 首次打开」(%d) 或「## 卸载」(%d)", first, uninstall)
+	}
+	if !(first < pos && pos < uninstall) {
+		t.Errorf("该节位置 %d 应在「## 首次打开」%d 之后、「## 卸载」%d 之前", pos, first, uninstall)
 	}
 }
 
