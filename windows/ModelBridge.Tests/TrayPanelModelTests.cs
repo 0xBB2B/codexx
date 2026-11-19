@@ -173,6 +173,56 @@ public class TrayPanelModelTests
         Assert.AreEqual("打开下载页", item.Detail);
     }
 
+    const string SetupUrl = "https://github.com/o/r/releases/download/v0.1.2/model-bridge-0.1.2-windows-setup.exe";
+
+    [TestMethod]
+    public async Task CheckUpdate_InstallerTrue_DetailIsDownloadInstaller()
+    {
+        var h = await StartedAsync(s => s["update"] = new System.Text.Json.Nodes.JsonObject
+        {
+            ["latest_version"] = "0.1.2",
+            ["url"] = SetupUrl,
+            ["installer"] = true,
+        });
+
+        var item = Item(TrayPanelModel.From(h.Model), TrayMenuCommand.CheckUpdate);
+
+        Assert.AreEqual("发现新版本 0.1.2", item.Label);
+        Assert.AreEqual("下载安装包", item.Detail);
+    }
+
+    [TestMethod]
+    public async Task CheckUpdate_InstallerFalse_DetailIsOpenDownloadPage()
+    {
+        var h = await StartedAsync(s => s["update"] = new System.Text.Json.Nodes.JsonObject
+        {
+            ["latest_version"] = "0.1.2",
+            ["url"] = "https://github.com/o/r/releases/tag/v0.1.2",
+            ["installer"] = false,
+        });
+
+        var item = Item(TrayPanelModel.From(h.Model), TrayMenuCommand.CheckUpdate);
+
+        Assert.AreEqual("打开下载页", item.Detail);
+    }
+
+    [TestMethod]
+    public async Task CheckUpdate_InstallerThenManualCheckAlreadyLatest_DetailCleared()
+    {
+        var h = await StartedAsync(s => s["update"] = new System.Text.Json.Nodes.JsonObject
+        {
+            ["latest_version"] = "0.1.2",
+            ["url"] = SetupUrl,
+            ["installer"] = true,
+        });
+        await h.Model.CheckUpdateAsync();
+
+        var item = Item(TrayPanelModel.From(h.Model), TrayMenuCommand.CheckUpdate);
+
+        Assert.AreEqual("检查更新", item.Label);
+        Assert.IsTrue(string.IsNullOrEmpty(item.Detail));
+    }
+
     [TestMethod]
     public async Task Busy_DisablesLoginStartUpdateUninstallAndQuit()
     {

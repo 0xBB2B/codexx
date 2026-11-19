@@ -75,7 +75,7 @@ public partial class MainWindow : Window
         RelayNote.Text = note < 0 ? "" : rest[note..];
         RelayNote.Margin = new Thickness(note < 0 ? 0 : 4, 0, 0, 0);
         UpdateButton.Content = model.UpdateVersion == null ? "检查更新" : $"新版本 {model.UpdateVersion}";
-        AutomationProperties.SetName(UpdateButton, model.UpdateVersion == null ? "检查更新" : $"发现新版本 {model.UpdateVersion}，打开下载页");
+        AutomationProperties.SetName(UpdateButton, model.UpdateVersion == null ? "检查更新" : $"发现新版本 {model.UpdateVersion}，{(model.UpdateIsInstaller ? "下载安装包" : "打开下载页")}");
 
         if (ReferenceEquals(shownBanners, model.Banners) && ReferenceEquals(shownNotices, model.Notices) && shownRechecking == model.IsRechecking)
             return;

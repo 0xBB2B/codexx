@@ -170,6 +170,7 @@ public sealed class AppModel : IRelayFields
     string configPath = "";
     string? updateVersion;
     string? updateUrl;
+    bool updateIsInstaller;
     CoreErrorInfo? lastError;
     UninstallPause? uninstallPause;
     UninstallOutcome? uninstalled;
@@ -243,6 +244,7 @@ public sealed class AppModel : IRelayFields
     public bool LoginStartEnabled { get => loginStartEnabled; private set => Set(ref loginStartEnabled, value); }
     public string? UpdateVersion { get => updateVersion; private set => Set(ref updateVersion, value); }
     public string? UpdateUrl { get => updateUrl; private set => Set(ref updateUrl, value); }
+    public bool UpdateIsInstaller { get => updateIsInstaller; private set => Set(ref updateIsInstaller, value); }
     public CoreErrorInfo? LastError
     {
         get => lastError;
@@ -1077,11 +1079,13 @@ public sealed class AppModel : IRelayFields
             {
                 UpdateVersion = latest;
                 UpdateUrl = url;
+                UpdateIsInstaller = Flag(result, "installer", false);
             }
             else
             {
                 UpdateVersion = null;
                 UpdateUrl = null;
+                UpdateIsInstaller = false;
                 AddNotice(new AppNotice("已是最新版本", "", AppSeverity.Success));
             }
         }
@@ -1289,6 +1293,7 @@ public sealed class AppModel : IRelayFields
         {
             UpdateVersion = latest;
             UpdateUrl = Str(update, "url");
+            UpdateIsInstaller = Flag(update, "installer", false);
         }
 
         var list = new List<AppBanner>();

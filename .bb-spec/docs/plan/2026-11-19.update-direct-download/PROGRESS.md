@@ -3,9 +3,9 @@
 |---|---|---|---|
 | 01 | 01-core-installer-url | done | 2026-11-19 |
 | 02 | 02-macos-update-text | done | 2026-11-19 |
-| 03 | 03-windows-update-text | pending | — |
+| 03 | 03-windows-update-text | done | 2026-11-19 |
 ## 当前
-并行组：`03-windows-update-text`（Review 后改测试，等 CI 复跑）。
+全部完成，进入收尾。
 ## 阻塞
 （无）
 ## 重试与自修（每次记一条）
