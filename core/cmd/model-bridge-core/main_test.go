@@ -25,6 +25,13 @@ import (
 
 var coreBinDir string
 
+func exeSuffix() string {
+	if runtime.GOOS == "windows" {
+		return ".exe"
+	}
+	return ""
+}
+
 func TestMain(m *testing.M) {
 	code := m.Run()
 	if coreBinDir != "" {
@@ -44,7 +51,7 @@ func TestVersionFlag(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			bin := filepath.Join(t.TempDir(), "model-bridge-core")
+			bin := filepath.Join(t.TempDir(), "model-bridge-core"+exeSuffix())
 			args := []string{"build", "-o", bin}
 			if tt.ldflags != "" {
 				args = append(args, "-ldflags", tt.ldflags)
@@ -88,7 +95,7 @@ func buildCore(t *testing.T) string {
 			return
 		}
 		coreBinDir = dir
-		coreBuild.path = filepath.Join(dir, "model-bridge-core")
+		coreBuild.path = filepath.Join(dir, "model-bridge-core"+exeSuffix())
 		if out, err := exec.Command("go", "build", "-tags", "coretest", "-o", coreBuild.path, ".").CombinedOutput(); err != nil {
 			coreBuild.err = &buildError{err: err, out: string(out)}
 		}
@@ -558,7 +565,7 @@ func TestCore_StdinClosedWhileRequestInFlight(t *testing.T) {
 }
 
 func TestReleaseBuild_HasNoTestFlags(t *testing.T) {
-	bin := filepath.Join(t.TempDir(), "model-bridge-core")
+	bin := filepath.Join(t.TempDir(), "model-bridge-core"+exeSuffix())
 	if out, err := exec.Command("go", "build", "-o", bin, ".").CombinedOutput(); err != nil {
 		t.Fatalf("go build 失败: %v\n%s", err, out)
 	}

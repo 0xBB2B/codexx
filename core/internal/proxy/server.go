@@ -12,7 +12,6 @@ import (
 	"net/http/httputil"
 	"path"
 	"strings"
-	"syscall"
 	"time"
 
 	"modelbridge/internal/normalize"
@@ -102,7 +101,7 @@ func (s *Server) Handler() http.Handler { return http.HandlerFunc(s.ServeHTTP) }
 func (s *Server) Start() error {
 	ln, err := net.Listen("tcp", s.listenAddr)
 	if err != nil {
-		if errors.Is(err, syscall.EADDRINUSE) {
+		if isAddrInUse(err) {
 			return &Error{Code: "proxy_port_in_use", Err: err}
 		}
 		return &Error{Code: "proxy_listen_failed", Err: err}
