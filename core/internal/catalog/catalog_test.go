@@ -35,16 +35,42 @@ func newRelayStub(t *testing.T, status int, body string) *relayStub {
 	return s
 }
 
-func source(id, name, url string, ids []string) catalog.RelaySource {
-	mode := catalog.FetchRemote
-	if ids != nil {
-		mode = catalog.UseGiven
-	}
-	return sourceMode(id, name, url, mode, ids)
+func source(id, name, url string) catalog.RelaySource {
+	return sourceMode(id, name, url, catalog.FetchRemote, nil)
 }
 
-func sourceMode(id, name, url string, mode catalog.RelayMode, ids []string) catalog.RelaySource {
-	return catalog.RelaySource{ID: id, Name: name, BaseURL: url, Key: relayKey, Mode: mode, IDs: ids}
+func sourceMode(id, name, url string, mode catalog.RelayMode, models []catalog.RelayModel) catalog.RelaySource {
+	return catalog.RelaySource{ID: id, Name: name, BaseURL: url, Key: relayKey, Mode: mode, Models: models}
+}
+
+func modelsBody(items ...string) string {
+	return `{"data":[` + strings.Join(items, ",") + `]}`
+}
+
+func idItems(ids ...string) []string {
+	items := make([]string, len(ids))
+	for i, id := range ids {
+		items[i] = `{"id":"` + id + `"}`
+	}
+	return items
+}
+
+func idStub(t *testing.T, ids ...string) *relayStub {
+	t.Helper()
+	return newRelayStub(t, 200, modelsBody(idItems(ids...)...))
+}
+
+func idSource(t *testing.T, id, name string, ids ...string) catalog.RelaySource {
+	t.Helper()
+	return source(id, name, idStub(t, ids...).URL)
+}
+
+func buildOne(t *testing.T, officialStdout string, items ...string) (*catalog.Result, []map[string]any) {
+	t.Helper()
+	codex, _ := writeFakeCodex(t, officialStdout, 0)
+	srv := newRelayStub(t, 200, modelsBody(items...))
+	res := build(t, buildOpts(t, codex, t.TempDir(), source("1", "主力", srv.URL)))
+	return res, roundtrip(t, res.Models)
 }
 
 const relayKey = "sk-example-0000"
@@ -56,7 +82,6 @@ func buildOpts(t *testing.T, codex, dataDir string, relays ...catalog.RelaySourc
 		Relays:       relays,
 		RelayTimeout: time.Second,
 		DataDir:      dataDir,
-		Params:       mergeParams,
 	}
 }
 
@@ -116,7 +141,8 @@ func bySlug(t *testing.T, models []map[string]any, slug string) map[string]any {
 func efforts(t *testing.T, e map[string]any) []any {
 	t.Helper()
 	var out []any
-	for _, l := range e["supported_reasoning_levels"].([]any) {
+	levels, _ := e["supported_reasoning_levels"].([]any)
+	for _, l := range levels {
 		out = append(out, l.(map[string]any)["effort"])
 	}
 	return out
@@ -135,7 +161,7 @@ func relayResult(t *testing.T, res *catalog.Result, id string) catalog.RelayResu
 
 func twoStubs(t *testing.T) (a, b *relayStub) {
 	t.Helper()
-	return newRelayStub(t, 200, `{"data":[{"id":"auto"},{"id":"deepseek-v3.2"},{"id":"unknown-model-x"}]}`),
+	return newRelayStub(t, 200, `{"data":[{"id":"auto"},{"id":"deepseek-v3.2","reasoning":{"supported_efforts":["low","high"]}},{"id":"unknown-model-x"}]}`),
 		newRelayStub(t, 200, `{"data":[{"id":"auto"},{"id":"gpt-a"}]}`)
 }
 
@@ -164,19 +190,20 @@ func TestBuild_TwoRelays_SlugsDisplayNamesOrderAndDescription(t *testing.T) {
 	dataDir := t.TempDir()
 
 	res := build(t, buildOpts(t, codex, dataDir,
-		source("1", "主力", a.URL, nil),
-		source("2", "备用", b.URL, nil)))
+		source("1", "主力", a.URL),
+		source("2", "备用", b.URL)))
 
 	models := roundtrip(t, res.Models)
-	wantSlugs := []any{"gpt-a", "gpt-b", "relay-auto", "relay-deepseek-v3.2", "relay2-auto", "relay2-gpt-a"}
+	wantSlugs := []any{"gpt-a", "gpt-b", "relay-auto", "relay-deepseek-v3.2", "relay-unknown-model-x", "relay2-auto", "relay2-gpt-a"}
 	if got := slugsOf(models); !reflect.DeepEqual(got, wantSlugs) {
 		t.Fatalf("slugs = %v, want %v", got, wantSlugs)
 	}
 	display := map[string]string{
-		"relay-auto":          "主力 · auto",
-		"relay-deepseek-v3.2": "主力 · deepseek-v3.2",
-		"relay2-auto":         "备用 · auto",
-		"relay2-gpt-a":        "备用 · gpt-a",
+		"relay-auto":            "主力 · auto",
+		"relay-deepseek-v3.2":   "主力 · deepseek-v3.2",
+		"relay-unknown-model-x": "主力 · unknown-model-x",
+		"relay2-auto":           "备用 · auto",
+		"relay2-gpt-a":          "备用 · gpt-a",
 	}
 	for slug, want := range display {
 		e := bySlug(t, models, slug)
@@ -206,46 +233,67 @@ func TestBuild_TwoRelays_SameModelNameFromBothRelaysKeepsBothEntries(t *testing.
 	t.Parallel()
 	codex, _ := writeFakeCodex(t, officialJSON, 0)
 	a, b := twoStubs(t)
-	res := build(t, buildOpts(t, codex, t.TempDir(), source("1", "主力", a.URL, nil), source("2", "备用", b.URL, nil)))
+	res := build(t, buildOpts(t, codex, t.TempDir(), source("1", "主力", a.URL), source("2", "备用", b.URL)))
 	models := roundtrip(t, res.Models)
 	bySlug(t, models, "relay-auto")
 	bySlug(t, models, "relay2-auto")
 }
 
-func TestBuild_RelayEntriesFollowConfigOrderThenParamsTableThenOfficialSameName(t *testing.T) {
+func TestBuild_RelayEntriesFollowConfigOrderThenAPIOrder(t *testing.T) {
 	t.Parallel()
 	codex, _ := writeFakeCodex(t, officialJSON, 0)
-	res := build(t, buildOpts(t, codex, t.TempDir(),
-		source("2", "乙", "", []string{"gpt-b", "deepseek-v3.2", "gpt-a", "auto"}),
-		source("1", "甲", "", []string{"deepseek-v3.2", "auto"})))
-	want := []any{"gpt-a", "gpt-b", "relay2-auto", "relay2-deepseek-v3.2", "relay2-gpt-a", "relay2-gpt-b", "relay-auto", "relay-deepseek-v3.2"}
-	if got := slugs(t, res); !reflect.DeepEqual(got, want) {
-		t.Errorf("slugs = %v, want %v（按配置在列表里的顺序；配置内参数表模型在前、和官方同名的在后，与编号大小和 IDs 顺序无关）", got, want)
+	tests := []struct {
+		name   string
+		relays func(t *testing.T) []catalog.RelaySource
+		want   []any
+	}{
+		{"两个配置分别返回 m2 m1 和 m3", func(t *testing.T) []catalog.RelaySource {
+			return []catalog.RelaySource{idSource(t, "1", "甲", "m2", "m1"), idSource(t, "2", "乙", "m3")}
+		}, []any{"gpt-a", "gpt-b", "relay-m2", "relay-m1", "relay2-m3"}},
+		{"配置顺序与编号大小无关，同名官方模型不提前", func(t *testing.T) []catalog.RelaySource {
+			return []catalog.RelaySource{
+				idSource(t, "2", "乙", "gpt-b", "deepseek-v3.2", "gpt-a", "auto"),
+				idSource(t, "1", "甲", "deepseek-v3.2", "auto"),
+			}
+		}, []any{"gpt-a", "gpt-b", "relay2-gpt-b", "relay2-deepseek-v3.2", "relay2-gpt-a", "relay2-auto", "relay-deepseek-v3.2", "relay-auto"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			res := build(t, buildOpts(t, codex, t.TempDir(), tt.relays(t)...))
+			if got := slugs(t, res); !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("slugs = %v, want %v", got, tt.want)
+			}
+			for i, m := range roundtrip(t, res.Models)[2:] {
+				if m["priority"] != float64(8+i) {
+					t.Errorf("%v priority = %v, want %d", m["slug"], m["priority"], 8+i)
+				}
+			}
+		})
 	}
 }
 
-func TestBuild_RelayDisplayNameUsesConfigName(t *testing.T) {
+func TestBuild_AnyRelayModelNameAppearsInCatalog(t *testing.T) {
 	t.Parallel()
-	params := []catalog.Param{
-		{ID: "GPT-Y", ContextWindow: 1, InputModalities: []string{"text"}, Source: "s"},
-		{ID: "glm-5.3", ContextWindow: 1, InputModalities: []string{"text"}, Source: "s"},
-		{ID: "my-gpt-1", ContextWindow: 1, InputModalities: []string{"text"}, Source: "s"},
-	}
 	codex, _ := writeFakeCodex(t, officialJSON, 0)
-	opts := buildOpts(t, codex, t.TempDir(), source("1", "公司", "", []string{"GPT-Y", "glm-5.3", "my-gpt-1"}))
-	opts.Params = params
-	models := roundtrip(t, build(t, opts).Models)
-	tests := []struct{ slug, display string }{
-		{"relay-GPT-Y", "公司 · GPT-Y"},
-		{"relay-glm-5.3", "公司 · glm-5.3"},
-		{"relay-my-gpt-1", "公司 · my-gpt-1"},
-	}
-	for _, tt := range tests {
-		t.Run(tt.slug, func(t *testing.T) {
-			if got := bySlug(t, models, tt.slug)["display_name"]; got != tt.display {
-				t.Errorf("display_name = %v, want %s", got, tt.display)
+	names := []string{"GPT-Y", "glm-5.3", "my-gpt-1", "unknown-model-x", "vendor/some:model_v2"}
+	dataDir := t.TempDir()
+	res := build(t, buildOpts(t, codex, dataDir, idSource(t, "1", "公司", names...)))
+	models := roundtrip(t, res.Models)
+	for _, n := range names {
+		t.Run(n, func(t *testing.T) {
+			e := bySlug(t, models, "relay-"+n)
+			if want := "公司 · " + n; e["display_name"] != want {
+				t.Errorf("display_name = %v, want %s", e["display_name"], want)
+			}
+			bySlug(t, catalogFileModels(t, dataDir), "relay-"+n)
+			if _, ok := res.Routes["relay-"+n]; !ok {
+				t.Errorf("Routes 里没有 relay-%s", n)
 			}
 		})
+	}
+	if got := relayResult(t, res, "1").ModelCount; got != len(names) {
+		t.Errorf("ModelCount = %d, want %d", got, len(names))
 	}
 }
 
@@ -254,7 +302,7 @@ func TestBuild_Relays_ResultPerRelay(t *testing.T) {
 	codex, _ := writeFakeCodex(t, officialJSON, 0)
 	a, b := twoStubs(t)
 	before := time.Now().Add(-time.Second)
-	res := build(t, buildOpts(t, codex, t.TempDir(), source("1", "主力", a.URL, nil), source("2", "备用", b.URL, nil)))
+	res := build(t, buildOpts(t, codex, t.TempDir(), source("1", "主力", a.URL), source("2", "备用", b.URL)))
 
 	if len(res.Relays) != 2 {
 		t.Fatalf("Relays = %+v", res.Relays)
@@ -263,14 +311,14 @@ func TestBuild_Relays_ResultPerRelay(t *testing.T) {
 		id    string
 		count int
 	}{
-		{"1", 2},
+		{"1", 3},
 		{"2", 2},
 	}
 	for _, tt := range tests {
 		t.Run(tt.id, func(t *testing.T) {
 			r := relayResult(t, res, tt.id)
 			if r.ModelCount != tt.count {
-				t.Errorf("ModelCount = %d, want %d（不在参数表也不在官方清单的模型不算）", r.ModelCount, tt.count)
+				t.Errorf("ModelCount = %d, want %d（接口返回的每个模型都算）", r.ModelCount, tt.count)
 			}
 			if r.Stale || r.Err != nil {
 				t.Errorf("Stale = %v, Err = %v", r.Stale, r.Err)
@@ -286,13 +334,14 @@ func TestBuild_Routes(t *testing.T) {
 	t.Parallel()
 	codex, _ := writeFakeCodex(t, officialJSON, 0)
 	a, b := twoStubs(t)
-	res := build(t, buildOpts(t, codex, t.TempDir(), source("1", "主力", a.URL, nil), source("2", "备用", b.URL, nil)))
+	res := build(t, buildOpts(t, codex, t.TempDir(), source("1", "主力", a.URL), source("2", "备用", b.URL)))
 
 	want := map[string]catalog.RelayRoute{
-		"relay-auto":          {ID: "1", Model: "auto", FromParams: true},
-		"relay-deepseek-v3.2": {ID: "1", Model: "deepseek-v3.2", FromParams: true},
-		"relay2-auto":         {ID: "2", Model: "auto", FromParams: true},
-		"relay2-gpt-a":        {ID: "2", Model: "gpt-a", FromParams: false},
+		"relay-auto":            {ID: "1", Model: "auto"},
+		"relay-deepseek-v3.2":   {ID: "1", Model: "deepseek-v3.2"},
+		"relay-unknown-model-x": {ID: "1", Model: "unknown-model-x"},
+		"relay2-auto":           {ID: "2", Model: "auto"},
+		"relay2-gpt-a":          {ID: "2", Model: "gpt-a"},
 	}
 	if !reflect.DeepEqual(res.Routes, want) {
 		t.Errorf("Routes = %+v, want %+v", res.Routes, want)
@@ -304,11 +353,11 @@ func TestBuild_RelayOnly_NoOfficialModels(t *testing.T) {
 	codex, _ := writeFakeCodex(t, officialJSON, 0)
 	a, b := twoStubs(t)
 	dataDir := t.TempDir()
-	opts := buildOpts(t, codex, dataDir, source("1", "主力", a.URL, nil), source("2", "备用", b.URL, nil))
+	opts := buildOpts(t, codex, dataDir, source("1", "主力", a.URL), source("2", "备用", b.URL))
 	opts.RelayOnly = true
 	res := build(t, opts)
 
-	want := []any{"relay-auto", "relay-deepseek-v3.2", "relay2-auto", "relay2-gpt-a"}
+	want := []any{"relay-auto", "relay-deepseek-v3.2", "relay-unknown-model-x", "relay2-auto", "relay2-gpt-a"}
 	if got := slugs(t, res); !reflect.DeepEqual(got, want) {
 		t.Errorf("Result.Models slugs = %v, want %v", got, want)
 	}
@@ -323,7 +372,7 @@ func TestBuild_RelayOnly_RelayEntriesAndResultMatchFullCatalog(t *testing.T) {
 	a, b := twoStubs(t)
 	mk := func(relayOnly bool) (*catalog.Result, []map[string]any) {
 		dataDir := t.TempDir()
-		opts := buildOpts(t, codex, dataDir, source("1", "主力", a.URL, nil), source("2", "备用", b.URL, nil))
+		opts := buildOpts(t, codex, dataDir, source("1", "主力", a.URL), source("2", "备用", b.URL))
 		opts.RelayOnly = relayOnly
 		return build(t, opts), catalogFileModels(t, dataDir)
 	}
@@ -338,7 +387,6 @@ func TestBuild_RelayOnly_RelayEntriesAndResultMatchFullCatalog(t *testing.T) {
 	}{
 		{"RelayModels", only.RelayModels, full.RelayModels},
 		{"RelayShown", only.RelayShown, full.RelayShown},
-		{"RelayFromParams", only.RelayFromParams, full.RelayFromParams},
 		{"ReasoningLevels", only.ReasoningLevels, full.ReasoningLevels},
 		{"Routes", only.Routes, full.Routes},
 	}
@@ -357,7 +405,7 @@ func TestBuild_RelayOnly_RelayEntriesAndResultMatchFullCatalog(t *testing.T) {
 func TestBuild_RelayOnly_OfficialListFails_ReturnsError(t *testing.T) {
 	t.Parallel()
 	codex, _ := writeFakeCodex(t, "", 1)
-	opts := buildOpts(t, codex, t.TempDir(), source("1", "主力", "", []string{"auto"}))
+	opts := buildOpts(t, codex, t.TempDir(), idSource(t, "1", "主力", "auto"))
 	opts.RelayOnly = true
 	_, err := catalog.Build(context.Background(), opts)
 	if got := catalog.ErrorCode(err); got != "chatgpt_unsupported" {
@@ -373,7 +421,7 @@ func TestBuild_RelayOnly_IgnoresAccountCache(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, relayOnly := range []bool{true, false} {
-		opts := buildOpts(t, codex, t.TempDir(), source("1", "主力", "", []string{"auto"}))
+		opts := buildOpts(t, codex, t.TempDir(), idSource(t, "1", "主力", "auto"))
 		opts.ModelsCachePath = cache
 		opts.RelayOnly = relayOnly
 		want := []any{"gpt-a", "relay-auto"}
@@ -388,7 +436,7 @@ func TestBuild_RelayOnly_IgnoresAccountCache(t *testing.T) {
 
 func seedBothCaches(t *testing.T, codex, dataDir string, a, b *relayStub) {
 	t.Helper()
-	build(t, buildOpts(t, codex, dataDir, source("1", "主力", a.URL, nil), source("2", "备用", b.URL, nil)))
+	build(t, buildOpts(t, codex, dataDir, source("1", "主力", a.URL), source("2", "备用", b.URL)))
 	for _, name := range []string{"relay-models-1.json", "relay-models-2.json"} {
 		if _, err := os.Stat(filepath.Join(dataDir, name)); err != nil {
 			t.Fatalf("成功获取后应写出缓存 %s: %v", name, err)
@@ -402,13 +450,13 @@ func TestBuild_SecondRelayFails_WithCache_KeepsCachedModelsMarkedStale(t *testin
 	a, b := twoStubs(t)
 	dataDir := t.TempDir()
 	seedBothCaches(t, codex, dataDir, a, b)
-	seeded := relayResult(t, build(t, buildOpts(t, codex, dataDir, source("1", "主力", a.URL, nil), source("2", "备用", b.URL, nil))), "2")
+	seeded := relayResult(t, build(t, buildOpts(t, codex, dataDir, source("1", "主力", a.URL), source("2", "备用", b.URL))), "2")
 	cacheBefore := readFileT(t, filepath.Join(dataDir, "relay-models-2.json"))
 	b.status.Store(500)
 
-	res := build(t, buildOpts(t, codex, dataDir, source("1", "主力", a.URL, nil), source("2", "备用", b.URL, nil)))
+	res := build(t, buildOpts(t, codex, dataDir, source("1", "主力", a.URL), source("2", "备用", b.URL)))
 
-	want := []any{"gpt-a", "gpt-b", "relay-auto", "relay-deepseek-v3.2", "relay2-auto", "relay2-gpt-a"}
+	want := []any{"gpt-a", "gpt-b", "relay-auto", "relay-deepseek-v3.2", "relay-unknown-model-x", "relay2-auto", "relay2-gpt-a"}
 	if got := slugs(t, res); !reflect.DeepEqual(got, want) {
 		t.Errorf("slugs = %v, want %v", got, want)
 	}
@@ -438,7 +486,7 @@ func TestBuild_SecondRelayFails_NoCache_NoModelsFirstUnaffected(t *testing.T) {
 	b := newRelayStub(t, 401, "")
 	dataDir := t.TempDir()
 
-	res := build(t, buildOpts(t, codex, dataDir, source("1", "主力", a.URL, nil), source("2", "备用", b.URL, nil)))
+	res := build(t, buildOpts(t, codex, dataDir, source("1", "主力", a.URL), source("2", "备用", b.URL)))
 
 	if got, want := slugs(t, res), []any{"gpt-a", "gpt-b", "relay-auto"}; !reflect.DeepEqual(got, want) {
 		t.Errorf("slugs = %v, want %v", got, want)
@@ -464,7 +512,7 @@ func TestBuild_FirstRelayFails_SecondStillBuilt(t *testing.T) {
 	codex, _ := writeFakeCodex(t, officialJSON, 0)
 	a := newRelayStub(t, 500, secretBody)
 	b := newRelayStub(t, 200, `{"data":[{"id":"auto"}]}`)
-	res := build(t, buildOpts(t, codex, t.TempDir(), source("1", "主力", a.URL, nil), source("2", "备用", b.URL, nil)))
+	res := build(t, buildOpts(t, codex, t.TempDir(), source("1", "主力", a.URL), source("2", "备用", b.URL)))
 	if got, want := slugs(t, res), []any{"gpt-a", "gpt-b", "relay2-auto"}; !reflect.DeepEqual(got, want) {
 		t.Errorf("slugs = %v, want %v", got, want)
 	}
@@ -481,7 +529,7 @@ func TestBuild_RelayFails_CorruptCache_TreatedAsNoCache(t *testing.T) {
 		t.Fatal(err)
 	}
 	srv := newRelayStub(t, 500, "")
-	res := build(t, buildOpts(t, codex, dataDir, source("1", "主力", srv.URL, nil)))
+	res := build(t, buildOpts(t, codex, dataDir, source("1", "主力", srv.URL)))
 	if got, want := slugs(t, res), []any{"gpt-a", "gpt-b"}; !reflect.DeepEqual(got, want) {
 		t.Errorf("slugs = %v, want %v", got, want)
 	}
@@ -493,7 +541,7 @@ func TestBuild_RelayFails_CorruptCache_TreatedAsNoCache(t *testing.T) {
 	}
 }
 
-func TestBuild_OnlySecondRelayPrefetched_NoRequestToEitherRelay(t *testing.T) {
+func TestBuild_AllCachedModes_NoRequestToEitherRelay(t *testing.T) {
 	t.Parallel()
 	codex, _ := writeFakeCodex(t, officialJSON, 0)
 	a, b := twoStubs(t)
@@ -504,26 +552,20 @@ func TestBuild_OnlySecondRelayPrefetched_NoRequestToEitherRelay(t *testing.T) {
 
 	res := build(t, buildOpts(t, codex, dataDir,
 		sourceMode("1", "主力", a.URL, catalog.CacheOnly, nil),
-		sourceMode("2", "备用", b.URL, catalog.UseGiven, []string{"deepseek-v3.2"})))
+		sourceMode("2", "备用", b.URL, catalog.UseGiven, []catalog.RelayModel{})))
 
 	if a.hits.Load() != 0 || b.hits.Load() != 0 {
 		t.Errorf("请求次数 a=%d b=%d, want 0", a.hits.Load(), b.hits.Load())
 	}
-	want := []any{"gpt-a", "gpt-b", "relay-auto", "relay-deepseek-v3.2", "relay2-deepseek-v3.2"}
+	want := []any{"gpt-a", "gpt-b", "relay-auto", "relay-deepseek-v3.2", "relay-unknown-model-x"}
 	if got := slugs(t, res); !reflect.DeepEqual(got, want) {
-		t.Errorf("slugs = %v, want %v（配置 1 用缓存，配置 2 用传入的列表）", got, want)
+		t.Errorf("slugs = %v, want %v（配置 1 用缓存，配置 2 用传入的空列表）", got, want)
 	}
 	if r := relayResult(t, res, "1"); r.Err != nil || r.Stale {
 		t.Errorf("配置 1 用缓存不应带错误: %+v", r)
 	}
-	if r := relayResult(t, res, "2"); r.Err != nil || r.Stale || r.FetchedAt.IsZero() {
+	if r := relayResult(t, res, "2"); r.Err != nil || r.Stale || r.FetchedAt.IsZero() || r.ModelCount != 0 {
 		t.Errorf("配置 2 = %+v", r)
-	}
-	if !strings.Contains(readFileT(t, filepath.Join(dataDir, "relay-models-2.json")), "deepseek-v3.2") {
-		t.Error("传入的列表应写进配置 2 的缓存")
-	}
-	if !strings.Contains(readFileT(t, filepath.Join(dataDir, "model-bridge-catalog.json")), `"relay2-deepseek-v3.2"`) {
-		t.Error("目录文件里没有传入的模型")
 	}
 }
 
@@ -539,10 +581,10 @@ func TestBuild_LegacyRelayModelsFile_ReadAsCacheOfID1(t *testing.T) {
 	a := newRelayStub(t, 500, "")
 	b := newRelayStub(t, 500, "")
 
-	res := build(t, buildOpts(t, codex, dataDir, source("1", "主力", a.URL, nil), source("2", "备用", b.URL, nil)))
+	res := build(t, buildOpts(t, codex, dataDir, source("1", "主力", a.URL), source("2", "备用", b.URL)))
 
-	if got, want := slugs(t, res), []any{"gpt-a", "gpt-b", "relay-auto", "relay-deepseek-v3.2"}; !reflect.DeepEqual(got, want) {
-		t.Errorf("slugs = %v, want %v（旧文件只当编号 1 的缓存）", got, want)
+	if got, want := slugs(t, res), []any{"gpt-a", "gpt-b", "relay-deepseek-v3.2", "relay-auto"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("slugs = %v, want %v（旧文件只当编号 1 的缓存，顺序按缓存里的模型顺序）", got, want)
 	}
 	r1 := relayResult(t, res, "1")
 	wantAt, _ := time.Parse(time.RFC3339, at)
@@ -559,10 +601,10 @@ func TestBuild_NewCacheOfID1_WinsOverLegacyFile(t *testing.T) {
 		t.Fatal(err)
 	}
 	ok := newRelayStub(t, 200, `{"data":[{"id":"auto"}]}`)
-	build(t, buildOpts(t, codex, dataDir, source("1", "主力", ok.URL, nil)))
+	build(t, buildOpts(t, codex, dataDir, source("1", "主力", ok.URL)))
 	ok.status.Store(500)
 
-	res := build(t, buildOpts(t, codex, dataDir, source("1", "主力", ok.URL, nil)))
+	res := build(t, buildOpts(t, codex, dataDir, source("1", "主力", ok.URL)))
 	if got, want := slugs(t, res), []any{"gpt-a", "gpt-b", "relay-auto"}; !reflect.DeepEqual(got, want) {
 		t.Errorf("slugs = %v, want %v", got, want)
 	}
@@ -576,7 +618,7 @@ func TestBuild_LegacyRelayModelsFile_NotUsedForOtherIDs(t *testing.T) {
 		t.Fatal(err)
 	}
 	b := newRelayStub(t, 500, "")
-	res := build(t, buildOpts(t, codex, dataDir, source("2", "备用", b.URL, nil)))
+	res := build(t, buildOpts(t, codex, dataDir, source("2", "备用", b.URL)))
 	if got, want := slugs(t, res), []any{"gpt-a", "gpt-b"}; !reflect.DeepEqual(got, want) {
 		t.Errorf("slugs = %v, want %v", got, want)
 	}
@@ -600,7 +642,7 @@ func TestBuild_DefaultModel(t *testing.T) {
 			t.Parallel()
 			codex, _ := writeFakeCodex(t, officialJSON, 0)
 			res := build(t, buildOpts(t, codex, t.TempDir(),
-				source("1", "甲", "", tt.ids1), source("2", "乙", "", tt.ids2)))
+				idSource(t, "1", "甲", tt.ids1...), idSource(t, "2", "乙", tt.ids2...)))
 			if res.DefaultModel != tt.want {
 				t.Errorf("DefaultModel = %q, want %q", res.DefaultModel, tt.want)
 			}
@@ -613,7 +655,7 @@ func TestBuild_DefaultModel_FirstRelayFailedWithoutCache_UsesSecond(t *testing.T
 	codex, _ := writeFakeCodex(t, officialJSON, 0)
 	a := newRelayStub(t, 500, "")
 	b := newRelayStub(t, 200, `{"data":[{"id":"auto"}]}`)
-	res := build(t, buildOpts(t, codex, t.TempDir(), source("1", "主力", a.URL, nil), source("2", "备用", b.URL, nil)))
+	res := build(t, buildOpts(t, codex, t.TempDir(), source("1", "主力", a.URL), source("2", "备用", b.URL)))
 	if res.DefaultModel != "relay2-auto" {
 		t.Errorf("DefaultModel = %q, want relay2-auto", res.DefaultModel)
 	}
@@ -636,7 +678,7 @@ func TestBuild_OfficialErrors(t *testing.T) {
 	srv := newRelayStub(t, 200, `{"data":[]}`)
 	t.Run("codex 不存在", func(t *testing.T) {
 		t.Parallel()
-		_, err := catalog.Build(context.Background(), buildOpts(t, filepath.Join(t.TempDir(), "nope"), t.TempDir(), source("1", "主力", srv.URL, nil)))
+		_, err := catalog.Build(context.Background(), buildOpts(t, filepath.Join(t.TempDir(), "nope"), t.TempDir(), source("1", "主力", srv.URL)))
 		if got := catalog.ErrorCode(err); got != "chatgpt_not_found" {
 			t.Errorf("code = %q (err=%v)", got, err)
 		}
@@ -645,7 +687,7 @@ func TestBuild_OfficialErrors(t *testing.T) {
 		t.Parallel()
 		codex, _ := writeFakeCodex(t, "not json", 0)
 		dataDir := t.TempDir()
-		_, err := catalog.Build(context.Background(), buildOpts(t, codex, dataDir, source("1", "主力", srv.URL, nil)))
+		_, err := catalog.Build(context.Background(), buildOpts(t, codex, dataDir, source("1", "主力", srv.URL)))
 		if got := catalog.ErrorCode(err); got != "chatgpt_unsupported" {
 			t.Errorf("code = %q (err=%v)", got, err)
 		}
@@ -663,7 +705,7 @@ func TestBuild_SaveCacheFails_StillWritesCatalog(t *testing.T) {
 		t.Fatal(err)
 	}
 	srv := newRelayStub(t, 200, `{"data":[{"id":"auto"}]}`)
-	res := build(t, buildOpts(t, codex, dataDir, source("1", "主力", srv.URL, nil)))
+	res := build(t, buildOpts(t, codex, dataDir, source("1", "主力", srv.URL)))
 	if res.StoreErr == nil {
 		t.Error("StoreErr 应不为空")
 	}
@@ -683,7 +725,7 @@ func TestBuild_DoesNotReadCodexAuth(t *testing.T) {
 	t.Setenv("CODEX_HOME", origHome)
 	codex, _ := writeFakeCodex(t, officialJSON, 0)
 	srv := newRelayStub(t, 200, `{"data":[{"id":"auto"}]}`)
-	res := build(t, buildOpts(t, codex, t.TempDir(), source("1", "主力", srv.URL, nil)))
+	res := build(t, buildOpts(t, codex, t.TempDir(), source("1", "主力", srv.URL)))
 	if got, want := slugs(t, res), []any{"gpt-a", "gpt-b", "relay-auto"}; !reflect.DeepEqual(got, want) {
 		t.Errorf("slugs = %v, want %v", got, want)
 	}
@@ -691,7 +733,7 @@ func TestBuild_DoesNotReadCodexAuth(t *testing.T) {
 
 const sameNameOfficialJSON = `{"models":[
 {"slug":"gpt-x","priority":3,"display_name":"X","description":"官方","base_instructions":"keep-x",
- "context_window":400000,"max_context_window":500000,
+ "context_window":400000,"max_context_window":400000,
  "supported_reasoning_levels":[{"effort":"low","description":"快"},{"effort":"medium","description":"中"},{"effort":"xhigh","description":"深"}],
  "default_reasoning_level":"medium","input_modalities":["text","image"],"visibility":"list",
  "supports_search_tool":true,"web_search_tool_type":"text","upgrade":{"model":"gpt-z"},
@@ -700,57 +742,38 @@ const sameNameOfficialJSON = `{"models":[
  "supported_in_api":false},
 {"slug":"gpt-h","priority":5,"display_name":"H","visibility":"hide","context_window":200000,"max_context_window":200000,
  "supported_reasoning_levels":[{"effort":"high","description":"高"}],"default_reasoning_level":"high","input_modalities":["text"]},
-{"slug":"gpt-y","priority":9,"display_name":"Y"}
+{"slug":"gpt-y","priority":9,"display_name":"Y"},
+{"slug":"gpt-m","priority":4,"display_name":"M","context_window":1000,"max_context_window":1000,"input_modalities":["text"],
+ "supported_reasoning_levels":[{"effort":"high","description":"h"},{"effort":"max","description":"m"},{"effort":"ultra","description":"u"}],
+ "default_reasoning_level":"max"}
 ]}`
 
-func sameNameParams() []catalog.Param {
-	return []catalog.Param{
-		{ID: "auto", ContextWindow: 1000000, InputModalities: []string{"text", "image"}, ReasoningLevels: []string{}, Source: "s"},
-		{ID: "glm-5.3", ContextWindow: 128000, InputModalities: []string{"text"}, ReasoningLevels: []string{"high"}, DefaultReasoningLevel: strp("high"), Source: "s"},
-		{ID: "gpt-x", ContextWindow: 1, InputModalities: []string{"audio"}, ReasoningLevels: []string{"minimal"}, DefaultReasoningLevel: strp("minimal"), Source: "s"},
-	}
-}
-
-func buildWithParams(t *testing.T, officialStdout string, params []catalog.Param, ids []string) (*catalog.Result, []map[string]any) {
-	t.Helper()
-	codex, _ := writeFakeCodex(t, officialStdout, 0)
-	opts := buildOpts(t, codex, t.TempDir(), source("1", "主力", "", ids))
-	opts.Params = params
-	res := build(t, opts)
-	return res, roundtrip(t, res.Models)
-}
-
-func buildSameName(t *testing.T, ids []string) (*catalog.Result, []map[string]any) {
-	t.Helper()
-	return buildWithParams(t, sameNameOfficialJSON, sameNameParams(), ids)
-}
-
-func TestBuild_SameNameRelayModels_OnlyOfficialOrParamsListed(t *testing.T) {
+func TestBuild_OfficialEntriesUnchangedWithRelayModels(t *testing.T) {
 	t.Parallel()
-	_, models := buildSameName(t, []string{"gpt-h", "unknown-model-x", "gpt-x"})
-	want := []any{"gpt-x", "gpt-h", "gpt-y", "relay-gpt-x", "relay-gpt-h"}
-	if got := slugsOf(models); !reflect.DeepEqual(got, want) {
-		t.Errorf("slugs = %v, want %v（两边都没有的不出现；中转没有的官方名 gpt-y 不加中转条目）", got, want)
-	}
-}
-
-func TestBuild_OfficialEntriesUnchangedWithSameNameRelay(t *testing.T) {
-	t.Parallel()
-	_, models := buildSameName(t, []string{"gpt-x", "gpt-h", "auto"})
+	_, models := buildOne(t, sameNameOfficialJSON, idItems("gpt-x", "gpt-h", "auto")...)
 	var file struct {
 		Models []map[string]any `json:"models"`
 	}
 	if err := json.Unmarshal([]byte(sameNameOfficialJSON), &file); err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(models[:3], file.Models) {
+	if !reflect.DeepEqual(models[:4], file.Models) {
 		t.Errorf("官方条目被改动或顺序变化")
 	}
 }
 
-func TestBuild_SameNameRelayEntry_CopiesOfficialParamsAndOverridesRelayFields(t *testing.T) {
+func TestBuild_RelayModelsWithOfficialNames_AllListed(t *testing.T) {
 	t.Parallel()
-	_, models := buildSameName(t, []string{"gpt-x"})
+	_, models := buildOne(t, sameNameOfficialJSON, idItems("gpt-h", "unknown-model-x", "gpt-x")...)
+	want := []any{"gpt-x", "gpt-h", "gpt-y", "gpt-m", "relay-gpt-h", "relay-unknown-model-x", "relay-gpt-x"}
+	if got := slugsOf(models); !reflect.DeepEqual(got, want) {
+		t.Errorf("slugs = %v, want %v（接口里的每个模型都出现；接口没有的官方名 gpt-y 不加中转条目）", got, want)
+	}
+}
+
+func TestBuild_SameNameRelayEntry_AllParamsMissing_CopiesOfficialAndOverridesRelayFields(t *testing.T) {
+	t.Parallel()
+	_, models := buildOne(t, sameNameOfficialJSON, `{"id":"gpt-x"}`)
 	official := bySlug(t, models, "gpt-x")
 	e := bySlug(t, models, "relay-gpt-x")
 
@@ -780,103 +803,6 @@ func TestBuild_SameNameRelayEntry_CopiesOfficialParamsAndOverridesRelayFields(t 
 	}
 }
 
-func TestBuild_SameNameRelayEntry_HiddenOfficialStaysHidden(t *testing.T) {
-	t.Parallel()
-	_, models := buildSameName(t, []string{"gpt-h"})
-	if got := bySlug(t, models, "relay-gpt-h")["visibility"]; got != "hide" {
-		t.Errorf("visibility = %v，官方是 hide 时中转同名条目也应 hide", got)
-	}
-}
-
-func TestBuild_NameInBothParamsAndOfficial_OfficialParamsWin(t *testing.T) {
-	t.Parallel()
-	_, models := buildSameName(t, []string{"gpt-x"})
-	e := bySlug(t, models, "relay-gpt-x")
-	if e["context_window"] != float64(400000) || !reflect.DeepEqual(e["input_modalities"], []any{"text", "image"}) || e["default_reasoning_level"] != "medium" {
-		t.Errorf("参数表里也有 gpt-x，但应用官方参数: context_window=%v input_modalities=%v default=%v", e["context_window"], e["input_modalities"], e["default_reasoning_level"])
-	}
-}
-
-func TestBuild_ParamsOnlyRelayEntry_KeepsParamsTableValues(t *testing.T) {
-	t.Parallel()
-	_, models := buildSameName(t, []string{"glm-5.3"})
-	e := bySlug(t, models, "relay-glm-5.3")
-	if e["context_window"] != float64(128000) || e["default_reasoning_level"] != "high" || e["description"] != "中转模型" {
-		t.Errorf("参数表模型的参数不对: %v", e)
-	}
-}
-
-func TestBuild_ReasoningLevelsIncludeSameNameOfficialLevels(t *testing.T) {
-	t.Parallel()
-	res, _ := buildSameName(t, []string{"gpt-h", "gpt-x", "glm-5.3"})
-	got := append([]string(nil), res.ReasoningLevels...)
-	for _, l := range []string{"high", "low", "medium", "xhigh"} {
-		n := 0
-		for _, g := range got {
-			if g == l {
-				n++
-			}
-		}
-		if n != 1 {
-			t.Errorf("ReasoningLevels = %v，%s 应出现且只出现一次", got, l)
-		}
-	}
-	if len(got) != 4 {
-		t.Errorf("ReasoningLevels = %v, want 4 个等级", got)
-	}
-}
-
-func TestBuild_RelayHasOnlyUnknownModels_OnlyOfficial(t *testing.T) {
-	t.Parallel()
-	res, models := buildSameName(t, []string{"unknown-model-x"})
-	if len(models) != 3 || len(res.ReasoningLevels) != 0 || len(res.Routes) != 0 {
-		t.Errorf("models = %d, levels = %v, routes = %v", len(models), res.ReasoningLevels, res.Routes)
-	}
-}
-
-func TestBuild_ParamsTableMaxLevelWrittenAsUltra(t *testing.T) {
-	t.Parallel()
-	params := []catalog.Param{
-		{ID: "m-max", ContextWindow: 1, InputModalities: []string{"text"}, ReasoningLevels: []string{"low", "high", "max"}, DefaultReasoningLevel: strp("max"), Source: "s"},
-		{ID: "m-high", ContextWindow: 1, InputModalities: []string{"text"}, ReasoningLevels: []string{"none", "high", "max"}, DefaultReasoningLevel: strp("high"), Source: "s"},
-	}
-	res, models := buildWithParams(t, officialJSON, params, []string{"m-max", "m-high"})
-
-	a := bySlug(t, models, "relay-m-max")
-	if got, want := efforts(t, a), []any{"low", "high", "ultra"}; !reflect.DeepEqual(got, want) {
-		t.Errorf("efforts = %v, want %v", got, want)
-	}
-	if a["default_reasoning_level"] != "ultra" {
-		t.Errorf("default_reasoning_level = %v, want ultra", a["default_reasoning_level"])
-	}
-	b := bySlug(t, models, "relay-m-high")
-	if got, want := efforts(t, b), []any{"none", "high", "ultra"}; !reflect.DeepEqual(got, want) {
-		t.Errorf("efforts = %v, want %v", got, want)
-	}
-	if b["default_reasoning_level"] != "high" {
-		t.Errorf("default_reasoning_level = %v，非 max 的默认等级不变", b["default_reasoning_level"])
-	}
-	if want := []string{"low", "high", "ultra", "none"}; !reflect.DeepEqual(res.ReasoningLevels, want) {
-		t.Errorf("ReasoningLevels = %v, want %v（写 Codex 配置用 ultra，不含 max）", res.ReasoningLevels, want)
-	}
-}
-
-func TestBuild_SameNameRelayKeepsOfficialMaxAndUltra(t *testing.T) {
-	t.Parallel()
-	const official = `{"models":[{"slug":"gpt-x","priority":3,"supported_reasoning_levels":[{"effort":"high","description":"h"},{"effort":"max","description":"m"},{"effort":"ultra","description":"u"}],"default_reasoning_level":"max"}]}`
-	res, models := buildWithParams(t, official, nil, []string{"gpt-x"})
-	e := bySlug(t, models, "relay-gpt-x")
-	if got, want := efforts(t, e), []any{"high", "max", "ultra"}; !reflect.DeepEqual(got, want) {
-		t.Errorf("efforts = %v, want %v（同名照搬官方，不替换）", got, want)
-	}
-	if e["default_reasoning_level"] != "max" {
-		t.Errorf("default_reasoning_level = %v, want max", e["default_reasoning_level"])
-	}
-	if want := []string{"high", "max", "ultra"}; !reflect.DeepEqual(res.ReasoningLevels, want) {
-		t.Errorf("ReasoningLevels = %v, want %v", res.ReasoningLevels, want)
-	}
-}
-
 func TestBuild_RefreshOneRelay_TargetFails_OnlyTargetContacted(t *testing.T) {
 	t.Parallel()
 	codex, _ := writeFakeCodex(t, officialJSON, 0)
@@ -895,14 +821,14 @@ func TestBuild_RefreshOneRelay_TargetFails_OnlyTargetContacted(t *testing.T) {
 		t.Errorf("请求次数 a=%d b=%d，只应请求配置 1", a.hits.Load(), b.hits.Load())
 	}
 	r1 := relayResult(t, res, "1")
-	if !r1.Stale || catalog.ErrorCode(r1.Err) != "relay_5xx" || r1.ModelCount != 2 {
+	if !r1.Stale || catalog.ErrorCode(r1.Err) != "relay_5xx" || r1.ModelCount != 3 {
 		t.Errorf("配置 1 = %+v", r1)
 	}
 	r2 := relayResult(t, res, "2")
 	if r2.Stale || r2.Err != nil || r2.ModelCount != 2 {
 		t.Errorf("配置 2 = %+v", r2)
 	}
-	want := []any{"gpt-a", "gpt-b", "relay-auto", "relay-deepseek-v3.2", "relay2-auto", "relay2-gpt-a"}
+	want := []any{"gpt-a", "gpt-b", "relay-auto", "relay-deepseek-v3.2", "relay-unknown-model-x", "relay2-auto", "relay2-gpt-a"}
 	if got := slugs(t, res); !reflect.DeepEqual(got, want) {
 		t.Errorf("slugs = %v, want %v", got, want)
 	}
@@ -924,10 +850,10 @@ func TestBuild_AllCacheOnly_NoRequests(t *testing.T) {
 	if a.hits.Load() != 0 || b.hits.Load() != 0 {
 		t.Errorf("请求次数 a=%d b=%d, want 0", a.hits.Load(), b.hits.Load())
 	}
-	for _, id := range []string{"1", "2"} {
+	for id, count := range map[string]int{"1": 3, "2": 2} {
 		r := relayResult(t, res, id)
-		if r.Stale || r.Err != nil || r.FetchedAt.IsZero() || r.ModelCount != 2 {
-			t.Errorf("配置 %s = %+v", id, r)
+		if r.Stale || r.Err != nil || r.FetchedAt.IsZero() || r.ModelCount != count {
+			t.Errorf("配置 %s = %+v, want ModelCount %d", id, r, count)
 		}
 	}
 }
@@ -955,7 +881,7 @@ func TestBuild_UseGivenEmptySlice_NoRequestWritesCacheZeroModels(t *testing.T) {
 	a, _ := twoStubs(t)
 	dataDir := t.TempDir()
 
-	res := build(t, buildOpts(t, codex, dataDir, sourceMode("1", "主力", a.URL, catalog.UseGiven, []string{})))
+	res := build(t, buildOpts(t, codex, dataDir, sourceMode("1", "主力", a.URL, catalog.UseGiven, []catalog.RelayModel{})))
 
 	if a.hits.Load() != 0 {
 		t.Errorf("请求次数 = %d, want 0", a.hits.Load())
@@ -979,7 +905,7 @@ func TestBuild_CacheAndCatalogFilesDoNotContainKeyOrHost(t *testing.T) {
 	dataDir := t.TempDir()
 	build(t, buildOpts(t, codex, dataDir,
 		sourceMode("1", "主力", a.URL, catalog.FetchRemote, nil),
-		sourceMode("2", "备用", b.URL, catalog.UseGiven, []string{"auto"})))
+		sourceMode("2", "备用", b.URL, catalog.FetchRemote, nil)))
 
 	files, err := filepath.Glob(filepath.Join(dataDir, "*.json"))
 	if err != nil || len(files) != 3 {

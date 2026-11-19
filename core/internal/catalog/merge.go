@@ -5,22 +5,25 @@ import (
 	"errors"
 	"maps"
 	"os"
+	"slices"
 	"time"
 )
 
-const RelaySlugPrefix = "relay-"
+const (
+	RelaySlugPrefix   = "relay-"
+	autoContextWindow = 1000000
+)
 
 type Result struct {
 	Models          []Entry
 	ReasoningLevels []string
-	// RelayModels、RelayShown、RelayFromParams 里放的是内部名（relay-xxx）
-	RelayModels     []string
-	RelayShown      []string
-	RelayFromParams []string
-	Relays          []RelayResult
-	Routes          map[string]RelayRoute
-	DefaultModel    string
-	StoreErr        error
+	// RelayModels、RelayShown 里放的是内部名（relay-xxx）
+	RelayModels  []string
+	RelayShown   []string
+	Relays       []RelayResult
+	Routes       map[string]RelayRoute
+	DefaultModel string
+	StoreErr     error
 }
 
 type RelayResult struct {
@@ -34,41 +37,18 @@ type RelayResult struct {
 type RelayRoute struct {
 	ID         string
 	Model      string
-	FromParams bool
+	UltraToMax bool
 }
 
 type RelayGroup struct {
-	ID        string
-	Name      string
-	ParamOnly []Param
-	SameName  []string
+	ID     string
+	Name   string
+	Models []RelayModel
 }
 
-func RelayNames(ids []string, params []Param, official []Entry) (paramOnly []Param, sameName []string) {
-	slugs := make(map[string]bool, len(official))
-	for _, e := range official {
-		if slug, ok := e["slug"].(string); ok {
-			slugs[slug] = true
-		}
-	}
-	inRelay := make(map[string]bool, len(ids))
-	for _, id := range ids {
-		inRelay[id] = true
-	}
-	for _, p := range params {
-		if inRelay[p.ID] && !slugs[p.ID] {
-			paramOnly = append(paramOnly, p)
-		}
-	}
-	seen := map[string]bool{}
-	for _, e := range official {
-		if slug, ok := e["slug"].(string); ok && inRelay[slug] && !seen[slug] {
-			seen[slug] = true
-			sameName = append(sameName, slug)
-		}
-	}
-	return paramOnly, sameName
-}
+const autoModel = "auto"
+
+var levelRank = []string{"none", "minimal", "low", "medium", "high", "xhigh", "max"}
 
 func MergeRelay(official []Entry, groups []RelayGroup) (*Result, error) {
 	if len(official) == 0 {
@@ -76,7 +56,6 @@ func MergeRelay(official []Entry, groups []RelayGroup) (*Result, error) {
 	}
 	maxPriority, _ := toFloat(official[0]["priority"])
 	bySlug := make(map[string]Entry, len(official))
-	hidden := map[string]bool{}
 	for _, e := range official {
 		if p, ok := toFloat(e["priority"]); ok && p > maxPriority {
 			maxPriority = p
@@ -85,80 +64,130 @@ func MergeRelay(official []Entry, groups []RelayGroup) (*Result, error) {
 			if _, dup := bySlug[slug]; !dup {
 				bySlug[slug] = e
 			}
-			if v, has := e["visibility"]; has && v != "list" {
-				hidden[slug] = true
-			}
 		}
 	}
+	hidden := hiddenSlugs(official)
 
 	res := &Result{Models: append([]Entry(nil), official...), Routes: map[string]RelayRoute{}}
 	seen := map[string]bool{}
-	addLevel := func(l string) {
-		if !seen[l] {
-			seen[l] = true
-			res.ReasoningLevels = append(res.ReasoningLevels, l)
-		}
-	}
 	next := maxPriority + 1
 	for _, g := range groups {
-		for _, p := range g.ParamOnly {
-			e := Entry(maps.Clone(official[0]))
-			supported := make([]map[string]any, 0, len(p.ReasoningLevels))
-			for _, l := range p.ReasoningLevels {
-				if l == "max" {
-					l = "ultra"
-				}
-				supported = append(supported, map[string]any{"effort": l, "description": l})
-				addLevel(l)
+		for _, m := range g.Models {
+			if m.ID == "" {
+				continue
 			}
-			e["context_window"] = p.ContextWindow
-			e["max_context_window"] = p.ContextWindow
-			e["input_modalities"] = p.InputModalities
-			e["supported_reasoning_levels"] = supported
-			e["visibility"] = "list"
-			if p.DefaultReasoningLevel != nil {
-				d := *p.DefaultReasoningLevel
-				if d == "max" {
-					d = "ultra"
-				}
-				e["default_reasoning_level"] = d
-			} else {
-				delete(e, "default_reasoning_level")
-			}
-			e["supports_reasoning_effort_updates"] = len(p.ReasoningLevels) > 0
-			slug := RelaySlug(g.ID, p.ID)
-			applyRelayOverrides(e, slug, g.Name, p.ID, next)
+			e, ultraToMax := relayEntry(m, official[0], bySlug[m.ID], hidden[m.ID])
+			slug := RelaySlug(g.ID, m.ID)
+			applyRelayOverrides(e, slug, g.Name, m.ID, next)
 			next++
-			res.Models = append(res.Models, e)
-			res.Routes[slug] = RelayRoute{ID: g.ID, Model: p.ID, FromParams: true}
-			res.RelayModels = append(res.RelayModels, slug)
-			res.RelayShown = append(res.RelayShown, slug)
-			res.RelayFromParams = append(res.RelayFromParams, slug)
-		}
-		for _, name := range g.SameName {
-			base := bySlug[name]
-			e := Entry(maps.Clone(base))
-			if list, ok := base["supported_reasoning_levels"].([]any); ok {
+			if list, ok := e["supported_reasoning_levels"].([]any); ok {
 				for _, it := range list {
-					if m, ok := it.(map[string]any); ok {
-						if l, ok := m["effort"].(string); ok {
-							addLevel(l)
-						}
+					if l, ok := it.(map[string]any)["effort"].(string); ok && !seen[l] {
+						seen[l] = true
+						res.ReasoningLevels = append(res.ReasoningLevels, l)
 					}
 				}
 			}
-			slug := RelaySlug(g.ID, name)
-			applyRelayOverrides(e, slug, g.Name, name, next)
-			next++
 			res.Models = append(res.Models, e)
-			res.Routes[slug] = RelayRoute{ID: g.ID, Model: name}
+			res.Routes[slug] = RelayRoute{ID: g.ID, Model: m.ID, UltraToMax: ultraToMax}
 			res.RelayModels = append(res.RelayModels, slug)
-			if !hidden[name] {
+			if !hidden[m.ID] {
 				res.RelayShown = append(res.RelayShown, slug)
 			}
 		}
 	}
 	return res, nil
+}
+
+// sameName 为同名官方条目，没有时为 nil；缺参数时同名取它的值，不同名取 first 的值
+func relayEntry(m RelayModel, first, sameName Entry, hidden bool) (Entry, bool) {
+	base := first
+	if sameName != nil {
+		base = sameName
+	}
+	e := Entry(maps.Clone(base))
+	if hidden {
+		e["visibility"] = base["visibility"]
+	} else {
+		e["visibility"] = "list"
+	}
+
+	if m.ID == autoModel {
+		e["context_window"] = autoContextWindow
+		e["max_context_window"] = autoContextWindow
+		e["input_modalities"] = []string{"text", "image"}
+		setNoLevels(e)
+		return e, false
+	}
+	if m.ContextLength > 0 {
+		e["context_window"] = m.ContextLength
+		e["max_context_window"] = m.ContextLength
+	}
+	if len(m.InputModalities) > 0 {
+		e["input_modalities"] = m.InputModalities
+	}
+	if m.Efforts == nil {
+		if sameName == nil {
+			setNoLevels(e)
+		}
+		return e, false
+	}
+	levels, def := relayLevels(m.Efforts)
+	if len(levels) == 0 {
+		setNoLevels(e)
+		return e, false
+	}
+	ultraToMax := false
+	supported := make([]any, 0, len(levels))
+	for _, l := range levels {
+		if l == "max" {
+			l, ultraToMax = "ultra", true
+		}
+		supported = append(supported, map[string]any{"effort": l, "description": l})
+	}
+	if def == "max" {
+		def = "ultra"
+	}
+	e["supported_reasoning_levels"] = supported
+	e["default_reasoning_level"] = def
+	e["supports_reasoning_effort_updates"] = true
+	return e, ultraToMax
+}
+
+func setNoLevels(e Entry) {
+	e["supported_reasoning_levels"] = []any{}
+	delete(e, "default_reasoning_level")
+	e["supports_reasoning_effort_updates"] = false
+}
+
+// 有 high 时默认 high，不按排序取最高
+func relayLevels(efforts []string) (levels []string, def string) {
+	best := -1
+	for _, l := range efforts {
+		rank := slices.Index(levelRank, l)
+		if rank < 0 {
+			continue
+		}
+		levels = append(levels, l)
+		if l == "high" {
+			def, best = l, len(levelRank)
+		} else if rank > best {
+			def, best = l, rank
+		}
+	}
+	return levels, def
+}
+
+func hiddenSlugs(official []Entry) map[string]bool {
+	hidden := map[string]bool{}
+	for _, e := range official {
+		if v, has := e["visibility"]; has && v != "list" {
+			if slug, ok := e["slug"].(string); ok {
+				hidden[slug] = true
+			}
+		}
+	}
+	return hidden
 }
 
 func RelaySlug(id, model string) string {
@@ -198,21 +227,12 @@ func toFloat(v any) (float64, bool) {
 	return 0, false
 }
 
-func ShownRelayNames(paramOnly []Param, sameName []string, official []Entry) []string {
-	hidden := map[string]bool{}
-	for _, e := range official {
-		if v, has := e["visibility"]; has && v != "list" {
-			slug, _ := e["slug"].(string)
-			hidden[slug] = true
-		}
-	}
+func ShownRelayNames(models []RelayModel, official []Entry) []string {
+	hidden := hiddenSlugs(official)
 	var out []string
-	for _, p := range paramOnly {
-		out = append(out, p.ID)
-	}
-	for _, n := range sameName {
-		if !hidden[n] {
-			out = append(out, n)
+	for _, m := range models {
+		if m.ID != "" && !hidden[m.ID] {
+			out = append(out, m.ID)
 		}
 	}
 	return out

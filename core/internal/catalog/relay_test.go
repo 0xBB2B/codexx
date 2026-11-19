@@ -1,9 +1,9 @@
 package catalog_test
 
 import (
-	"context"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -13,29 +13,45 @@ import (
 
 const secretBody = "SECRET-BODY-MARKER-9f3a"
 
-func TestFetchRelayIDs_Success(t *testing.T) {
+func fetchOnce(t *testing.T, url string, timeout time.Duration) *catalog.Result {
+	t.Helper()
+	codex, _ := writeFakeCodex(t, officialJSON, 0)
+	opts := buildOpts(t, codex, t.TempDir(), source("1", "主力", url))
+	opts.RelayTimeout = timeout
+	return build(t, opts)
+}
+
+func TestFetch_Success_RequestShapeAndModelsParsed(t *testing.T) {
 	t.Parallel()
 	var gotPath, gotAuth, gotMethod string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotPath, gotAuth, gotMethod = r.URL.Path, r.Header.Get("Authorization"), r.Method
-		_, _ = w.Write([]byte(`{"data":[{"id":"auto"},{"id":"deepseek-v3.2"},{"id":"unknown-model-x"}]}`))
+		_, _ = w.Write([]byte(modelsBody(idItems("auto", "deepseek-v3.2", "unknown-model-x")...)))
 	}))
 	defer srv.Close()
 
-	ids, err := catalog.FetchRelayIDs(context.Background(), srv.URL+"/v1", "sk-example-0000", time.Second)
-	if err != nil {
-		t.Fatalf("FetchRelayIDs: %v", err)
-	}
-	if gotMethod != http.MethodGet || gotPath != "/v1/models" || gotAuth != "Bearer sk-example-0000" {
+	res := fetchOnce(t, srv.URL+"/v1", time.Second)
+	if gotMethod != http.MethodGet || gotPath != "/v1/models" || gotAuth != "Bearer "+relayKey {
 		t.Errorf("请求不对: %s %s %q", gotMethod, gotPath, gotAuth)
 	}
-	want := []string{"auto", "deepseek-v3.2", "unknown-model-x"}
-	if strings.Join(ids, ",") != strings.Join(want, ",") {
-		t.Errorf("ids = %v", ids)
+	if r := relayResult(t, res, "1"); r.Err != nil || r.ModelCount != 3 {
+		t.Errorf("配置 1 = %+v", r)
 	}
 }
 
-func TestFetchRelayIDs_StatusCodes(t *testing.T) {
+func TestFetch_ModelsWithoutIDAreSkipped(t *testing.T) {
+	t.Parallel()
+	srv := newRelayStub(t, 200, modelsBody(`{"id":""}`, `{"context_length":1000}`, `{"id":"model-a"}`))
+	res := fetchOnce(t, srv.URL, time.Second)
+	if got, want := slugs(t, res), []any{"gpt-a", "gpt-b", "relay-model-a"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("slugs = %v, want %v", got, want)
+	}
+	if got := relayResult(t, res, "1").ModelCount; got != 1 {
+		t.Errorf("ModelCount = %d, want 1", got)
+	}
+}
+
+func TestFetch_StatusCodes(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
 		status int
@@ -54,23 +70,22 @@ func TestFetchRelayIDs_StatusCodes(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(http.StatusText(tt.status), func(t *testing.T) {
 			t.Parallel()
-			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-				w.WriteHeader(tt.status)
-				_, _ = w.Write([]byte(secretBody))
-			}))
-			defer srv.Close()
-			_, err := catalog.FetchRelayIDs(context.Background(), srv.URL, "sk-example-0000", time.Second)
-			if got := catalog.ErrorCode(err); got != tt.code {
-				t.Fatalf("code = %q (err=%v), want %q", got, err, tt.code)
+			srv := newRelayStub(t, tt.status, secretBody)
+			r := relayResult(t, fetchOnce(t, srv.URL, time.Second), "1")
+			if got := catalog.ErrorCode(r.Err); got != tt.code {
+				t.Fatalf("code = %q (err=%v), want %q", got, r.Err, tt.code)
 			}
-			if strings.Contains(err.Error(), secretBody) {
+			if strings.Contains(r.Err.Error(), secretBody) {
 				t.Errorf("错误值里出现了中转返回正文")
+			}
+			if r.ModelCount != 0 {
+				t.Errorf("ModelCount = %d, want 0", r.ModelCount)
 			}
 		})
 	}
 }
 
-func TestFetchRelayIDs_Timeout(t *testing.T) {
+func TestFetch_Timeout(t *testing.T) {
 	t.Parallel()
 	release := make(chan struct{})
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -81,33 +96,29 @@ func TestFetchRelayIDs_Timeout(t *testing.T) {
 	}))
 	defer srv.Close()
 	defer close(release)
-	_, err := catalog.FetchRelayIDs(context.Background(), srv.URL, "sk-example-0000", 100*time.Millisecond)
-	if got := catalog.ErrorCode(err); got != "relay_unreachable" {
-		t.Fatalf("code = %q (err=%v)", got, err)
+	r := relayResult(t, fetchOnce(t, srv.URL, 100*time.Millisecond), "1")
+	if got := catalog.ErrorCode(r.Err); got != "relay_unreachable" {
+		t.Fatalf("code = %q (err=%v)", got, r.Err)
 	}
 }
 
-func TestFetchRelayIDs_NetworkError(t *testing.T) {
+func TestFetch_NetworkError(t *testing.T) {
 	t.Parallel()
 	srv := httptest.NewServer(http.NotFoundHandler())
 	url := srv.URL
 	srv.Close()
-	_, err := catalog.FetchRelayIDs(context.Background(), url, "sk-example-0000", time.Second)
-	if got := catalog.ErrorCode(err); got != "relay_unreachable" {
-		t.Fatalf("code = %q (err=%v)", got, err)
+	r := relayResult(t, fetchOnce(t, url, time.Second), "1")
+	if got := catalog.ErrorCode(r.Err); got != "relay_unreachable" {
+		t.Fatalf("code = %q (err=%v)", got, r.Err)
 	}
 }
 
-func TestFetchRelayIDs_ErrorDoesNotContainModelNames(t *testing.T) {
+func TestFetch_ErrorDoesNotContainModelNames(t *testing.T) {
 	t.Parallel()
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(500)
-		_, _ = w.Write([]byte(`{"data":[{"id":"deepseek-v3.2"}]}`))
-	}))
-	defer srv.Close()
-	_, err := catalog.FetchRelayIDs(context.Background(), srv.URL, "sk-example-0000", time.Second)
-	if err == nil || strings.Contains(err.Error(), "deepseek-v3.2") {
-		t.Fatalf("err = %v", err)
+	srv := newRelayStub(t, 500, modelsBody(`{"id":"deepseek-v3.2"}`))
+	r := relayResult(t, fetchOnce(t, srv.URL, time.Second), "1")
+	if r.Err == nil || strings.Contains(r.Err.Error(), "deepseek-v3.2") {
+		t.Fatalf("err = %v", r.Err)
 	}
 }
 
@@ -118,24 +129,21 @@ func TestRelayTimeout_Is15Seconds(t *testing.T) {
 	}
 }
 
-func TestFetchRelayIDs_InvalidBody(t *testing.T) {
+func TestFetch_InvalidBody(t *testing.T) {
 	t.Parallel()
 	for _, body := range []string{"not json", `{"data":null}`, `{}`} {
 		t.Run(body, func(t *testing.T) {
 			t.Parallel()
-			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-				_, _ = w.Write([]byte(body))
-			}))
-			defer srv.Close()
-			_, err := catalog.FetchRelayIDs(context.Background(), srv.URL, "sk-example-0000", time.Second)
-			if got := catalog.ErrorCode(err); got != "relay_bad_response" {
-				t.Fatalf("code = %q (err=%v)", got, err)
+			srv := newRelayStub(t, 200, body)
+			r := relayResult(t, fetchOnce(t, srv.URL, time.Second), "1")
+			if got := catalog.ErrorCode(r.Err); got != "relay_bad_response" {
+				t.Fatalf("code = %q (err=%v)", got, r.Err)
 			}
 		})
 	}
 }
 
-func TestFetchRelayIDs_BodyOver8MBRejected(t *testing.T) {
+func TestFetch_BodyOver8MBRejected(t *testing.T) {
 	t.Parallel()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(`{"data":[{"id":"`))
@@ -148,11 +156,47 @@ func TestFetchRelayIDs_BodyOver8MBRejected(t *testing.T) {
 	}))
 	defer srv.Close()
 	start := time.Now()
-	_, err := catalog.FetchRelayIDs(context.Background(), srv.URL, "sk-example-0000", 5*time.Second)
-	if got := catalog.ErrorCode(err); got != "relay_bad_response" {
-		t.Fatalf("code = %q (err=%v)", got, err)
+	r := relayResult(t, fetchOnce(t, srv.URL, 5*time.Second), "1")
+	if got := catalog.ErrorCode(r.Err); got != "relay_bad_response" {
+		t.Fatalf("code = %q (err=%v)", got, r.Err)
 	}
 	if time.Since(start) > 3*time.Second {
 		t.Errorf("超过 8MB 后应立即放弃读取")
+	}
+}
+
+func TestFetch_FieldWithWrongTypeTreatedAsMissing(t *testing.T) {
+	t.Parallel()
+	srv := newRelayStub(t, 200, modelsBody(
+		`{"id":"m-float","context_length":131072.0,"architecture":{"input_modalities":["text"]},"reasoning":{"supported_efforts":["low"]}}`,
+		`{"id":"m-string","context_length":"131072","architecture":{"input_modalities":"text"},"reasoning":{"supported_efforts":"low"}}`,
+		`{"id":"m-fraction","context_length":1.5,"architecture":"text","reasoning":["low"]}`,
+	))
+	codex, _ := writeFakeCodex(t, officialJSON, 0)
+	dataDir := t.TempDir()
+	res := build(t, buildOpts(t, codex, dataDir, source("1", "主力", srv.URL)))
+	if r := relayResult(t, res, "1"); r.Err != nil || r.ModelCount != 3 {
+		t.Fatalf("配置 1 = %+v", r)
+	}
+	models := catalogFileModels(t, dataDir)
+	first := models[0]
+
+	float := bySlug(t, models, "relay-m-float")
+	if got := float["context_window"]; got != float64(131072) {
+		t.Errorf("m-float context_window = %v, want 131072", got)
+	}
+	for _, slug := range []string{"relay-m-string", "relay-m-fraction"} {
+		e := bySlug(t, models, slug)
+		t.Run(slug, func(t *testing.T) {
+			if e["context_window"] != first["context_window"] {
+				t.Errorf("context_window = %v, want 官方第一个条目的 %v", e["context_window"], first["context_window"])
+			}
+			if !reflect.DeepEqual(e["input_modalities"], first["input_modalities"]) {
+				t.Errorf("input_modalities = %v, want %v", e["input_modalities"], first["input_modalities"])
+			}
+			if got := efforts(t, e); len(got) != 0 {
+				t.Errorf("等级 = %v, want 无", got)
+			}
+		})
 	}
 }

@@ -20,8 +20,8 @@ type RelaySource struct {
 	BaseURL string
 	Key     string
 	Mode    RelayMode
-	// IDs 只在 UseGiven 时使用，空切片也照写缓存
-	IDs []string
+	// Models 只在 UseGiven 时使用，空切片也照写缓存
+	Models []RelayModel
 }
 
 type BuildOptions struct {
@@ -31,7 +31,6 @@ type BuildOptions struct {
 	DataDir      string
 	// ModelsCachePath 是 Codex 的 models_cache.json，用来把官方条目限定在当前账号可用的模型
 	ModelsCachePath string
-	Params          []Param
 	RelayOnly       bool
 }
 
@@ -43,8 +42,8 @@ func Build(ctx context.Context, opts BuildOptions) (*Result, error) {
 	store := NewStore(opts.DataDir)
 
 	type fetchOutcome struct {
-		ids []string
-		err error
+		models []RelayModel
+		err    error
 	}
 	fetched := make([]fetchOutcome, len(opts.Relays))
 	var wg sync.WaitGroup
@@ -55,7 +54,7 @@ func Build(ctx context.Context, opts BuildOptions) (*Result, error) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			fetched[i].ids, fetched[i].err = FetchRelayIDs(ctx, src.BaseURL, src.Key, opts.RelayTimeout)
+			fetched[i].models, fetched[i].err = FetchRelayModels(ctx, src.BaseURL, src.Key, opts.RelayTimeout)
 		}()
 	}
 	wg.Wait()
@@ -65,33 +64,32 @@ func Build(ctx context.Context, opts BuildOptions) (*Result, error) {
 	var groups []RelayGroup
 	for i, src := range opts.Relays {
 		r := RelayResult{ID: src.ID}
-		var ids []string
+		var models []RelayModel
 		save := false
 		switch src.Mode {
 		case UseGiven:
-			ids, save = src.IDs, true
+			models, save = src.Models, true
 			r.FetchedAt = time.Now()
 		case CacheOnly:
-			ids = loadCached(store, src.ID, &r)
+			models = loadCached(store, src.ID, &r)
 		default:
 			if err := fetched[i].err; err != nil {
 				r.Err = err
-				ids = loadCached(store, src.ID, &r)
+				models = loadCached(store, src.ID, &r)
 				r.Stale = !r.FetchedAt.IsZero()
 			} else {
-				ids, save = fetched[i].ids, true
+				models, save = fetched[i].models, true
 				r.FetchedAt = time.Now()
 			}
 		}
 		if save {
-			if err := store.SaveRelayModels(src.ID, ids, r.FetchedAt); err != nil && storeErr == nil {
+			if err := store.SaveRelayModels(src.ID, models, r.FetchedAt); err != nil && storeErr == nil {
 				storeErr = err
 			}
 		}
-		paramOnly, sameName := RelayNames(ids, opts.Params, official)
-		r.ModelCount = len(paramOnly) + len(sameName)
+		r.ModelCount = len(ShownRelayNames(models, official))
 		relays = append(relays, r)
-		groups = append(groups, RelayGroup{ID: src.ID, Name: src.Name, ParamOnly: paramOnly, SameName: sameName})
+		groups = append(groups, RelayGroup{ID: src.ID, Name: src.Name, Models: models})
 	}
 
 	res, err := MergeRelay(official, groups)
@@ -117,8 +115,8 @@ func Build(ctx context.Context, opts BuildOptions) (*Result, error) {
 	return res, nil
 }
 
-func loadCached(store *Store, id string, r *RelayResult) []string {
-	ids, at, ok, err := store.LoadRelayModels(id)
+func loadCached(store *Store, id string, r *RelayResult) []RelayModel {
+	models, at, ok, err := store.LoadRelayModels(id)
 	if err != nil && r.Err == nil {
 		r.Err = err
 	}
@@ -126,5 +124,5 @@ func loadCached(store *Store, id string, r *RelayResult) []string {
 		return nil
 	}
 	r.FetchedAt = at
-	return ids
+	return models
 }
