@@ -179,8 +179,9 @@ func mkExec(t *testing.T, path string) {
 
 func TestDefaultDarwinRoots(t *testing.T) {
 	t.Parallel()
-	got := catalog.DefaultDarwinRoots("/Users/example")
-	want := []string{"/Applications", "/Users/example/Applications"}
+	home := filepath.Join(string(filepath.Separator), "Users", "example")
+	got := catalog.DefaultDarwinRoots(home)
+	want := []string{"/Applications", filepath.Join(home, "Applications")}
 	if len(got) != 2 || got[0] != want[0] || got[1] != want[1] {
 		t.Errorf("roots = %v, want %v", got, want)
 	}

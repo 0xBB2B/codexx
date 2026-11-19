@@ -8,6 +8,8 @@ import (
 	"sort"
 	"strings"
 	"testing"
+
+	"github.com/pelletier/go-toml/v2"
 )
 
 const (
@@ -157,8 +159,12 @@ func TestEnable_OnlyManagedLinesChange(t *testing.T) {
 			if l, ok := findLine(got, "openai_base_url"); !ok || !strings.Contains(l, `"`+proxyURL+`"`) {
 				t.Fatalf("openai_base_url 行 = %q", l)
 			}
-			if l, ok := findLine(got, "model_catalog_json"); !ok || !strings.Contains(l, `"`+in.CatalogPath+`"`) {
-				t.Fatalf("model_catalog_json 行 = %q", l)
+			l, ok := findLine(got, "model_catalog_json")
+			var parsed struct {
+				Path string `toml:"model_catalog_json"`
+			}
+			if !ok || toml.Unmarshal([]byte(l), &parsed) != nil || parsed.Path != in.CatalogPath {
+				t.Fatalf("model_catalog_json 行 = %q, 解析后应等于 %q", l, in.CatalogPath)
 			}
 			if l, ok := findLine(got, "model"); !ok || !strings.Contains(l, `"relay-auto"`) {
 				t.Fatalf("model 行 = %q", l)

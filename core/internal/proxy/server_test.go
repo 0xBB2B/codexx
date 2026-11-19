@@ -605,3 +605,16 @@ func TestForward_OfficialCompressedBodyPassedThroughUntouched(t *testing.T) {
 		t.Errorf("Codex 收到的应是上游的压缩字节，实际 %q", got)
 	}
 }
+
+func TestStart_OtherListenFailure(t *testing.T) {
+	t.Parallel()
+	srv := proxy.New(proxy.Config{ListenAddr: "127.0.0.1:99999", LogOutput: io.Discard})
+	err := srv.Start()
+	var pe *proxy.Error
+	if !errors.As(err, &pe) {
+		t.Fatalf("期望 *proxy.Error，实际 %v", err)
+	}
+	if pe.Code != "proxy_listen_failed" {
+		t.Fatalf("错误码 = %q", pe.Code)
+	}
+}
