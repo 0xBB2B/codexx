@@ -123,8 +123,8 @@ func relayEntry(m RelayModel, first, sameName Entry, hidden bool) (Entry, bool) 
 		e["context_window"] = m.ContextLength
 		e["max_context_window"] = m.ContextLength
 	}
-	if len(m.InputModalities) > 0 {
-		e["input_modalities"] = m.InputModalities
+	if modalities := knownModalities(m.InputModalities); len(modalities) > 0 {
+		e["input_modalities"] = modalities
 	}
 	if m.Efforts == nil {
 		if sameName == nil {
@@ -152,6 +152,17 @@ func relayEntry(m RelayModel, first, sameName Entry, hidden bool) (Entry, bool) 
 	e["default_reasoning_level"] = def
 	e["supports_reasoning_effort_updates"] = true
 	return e, ultraToMax
+}
+
+// Codex 读目录时遇到不认识的输入类型会整份目录加载失败
+func knownModalities(modalities []string) []string {
+	var out []string
+	for _, m := range modalities {
+		if m == "text" || m == "image" || m == "audio" {
+			out = append(out, m)
+		}
+	}
+	return out
 }
 
 func setNoLevels(e Entry) {

@@ -120,6 +120,12 @@ func TestRelayEntry_ParamsFromAPIAndFallback(t *testing.T) {
 			entryWant{400000, text, []any{"high"}, "high", true, false}},
 		{"不同名 input_modalities 为空列表", `{"id":"model-a","context_length":2000,"architecture":{"input_modalities":[]},"reasoning":{"supported_efforts":["high"]}}`, "relay-model-a",
 			entryWant{2000, textImage, []any{"high"}, "high", true, false}},
+		{"不同名 丢弃 Codex 不认识的输入类型", `{"id":"model-a","context_length":2000,"architecture":{"input_modalities":["text","file","audio","video"]},"reasoning":{"supported_efforts":["high"]}}`, "relay-model-a",
+			entryWant{2000, []any{"text", "audio"}, []any{"high"}, "high", true, false}},
+		{"不同名 输入类型全不认识时用官方第一个条目", `{"id":"model-a","context_length":2000,"architecture":{"input_modalities":["file"]},"reasoning":{"supported_efforts":["high"]}}`, "relay-model-a",
+			entryWant{2000, textImage, []any{"high"}, "high", true, false}},
+		{"同名 输入类型全不认识时用官方值", `{"id":"gpt-x","context_length":2000,"architecture":{"input_modalities":["file","video"]},"reasoning":{"supported_efforts":["high"]}}`, "relay-gpt-x",
+			entryWant{2000, textImage, []any{"high"}, "high", true, false}},
 		{"不同名 只缺等级时没有等级", `{"id":"model-a","context_length":2000,"architecture":{"input_modalities":["text"]}}`, "relay-model-a",
 			entryWant{2000, text, nil, nil, false, false}},
 
