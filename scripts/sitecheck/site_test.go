@@ -5,6 +5,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -356,9 +357,9 @@ func TestSite_LangSetInHeadScript(t *testing.T) {
 func TestSite_NarrowScreenZoomOverridesLaterThan600(t *testing.T) {
 	t.Parallel()
 	html := strings.Join(strings.Fields(readSite(t)), "")
-	narrow := regexp.MustCompile(`@media\(max-width:356px\)\{[^@]*?\.am\{[^}]*zoom:0?\.46`).FindStringIndex(html)
+	narrow := regexp.MustCompile(`@media\(max-width:356px\)\{[^@]*?\.am\{[^}]*zoom:0?\.37`).FindStringIndex(html)
 	if narrow == nil {
-		t.Fatal("找不到 max-width:356px 媒体查询里把 .am 的 zoom 设为 .46 的规则")
+		t.Fatal("找不到 max-width:356px 媒体查询里把 .am 的 zoom 设为 .37 的规则")
 	}
 	mid := regexp.MustCompile(`@media\(max-width:600px\)\{\.am\{[^}]*zoom:`).FindStringIndex(html)
 	if mid == nil {
@@ -930,5 +931,22 @@ func TestSite_BrandLinkNarrowScreen(t *testing.T) {
 	}
 	if !found {
 		t.Error("max-width:400px 媒体查询里没有把 .brand 的左右 padding 设为 4px、左右 margin 设为 -4px")
+	}
+}
+
+func TestSite_AppFigureWidth(t *testing.T) {
+	t.Parallel()
+	html := readSite(t)
+	if got := regexp.MustCompile(`\.am-(window|scene)\{width:(\d+)px;`).FindAllStringSubmatch(html, -1); len(got) != 2 || got[0][2] != "760" || got[1][2] != "760" {
+		t.Errorf("界面图容器宽度 = %v，want .am-window 和 .am-scene 都是 760px", got)
+	}
+	got := regexp.MustCompile(`@media \(max-width:\d+px\)\{\.am\{zoom:\.\d+\}\}`).FindAllString(html, -1)
+	want := []string{
+		`@media (max-width:808px){.am{zoom:.65}}`,
+		`@media (max-width:600px){.am{zoom:.42}}`,
+		`@media (max-width:356px){.am{zoom:.37}}`,
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("界面图缩放规则 = %q，want %q", got, want)
 	}
 }
