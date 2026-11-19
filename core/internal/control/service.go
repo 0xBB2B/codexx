@@ -851,7 +851,7 @@ func (s *Service) pushRelay() {
 	routes := make(map[string]proxy.RelayTarget, len(s.routes))
 	for slug, r := range s.routes {
 		if i := s.relayIndex(r.ID); i >= 0 {
-			routes[slug] = proxy.RelayTarget{BaseURL: s.relays[i].baseURL, Key: s.relays[i].apiKey, Model: r.Model, UltraToMax: r.UltraToMax}
+			routes[slug] = proxy.RelayTarget{BaseURL: s.relays[i].baseURL, Key: s.relays[i].apiKey, Model: r.Model}
 		}
 	}
 	configs := make(map[string]proxy.RelayInfo, len(s.relays))

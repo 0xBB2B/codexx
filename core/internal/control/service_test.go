@@ -913,19 +913,20 @@ func postBodyViaProxy(t *testing.T, addr, body string, zstdBody bool) {
 	_, _ = io.Copy(io.Discard, resp.Body)
 }
 
-func TestForwarding_UltraEffortChangedBackToMaxOnlyForModelsWithMaxEffort(t *testing.T) {
+func TestForwarding_RelayEffortForwardedUnchanged(t *testing.T) {
 	tests := []struct {
-		name       string
-		model      string
-		effort     string
-		zstd       bool
-		wantEffort string
+		name   string
+		model  string
+		effort string
+		zstd   bool
 	}{
-		{"接口声明 max 的模型 ultra 改回 max", "relay-deepseek-flash", "ultra", false, "max"},
-		{"接口声明 max 的模型 ultra 改回 max（zstd）", "relay-deepseek-flash", "ultra", true, "max"},
-		{"接口声明 max 的模型 high 原样", "relay-deepseek-flash", "high", false, "high"},
-		{"接口没声明 max 的模型 ultra 原样", "relay-no-max", "ultra", false, "ultra"},
-		{"接口没给思考等级的同名模型 ultra 原样", "relay-gpt-a", "ultra", false, "ultra"},
+		{"接口声明 max 的模型 max 原样", "relay-deepseek-flash", "max", false},
+		{"接口声明 max 的模型 xhigh 原样", "relay-deepseek-flash", "xhigh", false},
+		{"接口声明 max 的模型 ultra 原样", "relay-deepseek-flash", "ultra", false},
+		{"接口声明 max 的模型 ultra 原样（zstd）", "relay-deepseek-flash", "ultra", true},
+		{"接口声明 max 的模型 high 原样", "relay-deepseek-flash", "high", false},
+		{"接口没声明 max 的模型 ultra 原样", "relay-no-max", "ultra", false},
+		{"接口没给思考等级的同名模型 ultra 原样", "relay-gpt-a", "ultra", false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -945,10 +946,22 @@ func TestForwarding_UltraEffortChangedBackToMaxOnlyForModelsWithMaxEffort(t *tes
 			if err := json.Unmarshal([]byte(bodies[0]), &sent); err != nil {
 				t.Fatalf("请求体不是 JSON: %q", bodies[0])
 			}
-			if sent.Reasoning.Effort != tt.wantEffort {
-				t.Errorf("中转收到的 effort = %q, want %q（%s）", sent.Reasoning.Effort, tt.wantEffort, bodies[0])
+			if sent.Reasoning.Effort != tt.effort {
+				t.Errorf("中转收到的 effort = %q, want %q（%s）", sent.Reasoning.Effort, tt.effort, bodies[0])
 			}
 		})
+	}
+}
+
+func TestRelayOnly_ConfigEnabledEffortsKeepMaxWithoutUltra(t *testing.T) {
+	e := newEnv(t, true, withDetect(codexauth.NotLoggedIn))
+	e.relay.setModelsJSON(relayModelJSON("deepseek-flash", "low", "high", "max"))
+	e.initRelay(t)
+	desktop, _ := parseConfig(e.config(t))["desktop"].(map[string]any)
+	got, _ := desktop["enabled-reasoning-efforts"].([]any)
+	want := []any{"low", "high", "max"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("enabled-reasoning-efforts = %v, want %v", got, want)
 	}
 }
 

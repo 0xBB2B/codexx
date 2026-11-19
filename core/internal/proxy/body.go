@@ -57,37 +57,15 @@ func extractModel(body []byte) string {
 	return v.Model
 }
 
-func relayBody(body []byte, model string, ultraToMax bool) []byte {
+func relayBody(body []byte, model string) []byte {
 	var top map[string]json.RawMessage
 	if json.Unmarshal(body, &top) != nil {
 		return body
 	}
 	top["model"], _ = json.Marshal(model)
-	if ultraToMax {
-		if r, ok := top["reasoning"]; ok {
-			top["reasoning"] = ultraEffortToMax(r)
-		}
-	}
 	out, err := json.Marshal(top)
 	if err != nil {
 		return body
-	}
-	return out
-}
-
-func ultraEffortToMax(reasoning json.RawMessage) json.RawMessage {
-	var r map[string]json.RawMessage
-	if json.Unmarshal(reasoning, &r) != nil {
-		return reasoning
-	}
-	var effort string
-	if json.Unmarshal(r["effort"], &effort) != nil || effort != "ultra" {
-		return reasoning
-	}
-	r["effort"] = json.RawMessage(`"max"`)
-	out, err := json.Marshal(r)
-	if err != nil {
-		return reasoning
 	}
 	return out
 }

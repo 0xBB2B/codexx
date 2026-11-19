@@ -18,8 +18,6 @@ type RelayTarget struct {
 	Key     string
 	// Model 是发给中转服务的原模型名
 	Model string
-	// UltraToMax 为真（思考等级取自中转接口）时，reasoning.effort 的 ultra 要改回 max 再发给中转
-	UltraToMax bool
 }
 
 type RelayInfo struct {
@@ -51,14 +49,13 @@ func (s *relayState) set(c RelayConfig) {
 }
 
 type route struct {
-	relay      bool
-	target     *url.URL
-	key        string
-	model      string
-	ultraToMax bool
-	reject     bool
-	failCode   string
-	failMsg    string
+	relay    bool
+	target   *url.URL
+	key      string
+	model    string
+	reject   bool
+	failCode string
+	failMsg  string
 }
 
 func (s *Server) decideRoute(r *http.Request, urlPath, model string) (route, error) {
@@ -95,7 +92,7 @@ func (s *Server) decideRoute(r *http.Request, urlPath, model string) (route, err
 	u.Path = strings.TrimRight(u.Path, "/") + rest
 	u.RawPath = ""
 	u.RawQuery = r.URL.RawQuery
-	return route{relay: isRelay, target: u, key: t.Key, model: t.Model, ultraToMax: t.UltraToMax, reject: relayOnly && !isRelay}, nil
+	return route{relay: isRelay, target: u, key: t.Key, model: t.Model, reject: relayOnly && !isRelay}, nil
 }
 
 func relayIDOfSlug(model string) string {

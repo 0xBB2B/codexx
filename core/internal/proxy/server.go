@@ -211,7 +211,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if rt.relay {
 		dest = "relay"
-		plain = relayBody(plain, rt.model, rt.ultraToMax)
+		plain = relayBody(plain, rt.model)
 		isCompact := urlPath == "/v1/responses/compact"
 		if isCompact || normalize.HasCompactionTrigger(plain) {
 			s.takeOverCompaction(sw, r, rt, plain, isCompact)
