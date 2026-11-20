@@ -225,3 +225,31 @@ final class DialogModalTests: XCTestCase {
         XCTAssertTrue(resized, "内容变高后弹窗没有跟着调整大小")
     }
 }
+
+@MainActor
+final class DialogModalPanelSizeTests: XCTestCase {
+    func testQuitDialog_PanelKeepsPaddingAroundCard() async {
+        _ = NSApplication.shared
+        let log = CallLog()
+        let model = AppModel(
+            core: FakeCore(log: log, responses: [:]), keychain: RelayFakeKeychain(log: log),
+            settings: RelayFakeSettings(log: log, relays: [relayOne]),
+            loginItem: FakeLoginItem(log: log), chatGPT: FakeChatGPT(running: false)
+        )
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        model.status = try! decoder.decode(CoreStatus.self, from: Data(ViewFixture.statusJSON(forwarding: true, relayCount: 1).utf8))
+        let presenter = DialogPresenter(model: model)
+        var panelSize: NSSize?
+        let probe = ModalProbe { probe in
+            guard let panel = probe.panel else { return false }
+            panelSize = panel.frame.size
+            return true
+        }
+        await model.quit()
+        await awaitUntil(timeout: 10) { probe.finished && NSApp.modalWindow == nil }
+        probe.stop()
+        withExtendedLifetime(presenter) {}
+        XCTAssertEqual(panelSize?.width, 616)
+    }
+}

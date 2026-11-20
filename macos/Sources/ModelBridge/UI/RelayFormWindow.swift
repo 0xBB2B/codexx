@@ -66,7 +66,6 @@ struct RelayFormView: View {
                     .padding(.top, 12).padding(.horizontal, 24)
             }
         }
-        .shadow(color: Color(hex: 0x172b3a).opacity(0.16), radius: 24, x: 0, y: 16)
         .preferredColorScheme(.light)
         .onAppear { DispatchQueue.main.async { nameFocused = true } }
         .accessibilityElement(children: .contain)

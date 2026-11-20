@@ -8,7 +8,7 @@ final class DialogPanel: NSPanel {
     @MainActor
     static func make<Content: View>(_ content: Content) -> DialogPanel {
         let panel = DialogPanel(contentRect: .zero, styleMask: [.borderless], backing: .buffered, defer: false)
-        let host = NSHostingView(rootView: content.padding(48))
+        let host = NSHostingView(rootView: content)
         panel.contentView = host
         panel.setContentSize(host.fittingSize)
         panel.isOpaque = false
@@ -56,7 +56,6 @@ struct DeleteRelayDialogView: View {
         }
         .frame(width: 520)
         .background(RoundedRectangle(cornerRadius: 12).fill(Palette.surface))
-        .shadow(color: Color(hex: 0x172b3a).opacity(0.16), radius: 24, x: 0, y: 16)
         .preferredColorScheme(.light)
         .onAppear { DispatchQueue.main.async { cancelFocused = true } }
         .accessibilityElement(children: .contain)
