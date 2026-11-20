@@ -155,7 +155,7 @@ final class RelaySheetController {
             guard let self else { return }
             if visible { open(.form) } else { close(.form) }
         }.store(in: &subscriptions)
-        model.$pendingConfirmation.map { $0?.kind.isDeleteRelay ?? false }.removeDuplicates().sink { [weak self] visible in
+        model.$pendingConfirmation.map { $0?.kind.isDeleteRelay ?? false }.removeDuplicates().receive(on: DispatchQueue.main).sink { [weak self] visible in
             guard let self else { return }
             if visible { open(.delete) } else { close(.delete) }
         }.store(in: &subscriptions)

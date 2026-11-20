@@ -515,6 +515,21 @@ final class StatusFooterUpdateTests: XCTestCase {
         return RenderedView(StatusFooter(model: f.model).frame(width: 760))
     }
 
+    func testFooter_NewVersionButtonPress_RechecksAndOpensFreshURL() async {
+        let freshURL = "https://github.com/o/r/releases/tag/v0.1.2"
+        let f = await ViewFixture.make(responses: [
+            "check_update": .success(Data(#"{"latest_version":"0.1.2","url":"\#(freshURL)","is_newer":true}"#.utf8)),
+        ])
+        f.model.availableUpdate = UpdateInfo(version: "0.1.0", url: "https://github.com/o/r/releases/tag/v0.1.0")
+        var opened: [URL] = []
+        f.model.openURL = { opened.append($0) }
+        let view = RenderedView(StatusFooter(model: f.model).frame(width: 760))
+        XCTAssertTrue(view.press(label: "发现新版本 0.1.0，打开下载页"))
+        await awaitUntil { !opened.isEmpty }
+        XCTAssertEqual(f.core.calls("check_update").first?.params, #"{"manual":true}"#)
+        XCTAssertEqual(opened, [URL(string: freshURL)!])
+    }
+
     func testFooter_InstallerTrue_LabelSaysDownloadInstaller() async {
         let view = await footerAfterCheckUpdate(
             url: "https://github.com/o/r/releases/download/v0.1.2/model-bridge-0.1.2-macos.dmg", installer: #""installer":true,"#

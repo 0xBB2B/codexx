@@ -1175,6 +1175,20 @@ public class AppModelTests
         });
 
     [TestMethod]
+    public void StatusPush_UpdateEmptyAfterNewVersion_ClearsUpdate()
+    {
+        var h = new Harness();
+        PushUpdate(h, ReleasePageUrl, true);
+        Assert.AreEqual("0.1.2", h.Model.UpdateVersion);
+
+        h.Push();
+
+        Assert.IsNull(h.Model.UpdateVersion);
+        Assert.IsNull(h.Model.UpdateUrl);
+        Assert.IsFalse(h.Model.UpdateIsInstaller);
+    }
+
+    [TestMethod]
     public async Task CheckUpdate_InstallerTrue_RecordsSetupUrlAndInstallerFlag()
     {
         var h = new Harness();
@@ -1223,6 +1237,169 @@ public class AppModelTests
 
         Assert.IsNull(h.Model.UpdateVersion);
         Assert.IsFalse(h.Model.UpdateIsInstaller);
+    }
+
+    const string OldUpdateUrl = "https://github.com/o/r/releases/tag/v0.1.0";
+    const string NewUpdateUrl = "https://github.com/o/r/releases/tag/v0.1.2";
+
+    static (Harness H, List<string?> Opened) WithOldUpdate()
+    {
+        var h = new Harness();
+        h.Push(s => s["update"] = new JsonObject { ["latest_version"] = "0.1.0", ["url"] = OldUpdateUrl });
+        var opened = new List<string?>();
+        h.Model.UrlOpener = opened.Add;
+        return (h, opened);
+    }
+
+    [TestMethod]
+    public async Task OpenUpdate_RecheckFindsNewer_RefreshesAndOpensNewUrl()
+    {
+        var (h, opened) = WithOldUpdate();
+        SetCheckUpdate(h, NewUpdateUrl, "\"installer\":true,");
+
+        await h.Model.OpenUpdateAsync();
+
+        Assert.AreEqual(1, h.Core.Calls.Count(c => c.Method == "check_update"));
+        Assert.AreEqual(true, h.Core.ParamsOf("check_update")["manual"]);
+        CollectionAssert.AreEqual(new[] { NewUpdateUrl }, opened);
+        Assert.AreEqual("0.1.2", h.Model.UpdateVersion);
+        Assert.AreEqual(NewUpdateUrl, h.Model.UpdateUrl);
+        Assert.IsTrue(h.Model.UpdateIsInstaller);
+    }
+
+    [TestMethod]
+    public async Task OpenUpdate_RecheckFindsLatest_ClearsUpdateAndOpensNothing()
+    {
+        var (h, opened) = WithOldUpdate();
+        h.Core.On("check_update", _ => Json.Parse("""{"latest_version":"0.1.2","url":null,"is_newer":false}"""));
+
+        await h.Model.OpenUpdateAsync();
+
+        Assert.AreEqual(true, h.Core.ParamsOf("check_update")["manual"]);
+        Assert.AreEqual(0, opened.Count);
+        Assert.IsNull(h.Model.UpdateVersion);
+        Assert.IsNotNull(Find(h, UpToDate));
+    }
+
+    [TestMethod]
+    public async Task OpenUpdate_RecheckFails_KeepsOldUpdateAndOpensNothing()
+    {
+        var (h, opened) = WithOldUpdate();
+        h.Core.Fail("check_update", "update_unavailable");
+
+        await h.Model.OpenUpdateAsync();
+
+        Assert.AreEqual(true, h.Core.ParamsOf("check_update")["manual"]);
+        Assert.AreEqual(0, opened.Count);
+        Assert.AreEqual("0.1.0", h.Model.UpdateVersion);
+        Assert.AreEqual(OldUpdateUrl, h.Model.UpdateUrl);
+        Assert.AreEqual(AppSeverity.Warning, Find(h, UpdateUnavailable)?.Severity);
+    }
+
+    static readonly JsonElement NewerResult = Json.Parse(
+        $$"""{"latest_version":"0.1.2","url":"{{NewUpdateUrl}}","is_newer":true}""");
+
+    static readonly JsonElement LatestResult = Json.Parse(
+        """{"latest_version":"0.1.0","url":null,"is_newer":false}""");
+
+    [TestMethod]
+    public async Task OpenUpdate_WhileCheckPending_SecondOpenUpdateIgnored()
+    {
+        var (h, opened) = WithOldUpdate();
+        var gate = new TaskCompletionSource<JsonElement>();
+        h.Core.OnAsync("check_update", _ => gate.Task);
+
+        var first = h.Model.OpenUpdateAsync();
+        var second = h.Model.OpenUpdateAsync();
+        gate.SetResult(NewerResult);
+        await Task.WhenAll(first, second);
+
+        Assert.AreEqual(1, h.Core.Count("check_update"));
+        CollectionAssert.AreEqual(new[] { NewUpdateUrl }, opened);
+    }
+
+    [TestMethod]
+    public async Task CheckUpdate_WhileCheckPending_SecondCheckIgnored()
+    {
+        var h = new Harness();
+        var gate = new TaskCompletionSource<JsonElement>();
+        h.Core.OnAsync("check_update", _ => gate.Task);
+
+        var first = h.Model.CheckUpdateAsync();
+        var second = h.Model.CheckUpdateAsync();
+        gate.SetResult(LatestResult);
+        await Task.WhenAll(first, second);
+
+        Assert.AreEqual(1, h.Core.Count("check_update"));
+        Assert.AreEqual(1, h.Model.Notices.Count(n => n.Title == UpToDate));
+    }
+
+    [TestMethod]
+    public async Task OpenUpdate_WhileCheckUpdatePending_Ignored()
+    {
+        var (h, opened) = WithOldUpdate();
+        var gate = new TaskCompletionSource<JsonElement>();
+        h.Core.OnAsync("check_update", _ => gate.Task);
+
+        var first = h.Model.CheckUpdateAsync();
+        var second = h.Model.OpenUpdateAsync();
+        gate.SetResult(NewerResult);
+        await Task.WhenAll(first, second);
+
+        Assert.AreEqual(1, h.Core.Count("check_update"));
+        Assert.AreEqual(0, opened.Count);
+    }
+
+    [TestMethod]
+    public async Task CheckUpdate_WhileOpenUpdatePending_Ignored()
+    {
+        var (h, opened) = WithOldUpdate();
+        var gate = new TaskCompletionSource<JsonElement>();
+        h.Core.OnAsync("check_update", _ => gate.Task);
+
+        var first = h.Model.OpenUpdateAsync();
+        var second = h.Model.CheckUpdateAsync();
+        gate.SetResult(NewerResult);
+        await Task.WhenAll(first, second);
+
+        Assert.AreEqual(1, h.Core.Count("check_update"));
+        CollectionAssert.AreEqual(new[] { NewUpdateUrl }, opened);
+    }
+
+    [TestMethod]
+    public async Task CheckUpdate_AfterNewerResult_NextClickChecksAgain()
+    {
+        var h = new Harness();
+        h.Core.On("check_update", _ => NewerResult);
+
+        await h.Model.CheckUpdateAsync();
+        await h.Model.CheckUpdateAsync();
+
+        Assert.AreEqual(2, h.Core.Count("check_update"));
+    }
+
+    [TestMethod]
+    public async Task CheckUpdate_AfterLatestResult_NextClickChecksAgain()
+    {
+        var h = new Harness();
+        h.Core.On("check_update", _ => LatestResult);
+
+        await h.Model.CheckUpdateAsync();
+        await h.Model.OpenUpdateAsync();
+
+        Assert.AreEqual(2, h.Core.Count("check_update"));
+    }
+
+    [TestMethod]
+    public async Task CheckUpdate_AfterFailure_NextClickChecksAgain()
+    {
+        var h = new Harness();
+        h.Core.Fail("check_update", "update_unavailable");
+
+        await h.Model.CheckUpdateAsync();
+        await h.Model.CheckUpdateAsync();
+
+        Assert.AreEqual(2, h.Core.Count("check_update"));
     }
 
     [TestMethod]

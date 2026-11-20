@@ -118,6 +118,7 @@ struct RelayConfigCard: View {
     @ObservedObject var model: AppModel
     private static let rowHeight: CGFloat = 64
     private static let visibleRows = 3
+    @FocusState private var focus: MainFocusTarget?
 
     var body: some View {
         Card(title: "中转配置") {
@@ -125,7 +126,7 @@ struct RelayConfigCard: View {
             ScrollView {
                 VStack(spacing: 0) {
                     ForEach(Array(rows.enumerated()), id: \.element.id) { index, row in
-                        RelayRowView(model: model, row: row)
+                        RelayRowView(model: model, row: row, focus: $focus)
                             .frame(height: Self.rowHeight)
                             .overlay(alignment: .top) {
                                 if index > 0 { Rectangle().fill(Palette.border).frame(height: 1) }
@@ -136,17 +137,24 @@ struct RelayConfigCard: View {
             .frame(height: Self.rowHeight * CGFloat(min(rows.count, Self.visibleRows)))
             HStack(spacing: 12) {
                 Button("添加配置") { model.beginAddRelay() }.secondaryAction().disabled(!model.canAddRelay)
+                    .focusable(model.canAddRelay)
+                    .focused($focus, equals: .addButton)
                 Text(model.deleteBlockedReason ?? model.relayListCaption).font(Fonts.caption).foregroundColor(Palette.textMuted)
                 Spacer(minLength: 0)
             }
         }
         .disabled(model.isSwitchingForwarding)
+        .onChange(of: model.mainFocusTarget) { target in
+            guard let target else { return }
+            DispatchQueue.main.async { focus = target; model.mainFocusTarget = nil }
+        }
     }
 }
 
 private struct RelayRowView: View {
     @ObservedObject var model: AppModel
     let row: RelayRow
+    var focus: FocusState<MainFocusTarget?>.Binding
 
     private var baseURL: String { model.relays.first { $0.id == row.id }?.baseURL ?? "" }
     private var busy: Bool { row.text.hasPrefix("正在获取") }
@@ -166,7 +174,11 @@ private struct RelayRowView: View {
                     Button("重试") { Task { await model.retryRelay(id: row.id) } }.secondaryAction(compact: true)
                 }
                 Button("编辑") { model.beginEditRelay(id: row.id) }.secondaryAction(compact: true).disabled(!row.canEdit)
+                    .focusable(row.canEdit)
+                    .focused(focus, equals: .edit(row.id))
                 Button("删除") { model.requestDeleteRelay(id: row.id) }.secondaryAction(compact: true).disabled(!row.canDelete)
+                    .focusable(row.canDelete)
+                    .focused(focus, equals: .delete(row.id))
             }
         }
         .padding(.vertical, 8)
@@ -210,7 +222,7 @@ struct StatusFooter: View {
             Spacer(minLength: 0)
             if let update = model.availableUpdate {
                 Button {
-                    if let url = URL(string: update.url) { NSWorkspace.shared.open(url) }
+                    Task { await model.openUpdate() }
                 } label: {
                     Text("新版本 \(update.version)").lineLimit(1).fixedSize(horizontal: true, vertical: false)
                 }

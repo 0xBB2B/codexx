@@ -166,7 +166,7 @@ public partial class MainWindow : Window
     async void UpdateClick(object sender, RoutedEventArgs e)
     {
         if (model.UpdateVersion == null) await model.CheckUpdateAsync();
-        else ExternalOpen.Url(model.UpdateUrl);
+        else await model.OpenUpdateAsync();
     }
 
     protected override void OnClosing(CancelEventArgs e)

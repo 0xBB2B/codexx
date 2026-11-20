@@ -100,7 +100,7 @@ public sealed class TrayMenu : IDisposable
                 {
                     await ShowIfNewNoticeAsync(model.CheckUpdateAsync);
                 }
-                else ExternalOpen.Url(model.UpdateUrl);
+                else await ShowIfNewNoticeAsync(model.OpenUpdateAsync);
                 break;
             case TrayMenuCommand.Uninstall:
                 await uninstall();

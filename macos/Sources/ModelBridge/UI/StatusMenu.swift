@@ -93,8 +93,8 @@ struct MenuPanel: View {
             let enable = !model.loginStartEnabled
             Task { await model.setLoginStart(enable) }
         case .update:
-            if let update = model.availableUpdate {
-                if let url = URL(string: update.url) { NSWorkspace.shared.open(url) }
+            if model.availableUpdate != nil {
+                Task { await model.openUpdate() }
             } else {
                 Task { await model.checkUpdate() }
             }

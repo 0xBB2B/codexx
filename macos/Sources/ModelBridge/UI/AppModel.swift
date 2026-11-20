@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 
 enum RelayField: Hashable, Sendable {
@@ -76,6 +77,12 @@ private struct DraftSnapshot {
     let name: String
     let baseURL: String
     let apiKey: String
+}
+
+enum MainFocusTarget: Hashable, Sendable {
+    case addButton
+    case edit(String)
+    case delete(String)
 }
 
 struct Confirmation: Equatable, Sendable {
@@ -202,6 +209,8 @@ final class AppModel: ObservableObject {
     @Published var setupPhase: SetupPhase = .idle
     @Published var showSetup = false
     @Published var pendingConfirmation: Confirmation?
+    @Published var mainFocusTarget: MainFocusTarget?
+    private var dialogTrigger: MainFocusTarget?
     @Published var forwardingFailure: CoreFailure? {
         didSet { pruneDismissedBanners() }
     }
@@ -224,7 +233,8 @@ final class AppModel: ObservableObject {
 
     var noticeAutoDismissDelay: TimeInterval = 4
     var onTerminate: @MainActor () -> Void = {}
-    var onTrashFailure: @MainActor (String) -> Void = { _ in }
+    var openURL: @MainActor (URL) -> Void = { NSWorkspace.shared.open($0) }
+    var onTrashFailure: @MainActor (String) async -> Void = { _ in }
 
     private let core: any CoreClient
     private let keychain: any KeyStoring
@@ -602,6 +612,7 @@ final class AppModel: ObservableObject {
     func beginAddRelay() {
         guard canAddRelay, !isSavingRelay, !showRelayForm else { return }
         resetDraft(name: "")
+        dialogTrigger = .addButton
         showRelayForm = true
     }
 
@@ -611,6 +622,7 @@ final class AppModel: ObservableObject {
         editingRelayID = id
         draftBaseURL = relay.baseURL
         draftAPIKey = ((try? keychain.load(relayID: id)) ?? nil) ?? ""
+        dialogTrigger = .edit(id)
         showRelayForm = true
     }
 
@@ -620,6 +632,7 @@ final class AppModel: ObservableObject {
         guard !isSavingRelay else { return }
         showRelayForm = false
         relaySaveAlert = nil
+        mainFocusTarget = dialogTrigger
     }
 
     func saveRelay() async {
@@ -648,6 +661,7 @@ final class AppModel: ObservableObject {
         }
         removeNotices(titled: Self.keychainDeniedTitle)
         showRelayForm = false
+        mainFocusTarget = adding && !canAddRelay ? .edit(saved.id) : dialogTrigger
         addNotice(adding
             ? Notice(title: "已添加「\(saved.name)」", detail: "已获取 \(saved.modelCount) 个模型。重启 ChatGPT 后生效。", kind: .success)
             : Notice(title: "已保存「\(saved.name)」", detail: "重启 ChatGPT 后生效。", kind: .success))
@@ -659,6 +673,7 @@ final class AppModel: ObservableObject {
         guard !isDeletingRelay, canDeleteRelay(id: id), let relay = relays.first(where: { $0.id == id }) else { return }
         let count = status?.relays?.first { $0.id == id }?.modelCount ?? 0
         let models = count > 0 ? "的 \(count) 个模型" : "的模型"
+        dialogTrigger = .delete(id)
         pendingConfirmation = Confirmation(
             kind: .deleteRelay(id: id),
             title: "删除配置「\(relay.name)」？",
@@ -721,7 +736,7 @@ final class AppModel: ObservableObject {
     func finishUninstall() async {
         if await trash.moveToTrash(appURL) != nil {
             trashFailurePath = appURL.path
-            onTrashFailure(appURL.path)
+            await onTrashFailure(appURL.path)
         }
         onTerminate()
     }
@@ -748,20 +763,34 @@ final class AppModel: ObservableObject {
         return nil
     }
 
-    func checkUpdate() async {
+    func checkUpdate() async { _ = await recheckUpdate() }
+
+    func openUpdate() async {
+        if await recheckUpdate(), let update = availableUpdate, let url = URL(string: update.url) {
+            openURL(url)
+        }
+    }
+
+    private var isCheckingUpdate = false
+
+    private func recheckUpdate() async -> Bool {
+        if isCheckingUpdate { return false }
+        isCheckingUpdate = true
+        defer { isCheckingUpdate = false }
         do {
             let data = try await core.call("check_update", params: UpdateParams(manual: true))
             let result = try JSONDecoder.snakeCase.decode(UpdateResult.self, from: data)
             removeNotices(titled: Self.updateFailedTitle)
             if result.isNewer, let version = result.latestVersion, let url = result.url {
                 availableUpdate = UpdateInfo(version: version, url: url, installer: result.installer ?? false)
-            } else {
-                availableUpdate = nil
-                addNotice(Notice(title: "已是最新版本", kind: .success))
+                return true
             }
+            availableUpdate = nil
+            addNotice(Notice(title: "已是最新版本", kind: .success))
         } catch {
             addNotice(Notice(title: Self.updateFailedTitle, kind: .warning))
         }
+        return false
     }
 
     func refreshModels() async { await refresh("refresh_models", params: RefreshParams(id: nil)) }
@@ -775,13 +804,14 @@ final class AppModel: ObservableObject {
 
     func cancelPending() {
         guard !isDeletingRelay, uninstallPhase != .running, !isRestoringOnQuit else { return }
+        if pendingConfirmation?.kind.isDeleteRelay == true { mainFocusTarget = dialogTrigger }
         pendingConfirmation = nil
     }
 
     func confirmPending() async {
         guard let pending = pendingConfirmation, !isDeletingRelay, uninstallPhase != .running, !isRestoringOnQuit else { return }
         if case .deleteRelay(let id) = pending.kind {
-            await deleteRelay(id: id)
+            mainFocusTarget = await deleteRelay(id: id) ? .addButton : dialogTrigger
             pendingConfirmation = nil
             return
         }
@@ -944,6 +974,8 @@ final class AppModel: ObservableObject {
         pruneDismissedBanners()
         if let version = value.update?.latestVersion, let url = value.update?.url {
             availableUpdate = UpdateInfo(version: version, url: url, installer: value.update?.installer ?? false)
+        } else {
+            availableUpdate = nil
         }
     }
 
@@ -1042,8 +1074,8 @@ final class AppModel: ObservableObject {
         relays = list
     }
 
-    private func deleteRelay(id: String) async {
-        guard let relay = relays.first(where: { $0.id == id }) else { return }
+    private func deleteRelay(id: String) async -> Bool {
+        guard let relay = relays.first(where: { $0.id == id }) else { return false }
         isDeletingRelay = true
         defer { isDeletingRelay = false }
         let failedTitle = "没有删除「\(relay.name)」"
@@ -1052,7 +1084,7 @@ final class AppModel: ObservableObject {
             try settings.saveRelays(remaining)
         } catch {
             addNotice(Notice(title: failedTitle, detail: StorageFailure.settings.message, kind: .error))
-            return
+            return false
         }
         do {
             let data = try await core.call("delete_relay", params: RelayIDParams(id: id))
@@ -1061,7 +1093,7 @@ final class AppModel: ObservableObject {
             var detail = CoreFailure(error).message
             do { try settings.saveRelays(relays) } catch { detail += "\n本机设置没能恢复，重启助手后这个配置会消失，需要重新添加。" }
             addNotice(Notice(title: failedTitle, detail: detail, kind: .error))
-            return
+            return false
         }
         relays = remaining
         do {
@@ -1074,5 +1106,6 @@ final class AppModel: ObservableObject {
                 kind: .warning
             ))
         }
+        return true
     }
 }

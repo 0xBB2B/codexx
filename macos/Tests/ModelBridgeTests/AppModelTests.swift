@@ -268,6 +268,23 @@ private func makeStatus(
     return try! decoder.decode(CoreStatus.self, from: Data(json.utf8))
 }
 
+private final class URLRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var items: [URL] = []
+
+    func append(_ url: URL) {
+        lock.lock()
+        items.append(url)
+        lock.unlock()
+    }
+
+    var urls: [URL] {
+        lock.lock()
+        defer { lock.unlock() }
+        return items
+    }
+}
+
 @MainActor
 private struct Harness {
     let log: CallLog
@@ -618,6 +635,154 @@ final class AppModelTests: XCTestCase {
         XCTAssertEqual(h.model.notices.last?.title, "暂时无法检查更新，请稍后再试")
     }
 
+    // MARK: openUpdate
+
+    private static let oldUpdateURL = "https://github.com/o/r/releases/tag/v0.1.0"
+    private static let newUpdateURL = "https://github.com/o/r/releases/tag/v0.1.2"
+
+    private func harnessWithOldUpdate(_ response: Result<Data, CoreError>) -> (Harness, URLRecorder) {
+        let h = Harness(responses: ["check_update": response])
+        h.model.availableUpdate = UpdateInfo(version: "0.1.0", url: Self.oldUpdateURL)
+        let opened = URLRecorder()
+        h.model.openURL = { opened.append($0) }
+        return (h, opened)
+    }
+
+    func testOpenUpdate_RecheckFindsNewer_RefreshesAndOpensNewURL() async {
+        let (h, opened) = harnessWithOldUpdate(
+            checkUpdateJSON(url: Self.newUpdateURL, installer: #""installer":true,"#)
+        )
+        await h.model.openUpdate()
+        XCTAssertEqual(h.core.calls("check_update").count, 1)
+        XCTAssertEqual(h.core.calls("check_update").first?.params, #"{"manual":true}"#)
+        XCTAssertEqual(opened.urls, [URL(string: Self.newUpdateURL)!])
+        XCTAssertEqual(h.model.availableUpdate, UpdateInfo(version: "0.1.2", url: Self.newUpdateURL, installer: true))
+    }
+
+    func testOpenUpdate_RecheckFindsLatest_ClearsUpdateAndOpensNothing() async {
+        let (h, opened) = harnessWithOldUpdate(
+            resultJSON(#"{"latest_version":"0.1.2","url":null,"is_newer":false}"#)
+        )
+        await h.model.openUpdate()
+        XCTAssertEqual(h.core.calls("check_update").first?.params, #"{"manual":true}"#)
+        XCTAssertEqual(opened.urls, [])
+        XCTAssertNil(h.model.availableUpdate)
+        XCTAssertEqual(h.model.notices.last?.title, "已是最新版本")
+        XCTAssertEqual(updateTitle(h.model), "检查更新")
+    }
+
+    func testOpenUpdate_RecheckFails_KeepsOldUpdateAndOpensNothing() async {
+        let (h, opened) = harnessWithOldUpdate(remote("update_unavailable"))
+        await h.model.openUpdate()
+        XCTAssertEqual(h.core.calls("check_update").first?.params, #"{"manual":true}"#)
+        XCTAssertEqual(opened.urls, [])
+        XCTAssertEqual(h.model.availableUpdate, UpdateInfo(version: "0.1.0", url: Self.oldUpdateURL))
+        XCTAssertEqual(h.model.notices.last?.title, "暂时无法检查更新，请稍后再试")
+    }
+
+    // MARK: 更新检查进行中重复点击
+
+    private func harnessWithPendingCheck(_ response: Result<Data, CoreError>) -> (Harness, Gate, URLRecorder) {
+        let gate = Gate()
+        let h = Harness(responses: ["check_update": response], gates: ["check_update": gate])
+        h.model.availableUpdate = UpdateInfo(version: "0.1.0", url: Self.oldUpdateURL)
+        let opened = URLRecorder()
+        h.model.openURL = { opened.append($0) }
+        return (h, gate, opened)
+    }
+
+    private func startPendingFirst(_ h: Harness, _ first: @escaping @MainActor () async -> Void) async -> Task<Void, Never> {
+        let task = Task { await first() }
+        await awaitUntil { h.core.calls("check_update").count >= 1 }
+        return task
+    }
+
+    private func settle() async { try? await Task.sleep(nanoseconds: 100_000_000) }
+
+    func testOpenUpdate_WhileCheckPending_SecondOpenUpdateIgnored() async {
+        let (h, gate, opened) = harnessWithPendingCheck(checkUpdateJSON(url: Self.newUpdateURL, installer: ""))
+        let first = await startPendingFirst(h) { await h.model.openUpdate() }
+        let second = Task { await h.model.openUpdate() }
+        await settle()
+        await gate.open()
+        await first.value
+        await second.value
+        XCTAssertEqual(h.core.calls("check_update").count, 1)
+        XCTAssertEqual(opened.urls, [URL(string: Self.newUpdateURL)!])
+    }
+
+    func testCheckUpdate_WhileCheckPending_SecondCheckIgnored() async {
+        let (h, gate, _) = harnessWithPendingCheck(resultJSON(#"{"latest_version":"0.1.0","url":null,"is_newer":false}"#))
+        let first = await startPendingFirst(h) { await h.model.checkUpdate() }
+        let second = Task { await h.model.checkUpdate() }
+        await settle()
+        await gate.open()
+        await first.value
+        await second.value
+        XCTAssertEqual(h.core.calls("check_update").count, 1)
+        XCTAssertEqual(h.model.notices.filter { $0.title == "已是最新版本" }.count, 1)
+    }
+
+    func testOpenUpdate_WhileCheckUpdatePending_Ignored() async {
+        let (h, gate, opened) = harnessWithPendingCheck(checkUpdateJSON(url: Self.newUpdateURL, installer: ""))
+        let first = await startPendingFirst(h) { await h.model.checkUpdate() }
+        let second = Task { await h.model.openUpdate() }
+        await settle()
+        await gate.open()
+        await first.value
+        await second.value
+        XCTAssertEqual(h.core.calls("check_update").count, 1)
+        XCTAssertEqual(opened.urls, [])
+    }
+
+    func testCheckUpdate_WhileOpenUpdatePending_Ignored() async {
+        let (h, gate, opened) = harnessWithPendingCheck(checkUpdateJSON(url: Self.newUpdateURL, installer: ""))
+        let first = await startPendingFirst(h) { await h.model.openUpdate() }
+        let second = Task { await h.model.checkUpdate() }
+        await settle()
+        await gate.open()
+        await first.value
+        await second.value
+        XCTAssertEqual(h.core.calls("check_update").count, 1)
+        XCTAssertEqual(opened.urls, [URL(string: Self.newUpdateURL)!])
+    }
+
+    func testCheckUpdate_AfterNewerResult_NextClickChecksAgain() async {
+        let h = Harness(responses: ["check_update": checkUpdateJSON(url: Self.newUpdateURL, installer: "")])
+        await h.model.checkUpdate()
+        await h.model.checkUpdate()
+        XCTAssertEqual(h.core.calls("check_update").count, 2)
+    }
+
+    func testCheckUpdate_AfterLatestResult_NextClickChecksAgain() async {
+        let h = Harness(responses: ["check_update": resultJSON(#"{"latest_version":"0.1.0","url":null,"is_newer":false}"#)])
+        await h.model.checkUpdate()
+        await h.model.openUpdate()
+        XCTAssertEqual(h.core.calls("check_update").count, 2)
+    }
+
+    func testCheckUpdate_AfterFailure_NextClickChecksAgain() async {
+        let h = Harness(responses: ["check_update": remote("update_unavailable")])
+        await h.model.checkUpdate()
+        await h.model.checkUpdate()
+        XCTAssertEqual(h.core.calls("check_update").count, 2)
+    }
+
+    private func updateTitle(_ model: AppModel) -> String? {
+        MenuPanelModel(model: model).groups.flatMap { $0 }.first { $0.id == .update }?.title
+    }
+
+    func testStatusUpdate_EmptyAfterNewVersion_ClearsAvailableUpdate() async {
+        let h = Harness()
+        await h.model.start()
+        h.core.statusContinuation.yield(statusWithUpdate(url: Self.pageURL, installer: ""))
+        await waitUntil { h.model.availableUpdate != nil }
+        h.core.statusContinuation.yield(makeStatus())
+        await waitUntil { h.model.availableUpdate == nil }
+        XCTAssertNil(h.model.availableUpdate)
+        XCTAssertEqual(updateTitle(h.model), "检查更新")
+    }
+
     // MARK: banners
 
     func testBanners_HealthyStatus_Empty() {
@@ -838,6 +1003,23 @@ final class AppModelTests: XCTestCase {
         let h = Harness(trashError: Boom())
         await h.model.finishUninstall()
         XCTAssertEqual(h.model.trashFailurePath, "/Applications/ModelBridge.app")
+        XCTAssertEqual(h.terminations.value, 1)
+    }
+
+    func testFinishUninstall_TrashFails_TerminatesOnlyAfterFailurePromptReturns() async {
+        let h = Harness(trashError: Boom())
+        let gate = Gate()
+        let prompted = TerminationCounter()
+        h.model.onTrashFailure = { _ in
+            prompted.increment()
+            await gate.wait()
+        }
+        let task = Task { await h.model.finishUninstall() }
+        await waitUntil { prompted.value == 1 }
+        XCTAssertEqual(prompted.value, 1)
+        XCTAssertEqual(h.terminations.value, 0)
+        await gate.open()
+        await task.value
         XCTAssertEqual(h.terminations.value, 1)
     }
 
