@@ -1076,8 +1076,12 @@ public sealed class AppModel : IRelayFields
         if (await RecheckUpdateAsync()) UrlOpener(UpdateUrl);
     }
 
+    bool checkingUpdate;
+
     async Task<bool> RecheckUpdateAsync()
     {
+        if (checkingUpdate) return false;
+        checkingUpdate = true;
         try
         {
             var result = await core.CallAsync("check_update", Params("manual", true));
@@ -1099,6 +1103,10 @@ public sealed class AppModel : IRelayFields
         catch (Exception ex) when (ex is CoreCallException or CoreProcessExitedException)
         {
             AddNotice(new AppNotice(UpdateUnavailable, "", AppSeverity.Warning));
+        }
+        finally
+        {
+            checkingUpdate = false;
         }
         return false;
     }

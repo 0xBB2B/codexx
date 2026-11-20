@@ -107,9 +107,8 @@ final class DialogModalTests: XCTestCase {
             if probe.pressed && !core.calls("shutdown").isEmpty {
                 shutdownDuringModal = true
                 terminatedDuringModal = terminations.value == 1
-                return true
             }
-            return false
+            return terminatedDuringModal
         }
         await model.quit()
         await waitUntilFinished(probe)

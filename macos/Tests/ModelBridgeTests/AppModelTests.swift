@@ -680,6 +680,94 @@ final class AppModelTests: XCTestCase {
         XCTAssertEqual(h.model.notices.last?.title, "暂时无法检查更新，请稍后再试")
     }
 
+    // MARK: 更新检查进行中重复点击
+
+    private func harnessWithPendingCheck(_ response: Result<Data, CoreError>) -> (Harness, Gate, URLRecorder) {
+        let gate = Gate()
+        let h = Harness(responses: ["check_update": response], gates: ["check_update": gate])
+        h.model.availableUpdate = UpdateInfo(version: "0.1.0", url: Self.oldUpdateURL)
+        let opened = URLRecorder()
+        h.model.openURL = { opened.append($0) }
+        return (h, gate, opened)
+    }
+
+    private func startPendingFirst(_ h: Harness, _ first: @escaping @MainActor () async -> Void) async -> Task<Void, Never> {
+        let task = Task { await first() }
+        await awaitUntil { h.core.calls("check_update").count >= 1 }
+        return task
+    }
+
+    private func settle() async { try? await Task.sleep(nanoseconds: 100_000_000) }
+
+    func testOpenUpdate_WhileCheckPending_SecondOpenUpdateIgnored() async {
+        let (h, gate, opened) = harnessWithPendingCheck(checkUpdateJSON(url: Self.newUpdateURL, installer: ""))
+        let first = await startPendingFirst(h) { await h.model.openUpdate() }
+        let second = Task { await h.model.openUpdate() }
+        await settle()
+        await gate.open()
+        await first.value
+        await second.value
+        XCTAssertEqual(h.core.calls("check_update").count, 1)
+        XCTAssertEqual(opened.urls, [URL(string: Self.newUpdateURL)!])
+    }
+
+    func testCheckUpdate_WhileCheckPending_SecondCheckIgnored() async {
+        let (h, gate, _) = harnessWithPendingCheck(resultJSON(#"{"latest_version":"0.1.0","url":null,"is_newer":false}"#))
+        let first = await startPendingFirst(h) { await h.model.checkUpdate() }
+        let second = Task { await h.model.checkUpdate() }
+        await settle()
+        await gate.open()
+        await first.value
+        await second.value
+        XCTAssertEqual(h.core.calls("check_update").count, 1)
+        XCTAssertEqual(h.model.notices.filter { $0.title == "已是最新版本" }.count, 1)
+    }
+
+    func testOpenUpdate_WhileCheckUpdatePending_Ignored() async {
+        let (h, gate, opened) = harnessWithPendingCheck(checkUpdateJSON(url: Self.newUpdateURL, installer: ""))
+        let first = await startPendingFirst(h) { await h.model.checkUpdate() }
+        let second = Task { await h.model.openUpdate() }
+        await settle()
+        await gate.open()
+        await first.value
+        await second.value
+        XCTAssertEqual(h.core.calls("check_update").count, 1)
+        XCTAssertEqual(opened.urls, [])
+    }
+
+    func testCheckUpdate_WhileOpenUpdatePending_Ignored() async {
+        let (h, gate, opened) = harnessWithPendingCheck(checkUpdateJSON(url: Self.newUpdateURL, installer: ""))
+        let first = await startPendingFirst(h) { await h.model.openUpdate() }
+        let second = Task { await h.model.checkUpdate() }
+        await settle()
+        await gate.open()
+        await first.value
+        await second.value
+        XCTAssertEqual(h.core.calls("check_update").count, 1)
+        XCTAssertEqual(opened.urls, [URL(string: Self.newUpdateURL)!])
+    }
+
+    func testCheckUpdate_AfterNewerResult_NextClickChecksAgain() async {
+        let h = Harness(responses: ["check_update": checkUpdateJSON(url: Self.newUpdateURL, installer: "")])
+        await h.model.checkUpdate()
+        await h.model.checkUpdate()
+        XCTAssertEqual(h.core.calls("check_update").count, 2)
+    }
+
+    func testCheckUpdate_AfterLatestResult_NextClickChecksAgain() async {
+        let h = Harness(responses: ["check_update": resultJSON(#"{"latest_version":"0.1.0","url":null,"is_newer":false}"#)])
+        await h.model.checkUpdate()
+        await h.model.openUpdate()
+        XCTAssertEqual(h.core.calls("check_update").count, 2)
+    }
+
+    func testCheckUpdate_AfterFailure_NextClickChecksAgain() async {
+        let h = Harness(responses: ["check_update": remote("update_unavailable")])
+        await h.model.checkUpdate()
+        await h.model.checkUpdate()
+        XCTAssertEqual(h.core.calls("check_update").count, 2)
+    }
+
     private func updateTitle(_ model: AppModel) -> String? {
         MenuPanelModel(model: model).groups.flatMap { $0 }.first { $0.id == .update }?.title
     }

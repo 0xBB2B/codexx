@@ -29,6 +29,34 @@ final class MainFocusReturnTests: XCTestCase {
         XCTAssertEqual(f.model.mainFocusTarget, .addButton)
     }
 
+    func testAdd_SaveSuccess_ReachingLimit_FocusesNewRowEditButton() async {
+        let tenth = Result<Data, CoreError>.success(Data(#"{"id":"10","name":"新配置","model_count":5,"models_changed":true}"#.utf8))
+        let f = await ViewFixture.make(relayCount: 9, responses: ["save_relay": tenth])
+        f.model.beginAddRelay()
+        fillAddDraft(f.model)
+        await f.model.saveRelay()
+        XCTAssertFalse(f.model.showRelayForm)
+        XCTAssertFalse(f.model.canAddRelay)
+        XCTAssertEqual(f.model.mainFocusTarget, .edit("10"))
+    }
+
+    func testAdd_SaveSuccess_NinthRelay_StillFocusesAddButton() async {
+        let ninth = Result<Data, CoreError>.success(Data(#"{"id":"9","name":"新配置","model_count":5,"models_changed":true}"#.utf8))
+        let f = await ViewFixture.make(relayCount: 8, responses: ["save_relay": ninth])
+        f.model.beginAddRelay()
+        fillAddDraft(f.model)
+        await f.model.saveRelay()
+        XCTAssertTrue(f.model.canAddRelay)
+        XCTAssertEqual(f.model.mainFocusTarget, .addButton)
+    }
+
+    func testEdit_SaveSuccess_AtLimit_FocusesThatRowEditButton() async {
+        let f = await ViewFixture.make(relayCount: 10, responses: ["save_relay": Self.saved])
+        f.model.beginEditRelay(id: "1")
+        await f.model.saveRelay()
+        XCTAssertEqual(f.model.mainFocusTarget, .edit("1"))
+    }
+
     func testEdit_Cancel_FocusesThatRowEditButton() async {
         let f = await ViewFixture.make()
         f.model.beginEditRelay(id: "2")

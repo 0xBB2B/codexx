@@ -661,7 +661,7 @@ final class AppModel: ObservableObject {
         }
         removeNotices(titled: Self.keychainDeniedTitle)
         showRelayForm = false
-        mainFocusTarget = dialogTrigger
+        mainFocusTarget = adding && !canAddRelay ? .edit(saved.id) : dialogTrigger
         addNotice(adding
             ? Notice(title: "已添加「\(saved.name)」", detail: "已获取 \(saved.modelCount) 个模型。重启 ChatGPT 后生效。", kind: .success)
             : Notice(title: "已保存「\(saved.name)」", detail: "重启 ChatGPT 后生效。", kind: .success))
@@ -771,7 +771,12 @@ final class AppModel: ObservableObject {
         }
     }
 
+    private var isCheckingUpdate = false
+
     private func recheckUpdate() async -> Bool {
+        if isCheckingUpdate { return false }
+        isCheckingUpdate = true
+        defer { isCheckingUpdate = false }
         do {
             let data = try await core.call("check_update", params: UpdateParams(manual: true))
             let result = try JSONDecoder.snakeCase.decode(UpdateResult.self, from: data)

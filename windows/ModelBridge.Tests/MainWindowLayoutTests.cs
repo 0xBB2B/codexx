@@ -130,11 +130,17 @@ public class MainWindowLayoutTests
         {
             await h.Model.CheckUpdateAsync();
             await UiHost.Settle();
-            h.Core.OnAsync("check_update", _ => Task.FromResult(RelayJson.Parse(
-                """{"latest_version":"0.3.0","url":"https://relay.example.com/download-fresh","is_newer":true}""")));
+            var recheck = new TaskCompletionSource<System.Text.Json.JsonElement>();
+            h.Core.OnAsync("check_update", _ => recheck.Task);
 
             window.UpdateButton.RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
             await UiHost.Settle();
+
+            Assert.AreEqual(0, opened.Count);
+
+            recheck.SetResult(RelayJson.Parse(
+                """{"latest_version":"0.3.0","url":"https://relay.example.com/download-fresh","is_newer":true}"""));
+            for (var i = 0; i < 100 && opened.Count == 0; i++) await Task.Delay(20);
 
             Assert.AreEqual(2, h.Core.Calls.Count(c => c.Method == "check_update"));
             Assert.AreEqual(true, h.Core.Calls.Last(c => c.Method == "check_update").Params["manual"]);
