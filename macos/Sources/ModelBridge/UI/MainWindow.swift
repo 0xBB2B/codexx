@@ -210,7 +210,7 @@ struct StatusFooter: View {
             Spacer(minLength: 0)
             if let update = model.availableUpdate {
                 Button {
-                    if let url = URL(string: update.url) { NSWorkspace.shared.open(url) }
+                    Task { await model.openUpdate() }
                 } label: {
                     Text("新版本 \(update.version)").lineLimit(1).fixedSize(horizontal: true, vertical: false)
                 }

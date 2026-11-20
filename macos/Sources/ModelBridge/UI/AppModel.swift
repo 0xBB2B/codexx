@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 
 enum RelayField: Hashable, Sendable {
@@ -224,6 +225,7 @@ final class AppModel: ObservableObject {
 
     var noticeAutoDismissDelay: TimeInterval = 4
     var onTerminate: @MainActor () -> Void = {}
+    var openURL: @MainActor (URL) -> Void = { NSWorkspace.shared.open($0) }
     var onTrashFailure: @MainActor (String) -> Void = { _ in }
 
     private let core: any CoreClient
@@ -748,20 +750,29 @@ final class AppModel: ObservableObject {
         return nil
     }
 
-    func checkUpdate() async {
+    func checkUpdate() async { _ = await recheckUpdate() }
+
+    func openUpdate() async {
+        if await recheckUpdate(), let update = availableUpdate, let url = URL(string: update.url) {
+            openURL(url)
+        }
+    }
+
+    private func recheckUpdate() async -> Bool {
         do {
             let data = try await core.call("check_update", params: UpdateParams(manual: true))
             let result = try JSONDecoder.snakeCase.decode(UpdateResult.self, from: data)
             removeNotices(titled: Self.updateFailedTitle)
             if result.isNewer, let version = result.latestVersion, let url = result.url {
                 availableUpdate = UpdateInfo(version: version, url: url, installer: result.installer ?? false)
-            } else {
-                availableUpdate = nil
-                addNotice(Notice(title: "已是最新版本", kind: .success))
+                return true
             }
+            availableUpdate = nil
+            addNotice(Notice(title: "已是最新版本", kind: .success))
         } catch {
             addNotice(Notice(title: Self.updateFailedTitle, kind: .warning))
         }
+        return false
     }
 
     func refreshModels() async { await refresh("refresh_models", params: RefreshParams(id: nil)) }
@@ -944,6 +955,8 @@ final class AppModel: ObservableObject {
         pruneDismissedBanners()
         if let version = value.update?.latestVersion, let url = value.update?.url {
             availableUpdate = UpdateInfo(version: version, url: url, installer: value.update?.installer ?? false)
+        } else {
+            availableUpdate = nil
         }
     }
 

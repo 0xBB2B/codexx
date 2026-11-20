@@ -119,6 +119,30 @@ public class MainWindowLayoutTests
     }
 
     [TestMethod]
+    public async Task UpdateButton_ClickWithKnownUpdate_RechecksAndOpensFreshUrl()
+    {
+        var h = await StartAsync(3);
+        SetNewVersion(h);
+        var opened = new List<string?>();
+        h.Model.UrlOpener = opened.Add;
+
+        await WithWindowAsync(h, async window =>
+        {
+            await h.Model.CheckUpdateAsync();
+            await UiHost.Settle();
+            h.Core.OnAsync("check_update", _ => Task.FromResult(RelayJson.Parse(
+                """{"latest_version":"0.3.0","url":"https://relay.example.com/download-fresh","is_newer":true}""")));
+
+            window.UpdateButton.RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
+            await UiHost.Settle();
+
+            Assert.AreEqual(2, h.Core.Calls.Count(c => c.Method == "check_update"));
+            Assert.AreEqual(true, h.Core.Calls.Last(c => c.Method == "check_update").Params["manual"]);
+            CollectionAssert.AreEqual(new[] { "https://relay.example.com/download-fresh" }, opened);
+        });
+    }
+
+    [TestMethod]
     public async Task UpdateButton_InstallerTrue_AccessibleNameSaysDownloadInstaller()
     {
         var h = await StartAsync(3);

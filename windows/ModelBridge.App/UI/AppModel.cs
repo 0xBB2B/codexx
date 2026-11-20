@@ -1067,7 +1067,16 @@ public sealed class AppModel : IRelayFields
         return 0;
     }
 
-    public async Task CheckUpdateAsync()
+    public Action<string?> UrlOpener { get; set; } = ExternalOpen.Url;
+
+    public Task CheckUpdateAsync() => RecheckUpdateAsync();
+
+    public async Task OpenUpdateAsync()
+    {
+        if (await RecheckUpdateAsync()) UrlOpener(UpdateUrl);
+    }
+
+    async Task<bool> RecheckUpdateAsync()
     {
         try
         {
@@ -1080,19 +1089,18 @@ public sealed class AppModel : IRelayFields
                 UpdateVersion = latest;
                 UpdateUrl = url;
                 UpdateIsInstaller = Flag(result, "installer", false);
+                return true;
             }
-            else
-            {
-                UpdateVersion = null;
-                UpdateUrl = null;
-                UpdateIsInstaller = false;
-                AddNotice(new AppNotice("已是最新版本", "", AppSeverity.Success));
-            }
+            UpdateVersion = null;
+            UpdateUrl = null;
+            UpdateIsInstaller = false;
+            AddNotice(new AppNotice("已是最新版本", "", AppSeverity.Success));
         }
         catch (Exception ex) when (ex is CoreCallException or CoreProcessExitedException)
         {
             AddNotice(new AppNotice(UpdateUnavailable, "", AppSeverity.Warning));
         }
+        return false;
     }
 
     public Task RetryAsync() => RefreshAsync("refresh_models", Params("id", null));
@@ -1294,6 +1302,12 @@ public sealed class AppModel : IRelayFields
             UpdateVersion = latest;
             UpdateUrl = Str(update, "url");
             UpdateIsInstaller = Flag(update, "installer", false);
+        }
+        else
+        {
+            UpdateVersion = null;
+            UpdateUrl = null;
+            UpdateIsInstaller = false;
         }
 
         var list = new List<AppBanner>();

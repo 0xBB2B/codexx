@@ -1850,6 +1850,49 @@ func TestCheckUpdate_NoNewVersionLeavesStatusUpdateEmpty(t *testing.T) {
 	}
 }
 
+func TestCheckUpdate_LaterNotNewerClearsStoredUpdate(t *testing.T) {
+	for _, manual := range []bool{true, false} {
+		t.Run(fmt.Sprintf("manual=%v", manual), func(t *testing.T) {
+			e := newEnv(t, false)
+			g := newGitHubStub(t, "v1.3.0")
+			svc := control.NewService(withUpdate(e.opts, g, nil))
+			t.Cleanup(func() { _ = svc.Shutdown(context.Background(), false) })
+
+			if _, err := svc.CheckUpdate(context.Background(), manual); err != nil {
+				t.Fatal(err)
+			}
+			if svc.Status().Update.LatestVersion == nil {
+				t.Fatal("前置：第一次检查后 Status.Update 应有值")
+			}
+			g.setBody(`{"tag_name":"v1.2.3","html_url":"https://github.com/acme/model-bridge/releases/tag/v1.2.3"}`)
+			if _, err := svc.CheckUpdate(context.Background(), manual); err != nil {
+				t.Fatal(err)
+			}
+			if up := svc.Status().Update; up.LatestVersion != nil || up.URL != nil {
+				t.Errorf("Status.Update = %+v, want 空", up)
+			}
+		})
+	}
+}
+
+func TestCheckUpdate_LaterFailureKeepsStoredUpdate(t *testing.T) {
+	e := newEnv(t, false)
+	g := newGitHubStub(t, "v1.3.0")
+	svc := control.NewService(withUpdate(e.opts, g, nil))
+	t.Cleanup(func() { _ = svc.Shutdown(context.Background(), false) })
+
+	if _, err := svc.CheckUpdate(context.Background(), true); err != nil {
+		t.Fatal(err)
+	}
+	g.setStatus(500)
+	_, err := svc.CheckUpdate(context.Background(), true)
+	requireCode(t, err, "update_unavailable")
+	up := svc.Status().Update
+	if up.LatestVersion == nil || *up.LatestVersion != "1.3.0" || up.URL == nil {
+		t.Errorf("Status.Update = %+v, 失败时应保留旧值", up)
+	}
+}
+
 func TestCheckUpdate_ManualFailureReturnsUpdateUnavailable(t *testing.T) {
 	tests := []struct {
 		name  string

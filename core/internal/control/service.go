@@ -533,6 +533,12 @@ func (s *Service) CheckUpdate(ctx context.Context, manual bool) (UpdateResult, e
 		return UpdateResult{}, nil
 	}
 	if !res.IsNewer {
+		s.mu.Lock()
+		if s.update != (UpdateInfo{}) {
+			s.update = UpdateInfo{}
+			s.notifyLocked()
+		}
+		s.mu.Unlock()
 		return UpdateResult{}, nil
 	}
 	s.mu.Lock()

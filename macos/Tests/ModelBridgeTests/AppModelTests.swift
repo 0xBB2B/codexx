@@ -268,6 +268,23 @@ private func makeStatus(
     return try! decoder.decode(CoreStatus.self, from: Data(json.utf8))
 }
 
+private final class URLRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var items: [URL] = []
+
+    func append(_ url: URL) {
+        lock.lock()
+        items.append(url)
+        lock.unlock()
+    }
+
+    var urls: [URL] {
+        lock.lock()
+        defer { lock.unlock() }
+        return items
+    }
+}
+
 @MainActor
 private struct Harness {
     let log: CallLog
@@ -616,6 +633,66 @@ final class AppModelTests: XCTestCase {
         let h = Harness(responses: ["check_update": remote("update_unavailable")])
         await h.model.checkUpdate()
         XCTAssertEqual(h.model.notices.last?.title, "暂时无法检查更新，请稍后再试")
+    }
+
+    // MARK: openUpdate
+
+    private static let oldUpdateURL = "https://github.com/o/r/releases/tag/v0.1.0"
+    private static let newUpdateURL = "https://github.com/o/r/releases/tag/v0.1.2"
+
+    private func harnessWithOldUpdate(_ response: Result<Data, CoreError>) -> (Harness, URLRecorder) {
+        let h = Harness(responses: ["check_update": response])
+        h.model.availableUpdate = UpdateInfo(version: "0.1.0", url: Self.oldUpdateURL)
+        let opened = URLRecorder()
+        h.model.openURL = { opened.append($0) }
+        return (h, opened)
+    }
+
+    func testOpenUpdate_RecheckFindsNewer_RefreshesAndOpensNewURL() async {
+        let (h, opened) = harnessWithOldUpdate(
+            checkUpdateJSON(url: Self.newUpdateURL, installer: #""installer":true,"#)
+        )
+        await h.model.openUpdate()
+        XCTAssertEqual(h.core.calls("check_update").count, 1)
+        XCTAssertEqual(h.core.calls("check_update").first?.params, #"{"manual":true}"#)
+        XCTAssertEqual(opened.urls, [URL(string: Self.newUpdateURL)!])
+        XCTAssertEqual(h.model.availableUpdate, UpdateInfo(version: "0.1.2", url: Self.newUpdateURL, installer: true))
+    }
+
+    func testOpenUpdate_RecheckFindsLatest_ClearsUpdateAndOpensNothing() async {
+        let (h, opened) = harnessWithOldUpdate(
+            resultJSON(#"{"latest_version":"0.1.2","url":null,"is_newer":false}"#)
+        )
+        await h.model.openUpdate()
+        XCTAssertEqual(h.core.calls("check_update").first?.params, #"{"manual":true}"#)
+        XCTAssertEqual(opened.urls, [])
+        XCTAssertNil(h.model.availableUpdate)
+        XCTAssertEqual(h.model.notices.last?.title, "已是最新版本")
+        XCTAssertEqual(updateTitle(h.model), "检查更新")
+    }
+
+    func testOpenUpdate_RecheckFails_KeepsOldUpdateAndOpensNothing() async {
+        let (h, opened) = harnessWithOldUpdate(remote("update_unavailable"))
+        await h.model.openUpdate()
+        XCTAssertEqual(h.core.calls("check_update").first?.params, #"{"manual":true}"#)
+        XCTAssertEqual(opened.urls, [])
+        XCTAssertEqual(h.model.availableUpdate, UpdateInfo(version: "0.1.0", url: Self.oldUpdateURL))
+        XCTAssertEqual(h.model.notices.last?.title, "暂时无法检查更新，请稍后再试")
+    }
+
+    private func updateTitle(_ model: AppModel) -> String? {
+        MenuPanelModel(model: model).groups.flatMap { $0 }.first { $0.id == .update }?.title
+    }
+
+    func testStatusUpdate_EmptyAfterNewVersion_ClearsAvailableUpdate() async {
+        let h = Harness()
+        await h.model.start()
+        h.core.statusContinuation.yield(statusWithUpdate(url: Self.pageURL, installer: ""))
+        await waitUntil { h.model.availableUpdate != nil }
+        h.core.statusContinuation.yield(makeStatus())
+        await waitUntil { h.model.availableUpdate == nil }
+        XCTAssertNil(h.model.availableUpdate)
+        XCTAssertEqual(updateTitle(h.model), "检查更新")
     }
 
     // MARK: banners
