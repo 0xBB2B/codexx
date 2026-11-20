@@ -918,6 +918,23 @@ final class AppModelTests: XCTestCase {
         XCTAssertEqual(h.terminations.value, 1)
     }
 
+    func testFinishUninstall_TrashFails_TerminatesOnlyAfterFailurePromptReturns() async {
+        let h = Harness(trashError: Boom())
+        let gate = Gate()
+        let prompted = TerminationCounter()
+        h.model.onTrashFailure = { _ in
+            prompted.increment()
+            await gate.wait()
+        }
+        let task = Task { await h.model.finishUninstall() }
+        await waitUntil { prompted.value == 1 }
+        XCTAssertEqual(prompted.value, 1)
+        XCTAssertEqual(h.terminations.value, 0)
+        await gate.open()
+        await task.value
+        XCTAssertEqual(h.terminations.value, 1)
+    }
+
     // MARK: 运行状态
 
     func testRuntimeText_CoreRunning() {

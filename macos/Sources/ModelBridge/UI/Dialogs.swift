@@ -191,7 +191,7 @@ final class DialogPresenter {
             Task { @MainActor in await self?.presentUninstall() }
         }.store(in: &subscriptions)
         model.onTrashFailure = { path in
-            _ = Self.run(InfoDialogModel.trashFailure(path: path))
+            _ = await Self.run(InfoDialogModel.trashFailure(path: path))
         }
         model.$uninstallPhase.sink { [weak self] phase in
             Task { @MainActor in await self?.present(phase) }
@@ -202,7 +202,7 @@ final class DialogPresenter {
         keys: [String], configPath: String?, purpose: RestoreHelpDialogModel.Purpose, onRecheck: () async -> Void
     ) async {
         while true {
-            let choice = run(RestoreHelpDialogModel(keys: keys, configPath: configPath, purpose: purpose))
+            let choice = await run(RestoreHelpDialogModel(keys: keys, configPath: configPath, purpose: purpose))
             if choice == .revealFolder {
                 MainWindow.reveal(configPath)
                 continue
@@ -212,8 +212,8 @@ final class DialogPresenter {
         }
     }
 
-    static func showNoticeDetail(title: String, message: String) {
-        _ = run(InfoDialogModel(
+    static func showNoticeDetail(title: String, message: String) async {
+        _ = await run(InfoDialogModel(
             title: title,
             message: message,
             buttons: [DialogButton(label: "知道了", action: .dismiss, style: .primary, isDefaultFocus: true)]
@@ -223,7 +223,7 @@ final class DialogPresenter {
     private func present(_ confirmation: Confirmation) async {
         guard !presenting else { return }
         presenting = true
-        let confirmed = Self.run(ConfirmDialogModel(confirmation: confirmation)) == .confirm
+        let confirmed = await Self.run(ConfirmDialogModel(confirmation: confirmation)) == .confirm
         presenting = false
         if confirmed { await model.confirmPending() } else { model.cancelPending() }
     }
@@ -236,7 +236,7 @@ final class DialogPresenter {
             guard !presenting else { return }
             presenting = true
             let running = model.isChatGPTRunning
-            _ = Self.run(InfoDialogModel.uninstallFinished(leftovers: model.uninstallLeftovers, chatGPTRunning: running))
+            _ = await Self.run(InfoDialogModel.uninstallFinished(leftovers: model.uninstallLeftovers, chatGPTRunning: running))
             presenting = false
             await model.finishUninstall()
         case .idle, .running:
@@ -259,9 +259,7 @@ final class DialogPresenter {
             },
             onClosed: { NSApp.stopModal() }
         )
-        NSApp.activate(ignoringOtherApps: true)
-        NSApp.runModal(for: panel)
-        panel.orderOut(nil)
+        await Self.runModal(panel)
         presenting = false
     }
 
@@ -283,9 +281,7 @@ final class DialogPresenter {
             },
             onClosed: { NSApp.stopModal() }
         )
-        NSApp.activate(ignoringOtherApps: true)
-        NSApp.runModal(for: panel)
-        panel.orderOut(nil)
+        await Self.runModal(panel)
         presenting = false
         if model.uninstallPhase == .finished { await present(.finished) }
     }
@@ -329,7 +325,21 @@ final class DialogPresenter {
         panel.center()
     }
 
-    fileprivate static func run(_ content: DialogContent) -> DialogAction {
+    // runModal 若在主队列任务里调用，模态期间主队列上新排的工作都不执行；放进 RunLoop 回调里调用才能继续执行。
+    private static func runModal(_ panel: NSWindow) async {
+        await withCheckedContinuation { continuation in
+            RunLoop.main.perform {
+                MainActor.assumeIsolated {
+                    NSApp.activate(ignoringOtherApps: true)
+                    NSApp.runModal(for: panel)
+                    panel.orderOut(nil)
+                    continuation.resume()
+                }
+            }
+        }
+    }
+
+    fileprivate static func run(_ content: DialogContent) async -> DialogAction {
         let result = DialogResult(content.escapeAction)
         let panel = DialogPanel(contentRect: .zero, styleMask: [.borderless], backing: .buffered, defer: false)
         let host = NSHostingView(rootView: DialogView(model: content) { action in
@@ -337,9 +347,7 @@ final class DialogPresenter {
             NSApp.stopModal()
         })
         configure(panel, host: host)
-        NSApp.activate(ignoringOtherApps: true)
-        NSApp.runModal(for: panel)
-        panel.orderOut(nil)
+        await runModal(panel)
         return result.action ?? content.escapeAction ?? .dismiss
     }
 }

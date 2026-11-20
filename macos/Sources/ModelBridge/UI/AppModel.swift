@@ -226,7 +226,7 @@ final class AppModel: ObservableObject {
     var noticeAutoDismissDelay: TimeInterval = 4
     var onTerminate: @MainActor () -> Void = {}
     var openURL: @MainActor (URL) -> Void = { NSWorkspace.shared.open($0) }
-    var onTrashFailure: @MainActor (String) -> Void = { _ in }
+    var onTrashFailure: @MainActor (String) async -> Void = { _ in }
 
     private let core: any CoreClient
     private let keychain: any KeyStoring
@@ -723,7 +723,7 @@ final class AppModel: ObservableObject {
     func finishUninstall() async {
         if await trash.moveToTrash(appURL) != nil {
             trashFailurePath = appURL.path
-            onTrashFailure(appURL.path)
+            await onTrashFailure(appURL.path)
         }
         onTerminate()
     }
