@@ -598,6 +598,7 @@ final class AppModel: ObservableObject {
             addNotice(Notice(title: "没能切换接入方式", detail: "没能修改 Codex 配置，接入方式保持原样。请稍后再试。", kind: .error))
             return
         }
+        removeNotices(titled: "没能切换接入方式")
         guard chatGPT.isRunning() else { return }
         addNotice(Notice(
             title: "已切换到「\(enabled ? "只用中转" : "官方 + 中转")」",

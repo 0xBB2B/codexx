@@ -195,7 +195,7 @@ private struct SwitchBody: View {
 
     var body: some View {
         ZStack(alignment: .topLeading) {
-            Capsule().fill(isOn ? Palette.primary : Palette.disabledBg)
+            Capsule().fill(isEnabled && isOn ? Palette.primary : Palette.disabledBg)
             Capsule().strokeBorder(border, lineWidth: 1)
             Circle()
                 .fill(knob)

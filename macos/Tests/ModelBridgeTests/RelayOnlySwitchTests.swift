@@ -355,4 +355,113 @@ final class RelayOnlySwitchTests: XCTestCase {
         XCTAssertEqual(h.model.accessModeName, "只用中转")
         XCTAssertEqual(h.core.calls("apply_access").count, 0)
     }
+
+    func testSetRelayOnly_SuccessAfterFailure_ClearsErrorNotice() async {
+        let h = Harness(
+            status: statusJSON(mode: "both", relayOnly: false, loggedIn: true),
+            responses: ["set_relay_only": .failure(.remote(code: "config_invalid", keys: []))]
+        )
+        await h.model.setRelayOnly(true)
+        XCTAssertTrue(h.model.notices.contains { $0.title == "没能切换接入方式" })
+        h.core.setResponse("set_relay_only", result(statusJSON(mode: "relay", relayOnly: true, loggedIn: true)))
+        await h.model.setRelayOnly(true)
+        XCTAssertFalse(h.model.notices.contains { $0.title == "没能切换接入方式" })
+        XCTAssertTrue(h.model.notices.contains { $0.title == "已切换到「只用中转」" })
+    }
+
+    private func switchBodyColor(_ view: RenderedView, label: String) throws -> (r: Int, g: Int, b: Int) {
+        let shot = try XCTUnwrap(view.snapshot())
+        let host = try XCTUnwrap(view.elements.first?.axFrame())
+        let button = view.elements.first {
+            $0.axString("accessibilityLabel") == label && $0.axString("accessibilityRole") == NSAccessibility.Role.button.rawValue
+        }
+        let frame = try XCTUnwrap(button?.axFrame())
+        let x = Int((frame.minX - host.minX + 6) * shot.scale)
+        let y = Int((host.maxY - frame.maxY + 12) * shot.scale)
+        let c = try XCTUnwrap(shot.rep.colorAt(x: x, y: y)?.usingColorSpace(.sRGB))
+        return (Int(c.redComponent * 255), Int(c.greenComponent * 255), Int(c.blueComponent * 255))
+    }
+
+    private func assertNeutral(_ c: (r: Int, g: Int, b: Int), file: StaticString = #filePath, line: UInt = #line) {
+        XCTAssertLessThan(c.g - c.r, 20, "\(c)", file: file, line: line)
+        XCTAssertLessThan(c.b - c.r, 25, "\(c)", file: file, line: line)
+    }
+
+    private func assertTeal(_ c: (r: Int, g: Int, b: Int), file: StaticString = #filePath, line: UInt = #line) {
+        XCTAssertGreaterThan(c.g - c.r, 60, "\(c)", file: file, line: line)
+    }
+
+    func testView_RelayOnlyDisabledAndOn_SwitchBodyIsNeutral() async throws {
+        let h = Harness(status: statusJSON(relayOnly: true, loggedIn: false))
+        assertNeutral(try switchBodyColor(RenderedView(MainWindow(model: h.model)), label: "只用中转"))
+    }
+
+    func testView_RelayOnlyEnabledAndOn_SwitchBodyIsPrimary() async throws {
+        let h = Harness(status: statusJSON(relayOnly: true, loggedIn: true))
+        assertTeal(try switchBodyColor(RenderedView(MainWindow(model: h.model)), label: "只用中转"))
+    }
+
+    func testView_ForwardingSwitchingWhileOn_ForwardingSwitchBodyIsNeutral() async throws {
+        let gate = Gate()
+        let h = Harness(
+            status: statusJSON(relayOnly: false, loggedIn: true),
+            responses: ["set_forwarding": result(statusJSON(forwarding: false, relayOnly: false, loggedIn: true))],
+            gates: ["set_forwarding": gate]
+        )
+        let toggle = Task { await h.model.toggleForwarding(enabled: false) }
+        await awaitUntil { h.model.isSwitchingForwarding }
+        XCTAssertTrue(h.model.forwardingEnabled)
+        assertNeutral(try switchBodyColor(RenderedView(MainWindow(model: h.model)), label: "使用中转"))
+        await gate.open()
+        await toggle.value
+    }
+
+    func testView_ForwardingEnabledAndOn_ForwardingSwitchBodyIsPrimary() async throws {
+        let h = Harness(status: statusJSON(relayOnly: false, loggedIn: true))
+        assertTeal(try switchBodyColor(RenderedView(MainWindow(model: h.model)), label: "使用中转"))
+    }
+
+    private func darkestRed(_ view: RenderedView, textContaining text: String) throws -> Int {
+        let shot = try XCTUnwrap(view.snapshot())
+        let host = try XCTUnwrap(view.elements.first?.axFrame())
+        let label = view.elements.first { element in
+            element.axString("accessibilityRole") == NSAccessibility.Role.staticText.rawValue
+                && ["accessibilityLabel", "accessibilityValue"].contains { element.axString($0)?.contains(text) == true }
+        }
+        let frame = try XCTUnwrap(label?.axFrame())
+        let region = CGRect(x: frame.minX - host.minX, y: host.maxY - frame.maxY, width: frame.width, height: frame.height)
+        var darkest = 255
+        for y in Int(region.minY * shot.scale)..<Int(region.maxY * shot.scale) {
+            for x in Int(region.minX * shot.scale)..<Int(region.maxX * shot.scale) {
+                if let c = shot.rep.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) { darkest = min(darkest, Int(c.redComponent * 255)) }
+            }
+        }
+        return darkest
+    }
+
+    func testView_RelayOnlyDisabledAndOn_KnobIsLightNeutralGrey() async throws {
+        let h = Harness(status: statusJSON(relayOnly: true, loggedIn: false))
+        let view = RenderedView(MainWindow(model: h.model))
+        let shot = try XCTUnwrap(view.snapshot())
+        let host = try XCTUnwrap(view.elements.first?.axFrame())
+        let button = view.elements.first {
+            $0.axString("accessibilityLabel") == "只用中转" && $0.axString("accessibilityRole") == NSAccessibility.Role.button.rawValue
+        }
+        let frame = try XCTUnwrap(button?.axFrame())
+        let x = Int((frame.minX - host.minX + 27) * shot.scale)
+        let y = Int((host.maxY - frame.maxY + 12) * shot.scale)
+        let c = try XCTUnwrap(shot.rep.colorAt(x: x, y: y)?.usingColorSpace(.sRGB))
+        let rgb = [c.redComponent, c.greenComponent, c.blueComponent].map { Int($0 * 255) }
+        XCTAssertTrue(rgb.allSatisfy { $0 > 200 }, "\(rgb)")
+        XCTAssertLessThan(rgb[1] - rgb[0], 20, "\(rgb)")
+    }
+
+    func testView_RelayOnlyDisabled_StateTextLighterThanEnabled() async throws {
+        let disabled = Harness(status: statusJSON(relayOnly: true, loggedIn: false))
+        let enabled = Harness(status: statusJSON(relayOnly: true, loggedIn: true))
+        let light = try darkestRed(RenderedView(MainWindow(model: disabled.model)), textContaining: "只用中转 · ")
+        let dark = try darkestRed(RenderedView(MainWindow(model: enabled.model)), textContaining: "只用中转 · ")
+        XCTAssertLessThan(dark, 60)
+        XCTAssertGreaterThan(light, 70)
+    }
 }
