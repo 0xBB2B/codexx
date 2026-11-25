@@ -875,8 +875,12 @@ final class AppModel: ObservableObject {
     func dismissBanner(_ banner: Banner) { dismissedBanners.insert(banner) }
 
     private func addNotice(_ notice: Notice) {
-        guard !notices.contains(where: { $0.title == notice.title && $0.kind == notice.kind }) else { return }
-        notices.append(notice)
+        if let index = notices.firstIndex(where: { $0.title == notice.title && $0.kind == notice.kind }) {
+            noticeTimers.removeValue(forKey: notices[index].id)?.cancel()
+            notices[index] = notice
+        } else {
+            notices.append(notice)
+        }
         guard notice.kind == .success || notice.kind == .info else { return }
         let delay = noticeAutoDismissDelay
         noticeTimers[notice.id] = Task { [weak self] in

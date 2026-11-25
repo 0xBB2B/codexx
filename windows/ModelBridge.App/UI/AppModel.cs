@@ -1468,8 +1468,14 @@ public sealed class AppModel : IRelayFields
     {
         lock (noticeLock)
         {
-            if (notices.Any(n => n.Title == notice.Title && n.Severity == notice.Severity)) return;
-            Notices = [.. notices, notice];
+            var index = notices.ToList().FindIndex(n => n.Title == notice.Title && n.Severity == notice.Severity);
+            if (index < 0) Notices = [.. notices, notice];
+            else
+            {
+                var next = notices.ToList();
+                next[index] = notice;
+                Notices = next;
+            }
         }
 
         if (notice.Severity is AppSeverity.Success or AppSeverity.Info)
