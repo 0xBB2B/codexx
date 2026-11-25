@@ -74,7 +74,7 @@
                             <ui:AppIcon Width="48" Height="48" VerticalAlignment="Center" />
                             <StackPanel Grid.Column="1" Margin="16,0" VerticalAlignment="Center">
                                 <TextBlock x:Name="HeroTitle" Style="{StaticResource CardTitle}" />
-                                <TextBlock x:Name="HeroSub" FontSize="12" Foreground="{StaticResource TextMutedBrush}" TextWrapping="Wrap" Margin="0,4,0,0" />
+                                <TextBlock x:Name="HeroSub" FontSize="12" Foreground="{StaticResource TextMutedBrush}" TextTrimming="CharacterEllipsis" Margin="0,4,0,0" />
                             </StackPanel>
                             <ToggleButton x:Name="ForwardToggle" Grid.Column="2" Style="{StaticResource SwitchToggle}" Tag="NoLabel"
                                           VerticalAlignment="Center" AutomationProperties.Name="使用中转" Click="ForwardClick" />
@@ -89,12 +89,16 @@
                                 <TextBlock x:Name="AccessName" Style="{StaticResource ValueText}" Margin="8,0,0,0" />
                                 <TextBlock x:Name="AccessReason" Style="{StaticResource LabelText}" Margin="4,0,0,0" />
                             </StackPanel>
-                            <Button x:Name="RecheckAccessButton" Grid.Column="1" Padding="16,0" VerticalAlignment="Center" Click="RecheckAccessClick">
-                                <StackPanel Orientation="Horizontal">
-                                    <ui:Spinner x:Name="AccessSpinner" Margin="0,0,8,0" VerticalAlignment="Center" />
-                                    <TextBlock x:Name="RecheckAccessText" VerticalAlignment="Center" />
-                                </StackPanel>
-                            </Button>
+                            <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                                <ToggleButton x:Name="RelayOnlyToggle" Style="{StaticResource SwitchToggle}" Content="只用中转 · " Margin="0,0,12,0"
+                                              VerticalAlignment="Center" AutomationProperties.Name="只用中转" Click="RelayOnlyClick" />
+                                <Button x:Name="RecheckAccessButton" Padding="16,0" VerticalAlignment="Center" Click="RecheckAccessClick">
+                                    <StackPanel Orientation="Horizontal">
+                                        <ui:Spinner x:Name="AccessSpinner" Margin="0,0,8,0" VerticalAlignment="Center" />
+                                        <TextBlock x:Name="RecheckAccessText" VerticalAlignment="Center" />
+                                    </StackPanel>
+                                </Button>
+                            </StackPanel>
                         </Grid>
                     </StackPanel>
                 </Border>

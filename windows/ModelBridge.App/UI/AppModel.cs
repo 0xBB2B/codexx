@@ -132,6 +132,7 @@ public sealed class AppModel : IRelayFields
     readonly IConfirmer confirmer;
     RelayEditorModel? activeEditor;
     int forwardingToggles;
+    int relayOnlyToggles;
 
     string nameInput = DefaultRelayName;
     string baseUrlInput = "";
@@ -158,6 +159,8 @@ public sealed class AppModel : IRelayFields
     bool coreRunning;
     string? accessMode;
     string? accessDetect;
+    bool relayOnly;
+    bool loggedIn;
     bool isDetectingAccess;
     bool startupAligned;
     IReadOnlyList<RelayConfig> configs = [];
@@ -358,11 +361,15 @@ public sealed class AppModel : IRelayFields
         : accessMode switch
         {
             "both" => "官方模型在上，中转模型在下；选官方模型时仍访问官方服务。",
-            "relay" => defaultRelay is { } name
-                ? $"不用登录 ChatGPT。只有中转模型，默认选中「{name} · auto」。"
-                : "不用登录 ChatGPT。只有中转模型，没有默认选中的模型。",
+            "relay" => (relayOnly && loggedIn ? "已登录 ChatGPT，手动选了只用中转。只有中转模型，" : "没有登录 ChatGPT，只能用中转模型，")
+                + (defaultRelay is { } name ? $"默认选中「{name} · auto」。" : "没有默认选中的模型。")
+                + (relayOnly && loggedIn ? "" : "登录后才能改接入方式。"),
             _ => null,
         };
+
+    public bool RelayOnlyEnabled => relayOnly;
+
+    public bool RelayOnlySwitchUsable => forwardingEnabled && loggedIn;
 
     const string UnsupportedHelp = "当前 ChatGPT 版本暂不支持，暂时不能打开。";
 
@@ -568,11 +575,41 @@ public sealed class AppModel : IRelayFields
         }
     }
 
+    public async Task SetRelayOnlyAsync(bool enabled)
+    {
+        if (busy) return;
+        IsBusy = true;
+        relayOnlyToggles++;
+        try
+        {
+            try
+            {
+                ApplyStatus(await core.CallAsync("set_relay_only", Params("enabled", enabled)));
+            }
+            catch (Exception ex) when (ex is CoreCallException or CoreProcessExitedException)
+            {
+                AddNotice(new AppNotice(AccessSwitchFailed, "没能修改 Codex 配置，接入方式保持原样。请稍后再试。"));
+                return;
+            }
+
+            RemoveNotices(AccessSwitchFailed);
+            if (!chatGpt.IsRunning()) return;
+            AddNotice(enabled
+                ? new AppNotice("已切换到「只用中转」", RestartHint + "重启后请新建对话：用「官方 + 中转」聊过的旧对话接不上。", AppSeverity.Success)
+                : new AppNotice("已切换到「官方 + 中转」", RestartHint + "重启后请新建对话：用「只用中转」聊过的旧对话接不上。", AppSeverity.Success));
+        }
+        finally
+        {
+            IsBusy = false;
+        }
+    }
+
     public async Task RecheckAccessAsync()
     {
         RemoveNotices(DetectFailedTitle);
         IsDetectingAccess = true;
         var togglesBefore = forwardingToggles;
+        var relayOnlyTogglesBefore = relayOnlyToggles;
         try
         {
             JsonElement status;
@@ -587,6 +624,7 @@ public sealed class AppModel : IRelayFields
             }
 
             RemoveNotices(RecheckFailedTitle);
+            if (relayOnlyToggles != relayOnlyTogglesBefore) return;
             var toggledMeanwhile = forwardingToggles != togglesBefore;
             var forwardingNow = forwardingEnabled;
             ApplyStatus(status);
@@ -605,6 +643,7 @@ public sealed class AppModel : IRelayFields
             {
                 var detail = mode switch
                 {
+                    "relay" when relayOnly && loggedIn => "仍然检测到 ChatGPT 登录。你手动选了只用中转，继续只用中转模型。",
                     "relay" => "仍然没有检测到 ChatGPT 登录，继续只用中转模型。",
                     "both" => "仍然检测到 ChatGPT 登录，继续同时使用官方模型和中转模型。",
                     _ => null,
@@ -1300,6 +1339,10 @@ public sealed class AppModel : IRelayFields
         var access = Prop(s, "access");
         accessMode = Str(access, "mode");
         accessDetect = Str(access, "detect");
+        relayOnly = Flag(access, "relay_only", false);
+        loggedIn = Flag(access, "logged_in", false);
+        Raise(nameof(RelayOnlyEnabled));
+        Raise(nameof(RelayOnlySwitchUsable));
         Raise(nameof(AccessModeName));
         Raise(nameof(AccessReasonText));
         Raise(nameof(OverviewTitle));

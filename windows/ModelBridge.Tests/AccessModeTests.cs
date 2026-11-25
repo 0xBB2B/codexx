@@ -121,7 +121,7 @@ public class AccessModeTests
     public void OverviewText_Relay()
     {
         Assert.AreEqual(
-            "不用登录 ChatGPT。只有中转模型，默认选中「中转 · auto」。",
+            "没有登录 ChatGPT，只能用中转模型，默认选中「中转 · auto」。登录后才能改接入方式。",
             Pushed("relay", "relay", "not_logged_in").Model.OverviewText);
     }
 

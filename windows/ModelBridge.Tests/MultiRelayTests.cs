@@ -1323,7 +1323,7 @@ public class MultiRelayTests
 
         h.Push(defaultRelay: "A家", mode: "relay");
 
-        Assert.AreEqual("不用登录 ChatGPT。只有中转模型，默认选中「A家 · auto」。", h.Model.OverviewText);
+        Assert.AreEqual("没有登录 ChatGPT，只能用中转模型，默认选中「A家 · auto」。登录后才能改接入方式。", h.Model.OverviewText);
         Assert.AreEqual("只用中转", h.Model.AccessModeName);
     }
 
@@ -1335,7 +1335,7 @@ public class MultiRelayTests
 
         h.Push(defaultRelay: null, mode: "relay");
 
-        Assert.AreEqual("不用登录 ChatGPT。只有中转模型，没有默认选中的模型。", h.Model.OverviewText);
+        Assert.AreEqual("没有登录 ChatGPT，只能用中转模型，没有默认选中的模型。登录后才能改接入方式。", h.Model.OverviewText);
     }
 
     [TestMethod]

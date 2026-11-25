@@ -49,6 +49,10 @@ public partial class MainWindow : Window
         Hero.BorderBrush = AlertView.Brush(model.ForwardingEnabled ? "PrimaryBrush" : "DividerBrush");
         HeroTitle.Text = model.OverviewTitle;
         HeroSub.Text = model.ChatGptFound && !model.ChatGptUnsupported ? model.OverviewText ?? model.ForwardingHelpText : model.ForwardingHelpText;
+        HeroSub.ToolTip = HeroSub.Text;
+        RelayOnlyToggle.SetCurrentValue(ToggleButton.IsCheckedProperty, model.RelayOnlyEnabled);
+        RelayOnlyToggle.IsEnabled = model.RelayOnlySwitchUsable;
+        AutomationProperties.SetHelpText(RelayOnlyToggle, HeroSub.Text);
         ModeRow.Visibility = model.AccessModeName != null ? Visibility.Visible : Visibility.Collapsed;
         AccessName.Text = model.AccessModeName ?? "";
         AccessReason.Text = model.AccessReasonText ?? "";
@@ -159,6 +163,12 @@ public partial class MainWindow : Window
         ForwardToggle.SetCurrentValue(ToggleButton.IsCheckedProperty, model.ForwardingEnabled);
         await model.ToggleForwardingAsync();
         ForwardToggle.SetCurrentValue(ToggleButton.IsCheckedProperty, model.ForwardingEnabled);
+    }
+
+    async void RelayOnlyClick(object sender, RoutedEventArgs e)
+    {
+        await model.SetRelayOnlyAsync(!model.RelayOnlyEnabled);
+        RelayOnlyToggle.SetCurrentValue(ToggleButton.IsCheckedProperty, model.RelayOnlyEnabled);
     }
 
     async void RecheckAccessClick(object sender, RoutedEventArgs e) => await model.RecheckAccessAsync();
