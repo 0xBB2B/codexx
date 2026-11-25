@@ -163,18 +163,23 @@ struct SwitchRow: View {
     let label: String
     @Binding var isOn: Bool
     var showsState = true
+    var showsName = false
+    var hint: String?
     @Environment(\.isEnabled) private var isEnabled
 
     var body: some View {
-        HStack(spacing: 12) {
+        HStack(spacing: 8) {
             Button { isOn.toggle() } label: { SwitchBody(isOn: isOn) }
                 .buttonStyle(.plain)
                 .accessibilityLabel(label)
                 .accessibilityValue(isOn ? "已开启" : "已关闭")
+                .accessibilityHint(hint ?? "")
             if showsState {
-                Text(isOn ? "已开启" : "已关闭")
+                (Text(showsName ? "\(label) · " : "").fontWeight(.regular)
+                    + Text(isOn ? "已开启" : "已关闭").fontWeight(.semibold))
                     .font(Fonts.label)
                     .foregroundColor(isEnabled ? Palette.text : Palette.textDisabled)
+                    .fixedSize()
             }
         }
         .frame(minHeight: 44)
