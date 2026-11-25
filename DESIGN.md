@@ -173,15 +173,15 @@
 
 ### 开关
 
-- 写法：`<div class="switch-row"><button class="switch" role="switch" aria-checked="true" aria-label="使用中转"><span class="knob"></span></button><span class="switch-text"><strong>已开启</strong></span></div>`
-- 尺寸：40×24px，圆点 16×16px，整行最小高度 44px；旁边一律写「已开启 / 已关闭」，不只靠颜色区分
+- 写法：`<div class="switch-row"><button class="switch" role="switch" aria-checked="true" aria-label="使用中转"><span class="knob"></span></button><span class="switch-text"><strong>已开启</strong></span></div>`；开关有自己的名字、旁边又没有写着这个名字的标题时，名字写在状态前面：`<span class="switch-text">只用中转 · <strong>已开启</strong></span>`
+- 尺寸：40×24px，圆点 16×16px，整行最小高度 44px，开关和旁边的文字之间 8px；旁边一律写「已开启 / 已关闭」（文字 13px、text 色，「已开启 / 已关闭」字重 600，前面的名字字重 400），不只靠颜色区分
 
 | 状态 | 样子 |
 |---|---|
 | 默认 | 打开：背景和边框 primary，圆点 on-primary 靠右；关闭：背景 disabled-bg，边框 1px border-strong，圆点 border-strong 靠左 |
 | 悬停 | 鼠标变成手形 |
 | 按下 | 圆点 200ms 滑到另一侧 |
-| 禁用 | 边框和圆点 border，鼠标显示禁止，下方帮助文字写原因 |
+| 禁用 | 背景 disabled-bg，边框和圆点 border；圆点位置不变（开着靠右、关着靠左），旁边照常写「已开启 / 已关闭」；鼠标显示禁止；原因写在下方帮助文字里，开关所在的那一块已经有一句说明文字时，写进那句说明 |
 | 聚焦 | 2px focus 描边，向外偏移 3px |
 
 ### 表格
@@ -204,27 +204,35 @@
 <section class="hero on">
   <div class="hero-top">
     <svg class="app-icon" width="48" height="48">…</svg>
-    <div class="hero-text"><div class="hero-title">使用中转 · 已开启</div><div class="hero-sub">一句说明</div></div>
+    <div class="hero-text"><div class="hero-title">使用中转 · 已开启</div><div class="hero-sub" id="access-help">一句说明</div></div>
     <button class="switch" role="switch" aria-checked="true" aria-label="使用中转"><span class="knob"></span></button>
   </div>
-  <div class="hero-mode"><span class="lv"><span class="lv-label">接入方式</span><strong class="lv-value">官方 + 中转</strong><span class="lv-note">· 已检测到 ChatGPT 登录</span></span><span class="grow"></span><button class="btn-secondary sm">重新检测</button></div>
+  <div class="hero-mode"><span class="lv"><span class="lv-label">接入方式</span><strong class="lv-value">官方 + 中转</strong><span class="lv-note">· 已检测到 ChatGPT 登录</span></span><span class="grow"></span><div class="switch-row"><button class="switch" role="switch" aria-checked="false" aria-label="只用中转" aria-describedby="access-help"><span class="knob"></span></button><span class="switch-text">只用中转 · <strong>已关闭</strong></span></div><button class="btn-secondary sm">重新检测</button></div>
 </section>
 ```
 
 - 主窗口内容区的第一块，放转发开关和接入方式
 - 外框：圆角 12px，边框 1px，内边距上下 16px、左右 24px，上下两行间距 12px，无阴影。转发开着（`on`）时背景 selected-bg、边框 primary；关着时背景 surface、边框 border
 - 第一行：左边 48px 的应用图标，16px 之后是文字，最右边是开关。标题 16px、字重 600、text 色，写「使用中转 · 已开启」或「使用中转 · 已关闭」；标题下方 4px 是一句 12px、text-muted 色的说明
-- 说明文字：开着时写当前接入方式的一句话（「官方模型在上，中转模型在下；选官方模型时仍访问官方服务。」或「不用登录 ChatGPT。只有中转模型，默认选中「<配置名> · auto」。」，都没有 auto 时后半句写「没有默认选中的模型」）；关着时写「已关闭：Codex 配置已还原为开启前的样子。」；找不到 ChatGPT 时写「找到 ChatGPT 后才能打开。」；读不到 ChatGPT 自带的官方模型清单时写「当前 ChatGPT 版本暂不支持，暂时不能打开。」
-- 第二行（只在转发开着时有）：最小高度 44px，左边是「标签 + 取值」写法的接入方式，右边是「重新检测」次按钮（高 44px，左右 16px）
-- 开关按「开关」一节；这里标题已经写了「已开启 / 已关闭」，开关旁边不再重复
+- 说明文字：开着时按当前情况写一句话，共三种：
+  - 官方 + 中转：「官方模型在上，中转模型在下；选官方模型时仍访问官方服务。」
+  - 已登录、用户手动打开了「只用中转」：「已登录 ChatGPT，手动选了只用中转。只有中转模型，默认选中「<配置名> · auto」。」
+  - 没有检测到登录：「没有登录 ChatGPT，只能用中转模型，默认选中「<配置名> · auto」。登录后才能改接入方式。」
+  - 后两种在所有配置都没有 auto 时，把「默认选中「<配置名> · auto」」换成「没有默认选中的模型」
+  - 说明文字只占一行；放不下时（如配置名很长）末尾用省略号截断，鼠标悬停显示全文
+- 转发关着时的说明文字：写「已关闭：Codex 配置已还原为开启前的样子。」；找不到 ChatGPT 时写「找到 ChatGPT 后才能打开。」；读不到 ChatGPT 自带的官方模型清单时写「当前 ChatGPT 版本暂不支持，暂时不能打开。」
+- 第二行（只在转发开着时有）：最小高度 44px，各项之间 12px，都只排一行。左边是「标签 + 取值」写法的接入方式：取值写「官方 + 中转」或「只用中转」，补充说明只写检测结果（「· 已检测到 ChatGPT 登录」「· 没有检测到 ChatGPT 登录」，检测失败时「· 沿用上次的方式」）。右边依次是「只用中转」开关和「重新检测」次按钮（高 44px，左右 16px）
+- 「只用中转」开关：按「开关」一节，旁边写「只用中转 · 已开启」或「只用中转 · 已关闭」，用 aria-describedby 关联标题下的说明文字。检测到已登录时可用。打开后接入方式是「只用中转」，一直保持到用户自己关掉；自动检测和「重新检测」只更新检测结果；关掉转发再打开，用户的选择保留
+- 用「只用中转」开关切换之后，ChatGPT 正在运行时弹一条成功提示条：标题「已切换到「只用中转」」或「已切换到「官方 + 中转」」，正文「重启 ChatGPT 后生效。重启后请新建对话：用「<切换前的方式>」聊过的旧对话接不上。」
+- 第一行的转发开关按「开关」一节；标题已经写了「已开启 / 已关闭」，转发开关旁边不再重复
 
 | 状态 | 样子 |
 |---|---|
 | 默认 | 如上，开着和关着两种样子 |
 | 悬停 | 外框不变（不可点击）；开关和按钮按各自一节 |
 | 按下 | 不适用：外框不可点击；开关和按钮按各自一节 |
-| 禁用 | 找不到 ChatGPT，或读不到 ChatGPT 自带的官方模型清单时，转发保持关闭、开关禁用，说明文字写原因，窗口上方另有一条带「重新检测」的错误提示条；正在检测时只有「重新检测」禁用，显示转圈和「正在检测…」，开关照常可用 |
-| 聚焦 | 外框不可聚焦；Tab 先到开关，再到「重新检测」，聚焦的控件显示 2px focus 描边，向外偏移 3px |
+| 禁用 | 找不到 ChatGPT，或读不到 ChatGPT 自带的官方模型清单时，转发保持关闭、转发开关禁用，说明文字写原因，窗口上方另有一条带「重新检测」的错误提示条；没有检测到登录时「只用中转」开关禁用，保持用户原来的开或关，原因写在标题下的说明文字里；检测失败时按上次检测到的登录状态决定「只用中转」开关能不能用；正在检测时只有「重新检测」禁用，显示转圈和「正在检测…」，两个开关照常可用 |
+| 聚焦 | 外框不可聚焦；Tab 先到转发开关，再到「只用中转」开关（禁用时跳过），最后到「重新检测」，聚焦的控件显示 2px focus 描边，向外偏移 3px |
 
 ### 配置列表
 
