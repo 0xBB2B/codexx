@@ -385,17 +385,19 @@ func (s *Service) SetForwarding(ctx context.Context, enabled bool) (Status, erro
 		if err := s.detect(ctx); err != nil {
 			return s.statusLocked(), toError(err)
 		}
-		prev := s.accessMode
+		prevMode, prevForwarding := s.accessMode, s.forwarding
 		s.accessMode = s.accessTarget
+		s.forwarding = true
+		if err := s.saveSettings(); err != nil {
+			s.accessMode, s.forwarding = prevMode, prevForwarding
+			return s.statusLocked(), toError(err)
+		}
 		if err := s.activate(ctx); err != nil {
-			s.accessMode = prev
+			s.accessMode, s.forwarding = prevMode, prevForwarding
 			if s.forwarding {
 				_ = s.activate(ctx)
 			}
-			return s.statusLocked(), toError(err)
-		}
-		s.forwarding = true
-		if err := s.saveSettings(); err != nil {
+			_ = s.saveSettings()
 			return s.statusLocked(), toError(err)
 		}
 		return s.statusLocked(), nil
@@ -484,12 +486,14 @@ func (s *Service) ApplyAccess(ctx context.Context) (Status, error) {
 	}
 	prev := s.accessMode
 	s.accessMode = s.accessTarget
+	if err := s.saveSettings(); err != nil {
+		s.accessMode = prev
+		return s.statusLocked(), toError(err)
+	}
 	if err := s.activate(ctx); err != nil {
 		s.accessMode = prev
 		_ = s.activate(ctx)
-		return s.statusLocked(), toError(err)
-	}
-	if err := s.saveSettings(); err != nil {
+		_ = s.saveSettings()
 		return s.statusLocked(), toError(err)
 	}
 	return s.statusLocked(), nil
@@ -520,12 +524,17 @@ func (s *Service) detect(ctx context.Context) error {
 		}
 		return nil
 	}
+	prevLast := s.settings.LastDetectedMode
 	last := s.accessTarget
 	s.settings.LastDetectedMode = &last
 	if s.settings.RelayOnly {
 		s.accessTarget = modeRelay
 	}
-	return s.saveSettings()
+	if err := s.saveSettings(); err != nil {
+		s.settings.LastDetectedMode = prevLast
+		return err
+	}
+	return nil
 }
 
 func (s *Service) saveSettings() error {

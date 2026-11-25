@@ -3364,3 +3364,106 @@ func TestRelayOnly_ForwardingOffNeverDetectedKeepsTargetNull(t *testing.T) {
 		t.Errorf("target = %v, want null", acc["target"])
 	}
 }
+
+func lockDataDir(t *testing.T, e *env) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows 上 chmod 不能让目录不可写")
+	}
+	if err := os.Chmod(e.dataDir, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(e.dataDir, 0o755) })
+}
+
+func requireStateKept(t *testing.T, e *env, stBefore control.Status, cfgBefore string) {
+	t.Helper()
+	stAfter := e.svc.Status()
+	if stAfter.Forwarding != stBefore.Forwarding {
+		t.Errorf("forwarding = %v, want %v", stAfter.Forwarding, stBefore.Forwarding)
+	}
+	accBefore, accAfter := accessOf(t, stBefore), accessOf(t, stAfter)
+	for _, k := range []string{"mode", "relay_only", "logged_in"} {
+		if accAfter[k] != accBefore[k] {
+			t.Errorf("access.%s = %v, want %v", k, accAfter[k], accBefore[k])
+		}
+	}
+	if got := e.config(t); got != cfgBefore {
+		t.Errorf("Codex 配置被改动: %q", got)
+	}
+}
+
+func TestSettingsSaveFailure_ApplyAccessKeepsState(t *testing.T) {
+	ctx := context.Background()
+	e := newEnv(t, false, withDetect(codexauth.LoggedIn))
+	e.initRelay(t)
+	if _, err := e.svc.SetForwarding(ctx, true); err != nil {
+		t.Fatal(err)
+	}
+	e.detect.set(codexauth.NotLoggedIn)
+	if _, err := e.svc.DetectAccess(ctx); err != nil {
+		t.Fatal(err)
+	}
+	stBefore, cfgBefore := e.svc.Status(), e.config(t)
+	lockDataDir(t, e)
+
+	if _, err := e.svc.ApplyAccess(ctx); err == nil {
+		t.Fatal("设置文件保存失败时应返回错误")
+	}
+	requireStateKept(t, e, stBefore, cfgBefore)
+}
+
+func TestSettingsSaveFailure_SetForwardingOnKeepsState(t *testing.T) {
+	ctx := context.Background()
+	e := newEnv(t, false, withDetect(codexauth.LoggedIn))
+	e.initRelay(t)
+	stBefore, cfgBefore := e.svc.Status(), e.config(t)
+	lockDataDir(t, e)
+
+	if _, err := e.svc.SetForwarding(ctx, true); err == nil {
+		t.Fatal("设置文件保存失败时应返回错误")
+	}
+	requireStateKept(t, e, stBefore, cfgBefore)
+}
+
+func TestSettingsSaveFailure_DetectAccessKeepsLastDetectedMode(t *testing.T) {
+	ctx := context.Background()
+	e := newEnv(t, false, withDetect(codexauth.NotLoggedIn))
+	e.initRelay(t)
+	if _, err := e.svc.DetectAccess(ctx); err != nil {
+		t.Fatal(err)
+	}
+	e.detect.set(codexauth.LoggedIn)
+	stBefore, cfgBefore := e.svc.Status(), e.config(t)
+	lockDataDir(t, e)
+
+	if _, err := e.svc.DetectAccess(ctx); err == nil {
+		t.Fatal("设置文件保存失败时应返回错误")
+	}
+	requireStateKept(t, e, stBefore, cfgBefore)
+}
+
+func TestSetForwardingFalse_AlreadyOffWithInvalidConfigKeepsOff(t *testing.T) {
+	ctx := context.Background()
+	e := newEnv(t, true)
+	e.initRelay(t)
+	e.handEditBaseURL(t)
+	_, err := e.svc.SetForwarding(ctx, false)
+	requireCode(t, err, "restore_blocked")
+	if e.svc.Status().Forwarding {
+		t.Fatal("restore_blocked 后 forwarding 应为 false")
+	}
+	if err := os.WriteFile(e.configPath, []byte("not = = toml\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := e.svc.SetForwarding(ctx, false); err == nil {
+		t.Fatal("配置不合法时应返回错误")
+	}
+	if e.svc.Status().Forwarding {
+		t.Error("Forwarding 应仍为 false")
+	}
+	if e.settingsForwarding(t) {
+		t.Error("settings.json 的 forwarding 应仍为 false")
+	}
+}
