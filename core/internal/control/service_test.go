@@ -1055,7 +1055,9 @@ func accessOf(t *testing.T, st control.Status) map[string]any {
 func requireAccess(t *testing.T, st control.Status, mode, target, detect any) {
 	t.Helper()
 	want := map[string]any{"mode": mode, "target": target, "detect": detect}
-	if got := accessOf(t, st); !reflect.DeepEqual(got, want) {
+	full := accessOf(t, st)
+	got := map[string]any{"mode": full["mode"], "target": full["target"], "detect": full["detect"]}
+	if !reflect.DeepEqual(got, want) {
 		t.Errorf("access = %v, want %v", got, want)
 	}
 }
@@ -3071,5 +3073,294 @@ func TestCheckUpdate_NoNewVersionInstallerFalse(t *testing.T) {
 	}
 	if res.IsNewer || res.Installer || svc.Status().Update.Installer {
 		t.Errorf("result = %+v, Status.Update = %+v", res, svc.Status().Update)
+	}
+}
+
+func settingsBytes(t *testing.T, e *env) string {
+	t.Helper()
+	return readFile(t, filepath.Join(e.dataDir, "settings.json"))
+}
+
+func TestRelayOnly_OnWhileForwardingOpen(t *testing.T) {
+	ctx := context.Background()
+	e := newEnv(t, false, withDetect(codexauth.LoggedIn))
+	e.initRelay(t)
+	if _, err := e.svc.SetForwarding(ctx, true); err != nil {
+		t.Fatal(err)
+	}
+	st, err := e.svc.SetRelayOnly(ctx, true)
+	if err != nil {
+		t.Fatalf("SetRelayOnly: %v", err)
+	}
+	requireAccess(t, st, "relay", "relay", "logged_in")
+	acc := accessOf(t, st)
+	if acc["relay_only"] != true || acc["logged_in"] != true {
+		t.Errorf("access = %v, want relay_only=true logged_in=true", acc)
+	}
+	if cfg := e.config(t); !isRelayConfig(cfg) {
+		t.Errorf("配置不是只用中转方式: %q", cfg)
+	}
+	if got := settingsJSON(t, e)["relay_only"]; got != true {
+		t.Errorf("settings relay_only = %v, want true", got)
+	}
+}
+
+func TestRelayOnly_SwitchMatchesReopenAndCloseRestores(t *testing.T) {
+	ctx := context.Background()
+	e := newEnv(t, false, withDetect(codexauth.LoggedIn))
+	e.initRelay(t)
+	original := e.config(t)
+	if _, err := e.svc.SetForwarding(ctx, true); err != nil {
+		t.Fatal(err)
+	}
+
+	st, err := e.svc.SetRelayOnly(ctx, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	relayCfg := e.config(t)
+	if _, err := e.svc.SetForwarding(ctx, false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.svc.SetForwarding(ctx, true); err != nil {
+		t.Fatal(err)
+	}
+	if got := e.config(t); got != relayCfg {
+		t.Errorf("只用中转: 切换后配置 %q 与关闭再打开 %q 不一致", relayCfg, got)
+	}
+
+	st, err = e.svc.SetRelayOnly(ctx, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	requireAccess(t, st, "both", "both", "logged_in")
+	if acc := accessOf(t, st); acc["relay_only"] != false {
+		t.Errorf("relay_only = %v, want false", acc["relay_only"])
+	}
+	bothCfg := e.config(t)
+	if !isBothConfig(bothCfg) {
+		t.Errorf("配置不是官方加中转方式: %q", bothCfg)
+	}
+	if _, err := e.svc.SetForwarding(ctx, false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.svc.SetForwarding(ctx, true); err != nil {
+		t.Fatal(err)
+	}
+	if got := e.config(t); got != bothCfg {
+		t.Errorf("官方加中转: 切换后配置 %q 与关闭再打开 %q 不一致", bothCfg, got)
+	}
+
+	if _, err := e.svc.SetForwarding(ctx, false); err != nil {
+		t.Fatal(err)
+	}
+	if got := e.config(t); got != original {
+		t.Errorf("关闭转发后配置 = %q, want 打开前 %q", got, original)
+	}
+}
+
+func TestRelayOnly_OnDetectChangesKeepTargetEqualMode(t *testing.T) {
+	ctx := context.Background()
+	e := newEnv(t, false, withDetect(codexauth.LoggedIn))
+	e.initRelay(t)
+	if _, err := e.svc.SetForwarding(ctx, true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.svc.SetRelayOnly(ctx, true); err != nil {
+		t.Fatal(err)
+	}
+	steps := []struct {
+		result       codexauth.Result
+		wantDetect   string
+		wantLast     string
+		wantLoggedIn bool
+	}{
+		{codexauth.NotLoggedIn, "not_logged_in", "relay", false},
+		{codexauth.LoggedIn, "logged_in", "both", true},
+		{codexauth.Failed, "failed", "both", true},
+	}
+	for _, s := range steps {
+		e.detect.set(s.result)
+		st, err := e.svc.DetectAccess(ctx)
+		if err != nil {
+			t.Fatalf("DetectAccess: %v", err)
+		}
+		requireAccess(t, st, "relay", "relay", s.wantDetect)
+		if acc := accessOf(t, st); acc["logged_in"] != s.wantLoggedIn || acc["relay_only"] != true {
+			t.Errorf("%s: access = %v", s.result, acc)
+		}
+		if got := settingsJSON(t, e)["last_detected_mode"]; got != s.wantLast {
+			t.Errorf("%s: last_detected_mode = %v, want %s", s.result, got, s.wantLast)
+		}
+	}
+}
+
+func TestRelayOnly_PersistsAcrossRestartAndReopen(t *testing.T) {
+	ctx := context.Background()
+	e := newEnv(t, true, withDetect(codexauth.LoggedIn), withSettings(`{"forwarding":true,"relay_only":true}`))
+	st := e.initRelay(t)
+	requireAccess(t, st, "relay", "relay", "logged_in")
+	if _, err := e.svc.SetForwarding(ctx, false); err != nil {
+		t.Fatal(err)
+	}
+	st, err := e.svc.SetForwarding(ctx, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	requireAccess(t, st, "relay", "relay", "logged_in")
+	if acc := accessOf(t, st); acc["relay_only"] != true {
+		t.Errorf("relay_only = %v, want true", acc["relay_only"])
+	}
+	if got := settingsJSON(t, e)["relay_only"]; got != true {
+		t.Errorf("settings relay_only = %v, want true", got)
+	}
+}
+
+func TestRelayOnly_DefaultsWhenFieldMissing(t *testing.T) {
+	e := newEnv(t, true, withDetect(codexauth.Failed))
+	st := e.initRelay(t)
+	acc := accessOf(t, st)
+	if acc["relay_only"] != false {
+		t.Errorf("relay_only = %v, want false", acc["relay_only"])
+	}
+	if acc["logged_in"] != false {
+		t.Errorf("logged_in = %v, want false", acc["logged_in"])
+	}
+	if len(acc) != 5 {
+		t.Errorf("access 键数 = %d, want 5: %v", len(acc), acc)
+	}
+}
+
+func TestRelayOnly_ForwardingOffOnlySavesFlag(t *testing.T) {
+	ctx := context.Background()
+	e := newEnv(t, false, withDetect(codexauth.LoggedIn))
+	e.initRelay(t)
+	before := e.config(t)
+	if _, err := e.svc.SetRelayOnly(ctx, true); err != nil {
+		t.Fatalf("SetRelayOnly: %v", err)
+	}
+	if got := e.config(t); got != before {
+		t.Errorf("配置被改动: %q", got)
+	}
+	if got := settingsJSON(t, e)["relay_only"]; got != true {
+		t.Errorf("settings relay_only = %v, want true", got)
+	}
+	if acc := accessOf(t, e.svc.Status()); acc["relay_only"] != true {
+		t.Errorf("Status relay_only = %v, want true", acc["relay_only"])
+	}
+}
+
+func TestRelayOnly_WriteFailureKeepsEverything(t *testing.T) {
+	ctx := context.Background()
+	e := newEnv(t, false, withDetect(codexauth.LoggedIn))
+	e.initRelay(t)
+	if _, err := e.svc.SetForwarding(ctx, true); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(e.configPath, []byte("not = = toml\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfgBefore := e.config(t)
+	settingsBefore := settingsBytes(t, e)
+	accBefore := accessOf(t, e.svc.Status())
+
+	_, err := e.svc.SetRelayOnly(ctx, true)
+	requireCode(t, err, "config_invalid")
+
+	accAfter := accessOf(t, e.svc.Status())
+	for _, k := range []string{"mode", "target", "relay_only"} {
+		if accAfter[k] != accBefore[k] {
+			t.Errorf("%s = %v, want %v", k, accAfter[k], accBefore[k])
+		}
+	}
+	if got := settingsBytes(t, e); got != settingsBefore {
+		t.Errorf("settings.json 被改动: %q -> %q", settingsBefore, got)
+	}
+	if got := e.config(t); got != cfgBefore {
+		t.Errorf("Codex 配置被改动: %q", got)
+	}
+}
+
+func TestRelayOnly_WriteFailureCodeMatchesApplyAccess(t *testing.T) {
+	ctx := context.Background()
+	e := newEnv(t, false, withDetect(codexauth.LoggedIn))
+	e.initRelay(t)
+	if _, err := e.svc.SetForwarding(ctx, true); err != nil {
+		t.Fatal(err)
+	}
+	e.detect.set(codexauth.NotLoggedIn)
+	if _, err := e.svc.DetectAccess(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(e.configPath, []byte("not = = toml\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := e.svc.ApplyAccess(ctx)
+	requireCode(t, err, "config_invalid")
+}
+
+func TestRelayOnly_NeverDetectedCloseFallsBackToRelay(t *testing.T) {
+	ctx := context.Background()
+	e := newEnv(t, false, withDetect(codexauth.Failed))
+	e.initRelay(t)
+	if _, err := e.svc.SetForwarding(ctx, true); err != nil {
+		t.Fatal(err)
+	}
+	if got, ok := settingsJSON(t, e)["last_detected_mode"]; ok && got != nil && got != "" {
+		t.Fatalf("前提不成立: last_detected_mode = %v", got)
+	}
+	if _, err := e.svc.SetRelayOnly(ctx, true); err != nil {
+		t.Fatal(err)
+	}
+	st, err := e.svc.SetRelayOnly(ctx, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	requireAccess(t, st, "relay", "relay", "failed")
+}
+
+func TestRelayOnly_SettingsSaveFailureKeepsState(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows 上 chmod 不能让目录不可写")
+	}
+	ctx := context.Background()
+	e := newEnv(t, false, withDetect(codexauth.LoggedIn))
+	e.initRelay(t)
+	if _, err := e.svc.SetForwarding(ctx, true); err != nil {
+		t.Fatal(err)
+	}
+	cfgBefore := e.config(t)
+	accBefore := accessOf(t, e.svc.Status())
+
+	if err := os.Chmod(e.dataDir, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(e.dataDir, 0o755) })
+
+	if _, err := e.svc.SetRelayOnly(ctx, true); err == nil {
+		t.Fatal("数据目录不可写时应返回错误")
+	}
+
+	accAfter := accessOf(t, e.svc.Status())
+	for _, k := range []string{"mode", "target", "relay_only"} {
+		if accAfter[k] != accBefore[k] {
+			t.Errorf("%s = %v, want %v", k, accAfter[k], accBefore[k])
+		}
+	}
+	if got := e.config(t); got != cfgBefore {
+		t.Errorf("Codex 配置被改动: %q", got)
+	}
+}
+
+func TestRelayOnly_ForwardingOffNeverDetectedKeepsTargetNull(t *testing.T) {
+	ctx := context.Background()
+	e := newEnv(t, false, withDetect(codexauth.Failed))
+	e.initRelay(t)
+	st, err := e.svc.SetRelayOnly(ctx, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if acc := accessOf(t, st); acc["target"] != nil {
+		t.Errorf("target = %v, want null", acc["target"])
 	}
 }

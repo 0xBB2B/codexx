@@ -169,6 +169,14 @@ func dispatch(ctx context.Context, svc *Service, req request) (any, error) {
 			return nil, err
 		}
 		return svc.SetForwarding(ctx, p.Enabled)
+	case "set_relay_only":
+		var p struct {
+			Enabled bool `json:"enabled"`
+		}
+		if err := decode(req.Params, &p); err != nil {
+			return nil, err
+		}
+		return svc.SetRelayOnly(ctx, p.Enabled)
 	case "refresh_models":
 		var p struct {
 			ID *string `json:"id"`

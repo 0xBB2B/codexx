@@ -69,6 +69,9 @@ type AccessStatus struct {
 	Mode   *string `json:"mode"`
 	Target *string `json:"target"`
 	Detect *string `json:"detect"`
+
+	RelayOnly bool `json:"relay_only"`
+	LoggedIn  bool `json:"logged_in"`
 }
 
 type Error struct {
@@ -210,7 +213,7 @@ func (s *Service) Init(ctx context.Context, p InitParams) (Status, error) {
 	s.restoreBlocked = nil
 	if s.forwarding {
 		s.accessMode = modeBoth
-		if set.AccessMode != nil && *set.AccessMode == modeRelay {
+		if set.RelayOnly || set.AccessMode != nil && *set.AccessMode == modeRelay {
 			s.accessMode = modeRelay
 		}
 	}
@@ -421,6 +424,45 @@ func (s *Service) SetForwarding(ctx context.Context, enabled bool) (Status, erro
 	return s.statusLocked(), nil
 }
 
+func (s *Service) SetRelayOnly(ctx context.Context, enabled bool) (Status, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	defer s.notifyLocked()
+
+	prevFlag, prevTarget, prevMode := s.settings.RelayOnly, s.accessTarget, s.accessMode
+	s.settings.RelayOnly = enabled
+	if s.forwarding {
+		switch {
+		case enabled:
+			s.accessTarget = modeRelay
+		case s.settings.LastDetectedMode != nil:
+			s.accessTarget = *s.settings.LastDetectedMode
+		default:
+			s.accessTarget = modeRelay
+		}
+	}
+	restore := func() {
+		s.settings.RelayOnly, s.accessTarget, s.accessMode = prevFlag, prevTarget, prevMode
+	}
+	switched := s.forwarding && s.accessTarget != s.accessMode
+	if switched {
+		s.accessMode = s.accessTarget
+	}
+	if err := s.saveSettings(); err != nil {
+		restore()
+		return s.statusLocked(), toError(err)
+	}
+	if switched {
+		if err := s.activate(ctx); err != nil {
+			restore()
+			_ = s.activate(ctx)
+			_ = s.saveSettings()
+			return s.statusLocked(), toError(err)
+		}
+	}
+	return s.statusLocked(), nil
+}
+
 func (s *Service) DetectAccess(ctx context.Context) (Status, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -473,10 +515,16 @@ func (s *Service) detect(ctx context.Context) error {
 		if last := s.settings.LastDetectedMode; last != nil && (*last == modeBoth || *last == modeRelay) {
 			s.accessTarget = *last
 		}
+		if s.settings.RelayOnly {
+			s.accessTarget = modeRelay
+		}
 		return nil
 	}
 	last := s.accessTarget
 	s.settings.LastDetectedMode = &last
+	if s.settings.RelayOnly {
+		s.accessTarget = modeRelay
+	}
 	return s.saveSettings()
 }
 
@@ -1061,7 +1109,7 @@ func (s *Service) statusLocked() Status {
 		RestoreBlocked: append([]string{}, s.restoreBlocked...),
 		ConfigPath:     s.configPath,
 		Update:         s.update,
-		Access:         AccessStatus{Mode: optional(s.accessMode), Target: optional(s.accessTarget), Detect: optional(s.accessDetect)},
+		Access:         AccessStatus{Mode: optional(s.accessMode), Target: optional(s.accessTarget), Detect: optional(s.accessDetect), RelayOnly: s.settings.RelayOnly, LoggedIn: s.settings.LastDetectedMode != nil && *s.settings.LastDetectedMode == modeBoth},
 	}
 	return st
 }

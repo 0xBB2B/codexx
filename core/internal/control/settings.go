@@ -14,6 +14,7 @@ type Settings struct {
 	AccessMode       *string `json:"access_mode"`
 	LastDetectedMode *string `json:"last_detected_mode"`
 	NextRelayID      int     `json:"next_relay_id"`
+	RelayOnly        bool    `json:"relay_only"`
 }
 
 func LoadSettings(dataDir string) (Settings, error) {
