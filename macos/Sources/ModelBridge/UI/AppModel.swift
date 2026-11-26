@@ -369,7 +369,9 @@ final class AppModel: ObservableObject {
 
     var relayOnlyEnabled: Bool { status?.access?.relayOnly ?? false }
 
-    var relayOnlySwitchUsable: Bool { forwardingEnabled && status?.access?.loggedIn == true }
+    var relayOnlySwitchUsable: Bool {
+        forwardingEnabled && status?.access?.loggedIn == true && coreRunning && !isSwitchingForwarding
+    }
 
     private var defaultModelText: String {
         status?.defaultRelay.map { "默认选中「\($0) · auto」" } ?? "没有默认选中的模型"
@@ -378,9 +380,13 @@ final class AppModel: ObservableObject {
     var accessHelpText: String? {
         switch status?.access?.mode {
         case "relay":
-            relayOnlyEnabled && status?.access?.loggedIn == true
-                ? "已登录 ChatGPT，手动选了只用中转。只有中转模型，\(defaultModelText)。"
-                : "没有登录 ChatGPT，只能用中转模型，\(defaultModelText)。登录后才能改接入方式。"
+            if status?.access?.loggedIn != true {
+                "没有登录 ChatGPT，只能用中转模型，\(defaultModelText)。登录后才能改接入方式。"
+            } else if relayOnlyEnabled {
+                "已登录 ChatGPT，手动选了只用中转。只有中转模型，\(defaultModelText)。"
+            } else {
+                "已登录 ChatGPT，但没能切到「官方 + 中转」，暂时只有中转模型。点「重新检测」再试。"
+            }
         case "both":
             "官方模型在上，中转模型在下；选官方模型时仍访问官方服务。"
         default: nil
@@ -590,7 +596,7 @@ final class AppModel: ObservableObject {
         isSwitchingForwarding = true
         defer { isSwitchingForwarding = false }
         relayOnlySwitchCount += 1
-        let previous = relayOnlyEnabled ? "只用中转" : "官方 + 中转"
+        let previousMode = status?.access?.mode
         do {
             let data = try await core.call("set_relay_only", params: RelayOnlyParams(enabled: enabled))
             if let value = try? JSONDecoder.snakeCase.decode(CoreStatus.self, from: data) { apply(value) }
@@ -599,10 +605,11 @@ final class AppModel: ObservableObject {
             return
         }
         removeNotices(titled: "没能切换接入方式")
-        guard chatGPT.isRunning() else { return }
-        addNotice(Notice(
-            title: "已切换到「\(enabled ? "只用中转" : "官方 + 中转")」",
-            detail: "重启 ChatGPT 后生效。重启后请新建对话：用「\(previous)」聊过的旧对话接不上。",
+        guard chatGPT.isRunning(), let mode = status?.access?.mode, mode != previousMode else { return }
+        func modeText(_ mode: String?) -> String { mode == "relay" ? "只用中转" : "官方 + 中转" }
+        replaceSwitchNotices(with: Notice(
+            title: "已切换到「\(modeText(mode))」",
+            detail: "重启 ChatGPT 后生效。重启后请新建对话：用「\(modeText(previousMode))」聊过的旧对话接不上。",
             kind: .success
         ))
     }
@@ -619,9 +626,12 @@ final class AppModel: ObservableObject {
             return
         }
         removeNotices(titled: "没能重新检测")
-        if switchCount != forwardingSwitchCount || relayOnlyCount != relayOnlySwitchCount {
+        if relayOnlyCount != relayOnlySwitchCount {
+            if value.access?.detect == "failed" { addDetectFailedWarning() }
+            return
+        }
+        if switchCount != forwardingSwitchCount {
             value.forwarding = status?.forwarding ?? value.forwarding
-            if relayOnlyCount != relayOnlySwitchCount { value.access = status?.access }
             apply(value)
             return
         }
@@ -898,6 +908,13 @@ final class AppModel: ObservableObject {
         notices.filter { titles.contains($0.title) }.forEach { removeNotice($0.id) }
     }
 
+    private func replaceSwitchNotices(with notice: Notice) {
+        let index = notices.firstIndex { $0.title.hasPrefix("已切换到") }
+        notices.filter { $0.title.hasPrefix("已切换到") }.forEach { removeNotice($0.id) }
+        addNotice(notice)
+        if let index, index < notices.count - 1 { notices.insert(notices.removeLast(), at: index) }
+    }
+
     private func addDetectFailedWarning() {
         guard !notices.contains(where: { $0.title == Self.detectFailedTitle }) else { return }
         addNotice(Notice(title: Self.detectFailedTitle, detail: "沿用上次的方式。可以稍后点「重新检测」再试。", kind: .warning))
@@ -937,7 +954,7 @@ final class AppModel: ObservableObject {
         guard let target = value.access?.target, target != value.access?.mode else { return }
         guard !isSwitchingForwarding, value.forwardingUsable else { return }
         guard await applyAccess(), chatGPT.isRunning() else { return }
-        addNotice(target == "both"
+        replaceSwitchNotices(with: target == "both"
             ? Notice(title: "已切换到「官方 + 中转」", detail: "已检测到 ChatGPT 登录。重启 ChatGPT 后生效。", kind: .success)
             : Notice(title: "已切换到「只用中转」", detail: "没有检测到 ChatGPT 登录。重启 ChatGPT 后生效。", kind: .success))
     }

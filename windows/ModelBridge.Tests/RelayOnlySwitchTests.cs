@@ -64,23 +64,23 @@ public class RelayOnlySwitchTests
     #region 开关能不能点
 
     [TestMethod]
-    public void Usable_LoggedIn_True()
+    public async Task Usable_LoggedIn_True()
     {
-        Assert.IsTrue(Pushed("both", "logged_in", false, true).Model.RelayOnlySwitchUsable);
+        Assert.IsTrue((await StartedAsync("both", false, true)).Model.RelayOnlySwitchUsable);
     }
 
     [TestMethod]
-    public void Usable_NotLoggedIn_False()
+    public async Task Usable_NotLoggedIn_False()
     {
-        Assert.IsFalse(Pushed("relay", "not_logged_in", false, false).Model.RelayOnlySwitchUsable);
+        Assert.IsFalse((await StartedAsync("relay", false, false)).Model.RelayOnlySwitchUsable);
     }
 
     [TestMethod]
-    public void Disabled_ShowsRelayOnlyValueAsIs()
+    public async Task Disabled_ShowsRelayOnlyValueAsIs()
     {
         foreach (var relayOnly in new[] { true, false })
         {
-            var model = Pushed("relay", "not_logged_in", relayOnly, false).Model;
+            var model = (await StartedAsync("relay", relayOnly, false)).Model;
 
             Assert.IsFalse(model.RelayOnlySwitchUsable, $"relayOnly={relayOnly}");
             Assert.AreEqual(relayOnly, model.RelayOnlyEnabled, $"relayOnly={relayOnly}");
@@ -90,7 +90,7 @@ public class RelayOnlySwitchTests
     [TestMethod]
     public async Task Usable_WhileDetecting_StillTrue()
     {
-        var h = LoggedInBoth();
+        var h = await StartedAsync("both", false, true);
         var gate = new TaskCompletionSource<JsonElement>();
         h.Core.OnAsync("detect_access", _ => gate.Task);
 
@@ -406,6 +406,202 @@ public class RelayOnlySwitchTests
         await h.Model.RecheckAccessAsync();
 
         Assert.AreEqual("仍然没有检测到 ChatGPT 登录，继续只用中转模型。", h.Model.Notices.Single().Detail);
+    }
+
+    #endregion
+
+    #region 开关能不能点：服务失败与进行中
+
+    static async Task<Harness> StartedAsync(string mode, bool relayOnly, bool loggedIn)
+    {
+        var h = new Harness();
+        await h.Model.StartAsync();
+        h.Push(Access(mode, "logged_in", relayOnly, loggedIn));
+        return h;
+    }
+
+    [TestMethod]
+    public async Task Usable_AfterCoreFailed_FalseAndSwitchKeepsValue()
+    {
+        foreach (var relayOnly in new[] { true, false })
+        {
+            var h = await StartedAsync(relayOnly ? "relay" : "both", relayOnly, true);
+
+            h.Core.RaiseFailed("core exited");
+
+            Assert.IsFalse(h.Model.RelayOnlySwitchUsable, $"relayOnly={relayOnly}");
+            Assert.AreEqual(relayOnly, h.Model.RelayOnlyEnabled, $"relayOnly={relayOnly}");
+        }
+    }
+
+    [TestMethod]
+    public async Task Usable_WhileSetRelayOnlyInFlight_False()
+    {
+        var h = await StartedAsync("both", false, true);
+        var gate = new TaskCompletionSource<JsonElement>();
+        h.Core.OnAsync("set_relay_only", _ => gate.Task);
+
+        var task = h.Model.SetRelayOnlyAsync(true);
+
+        Assert.IsFalse(h.Model.RelayOnlySwitchUsable);
+        Assert.IsFalse(h.Model.RelayOnlyEnabled);
+        gate.SetResult(Status("relay", "logged_in", true, true));
+        await task;
+        Assert.IsTrue(h.Model.RelayOnlySwitchUsable);
+    }
+
+    [TestMethod]
+    public async Task Usable_WhileForwardingToggleInFlight_False()
+    {
+        var h = await StartedAsync("both", false, true);
+        var gate = new TaskCompletionSource<JsonElement>();
+        h.Core.OnAsync("set_forwarding", _ => gate.Task);
+
+        var task = h.Model.ToggleForwardingAsync();
+
+        Assert.IsFalse(h.Model.RelayOnlySwitchUsable);
+        gate.SetResult(Status("both", "logged_in", false, true));
+        await task;
+    }
+
+    [TestMethod]
+    public async Task Usable_WhileApplyAccessInFlight_False()
+    {
+        var h = await StartedAsync("both", false, true);
+        var apply = new TaskCompletionSource<JsonElement>();
+        h.Core.On("detect_access", _ => Json.Status(s =>
+        {
+            Access("relay", "logged_in", false, true)(s);
+            s["access"]!["target"] = "both";
+        }));
+        h.Core.OnAsync("apply_access", _ => apply.Task);
+
+        var rechecking = h.Model.RecheckAccessAsync();
+        await WaitUntilAsync(() => h.Core.Count("apply_access") == 1);
+
+        Assert.IsFalse(h.Model.RelayOnlySwitchUsable);
+        apply.SetResult(Status("both", "logged_in", false, true));
+        await rechecking;
+        Assert.IsTrue(h.Model.RelayOnlySwitchUsable);
+    }
+
+    #endregion
+
+    #region 第四种说明
+
+    [TestMethod]
+    public void Overview_RelayLoggedInButNotRelayOnly_SaysCouldNotSwitchToBoth()
+    {
+        var model = Pushed("relay", "logged_in", false, true).Model;
+
+        Assert.AreEqual(
+            "已登录 ChatGPT，但没能切到「官方 + 中转」，暂时只有中转模型。点「重新检测」再试。",
+            model.OverviewText);
+        Assert.IsFalse(model.RelayOnlyEnabled);
+    }
+
+    #endregion
+
+    #region 切换成功提示
+
+    const string NoticePrefix = "已切换到";
+
+    [TestMethod]
+    public async Task SetRelayOnly_ReturnedModeSameAsBefore_NoSwitchedNotice()
+    {
+        var h = LoggedInBoth(chatGptRunning: true);
+        h.Core.On("set_relay_only", _ => Status("both", "logged_in", false, true));
+
+        await h.Model.SetRelayOnlyAsync(true);
+
+        Assert.IsFalse(h.Model.Notices.Any(n => n.Title.StartsWith(NoticePrefix)));
+    }
+
+    [TestMethod]
+    public async Task SetRelayOnly_FromFourthState_ModeStaysRelay_NoSwitchedNotice()
+    {
+        var h = Pushed("relay", "logged_in", false, true);
+        h.ChatGpt.Running = true;
+        h.Core.On("set_relay_only", _ => Status("relay", "logged_in", true, true));
+
+        await h.Model.SetRelayOnlyAsync(true);
+
+        Assert.IsFalse(h.Model.Notices.Any(n => n.Title.StartsWith(NoticePrefix)));
+    }
+
+    [TestMethod]
+    public async Task SetRelayOnly_TitleFollowsModeCoreReturned()
+    {
+        var h = LoggedInBoth(chatGptRunning: true);
+        h.Core.On("set_relay_only", _ => Status("relay", "logged_in", true, true));
+
+        await h.Model.SetRelayOnlyAsync(false);
+
+        Assert.AreEqual(ToRelayTitle, h.Model.Notices.Single().Title);
+    }
+
+    [TestMethod]
+    public async Task SetRelayOnly_OnThenOff_OnlyLatestSwitchedNoticeInPlace()
+    {
+        var h = LoggedInBoth(chatGptRunning: true);
+        h.Core.On("set_relay_only", _ => Status("relay", "logged_in", true, true));
+        await h.Model.SetRelayOnlyAsync(true);
+        h.Core.On("detect_access", _ => Json.Status(s =>
+        {
+            Access("relay", "failed", true, true)(s);
+        }));
+        await h.Model.RecheckAccessAsync();
+        Assert.AreEqual(2, h.Model.Notices.Count);
+
+        h.Core.On("set_relay_only", _ => Status("both", "logged_in", false, true));
+        await h.Model.SetRelayOnlyAsync(false);
+
+        Assert.AreEqual(1, h.Model.Notices.Count(n => n.Title.StartsWith(NoticePrefix)));
+        Assert.AreEqual(2, h.Model.Notices.Count);
+        Assert.AreEqual(ToBothTitle, h.Model.Notices[0].Title);
+    }
+
+    [TestMethod]
+    public async Task ManualSwitchedNotice_ThenAutoSwitchedByRecheck_OnlyLatestKeptInPlace()
+    {
+        var h = LoggedInBoth(chatGptRunning: true);
+        h.Core.On("set_relay_only", _ => Status("relay", "logged_in", true, true));
+        await h.Model.SetRelayOnlyAsync(true);
+        Assert.AreEqual(ToRelayTitle, h.Model.Notices.Single().Title);
+        h.Core.On("detect_access", _ => Json.Status(s =>
+        {
+            Access("relay", "logged_in", false, true)(s);
+            s["access"]!["target"] = "both";
+        }));
+        h.Core.On("apply_access", _ => Status("both", "logged_in", false, true));
+
+        await h.Model.RecheckAccessAsync();
+
+        Assert.AreEqual(1, h.Core.Count("apply_access"));
+        Assert.AreEqual(1, h.Model.Notices.Count(n => n.Title.StartsWith(NoticePrefix)));
+        Assert.AreEqual(ToBothTitle, h.Model.Notices[0].Title);
+    }
+
+    #endregion
+
+    #region 检测期间切换过开关
+
+    [TestMethod]
+    public async Task Recheck_SwitchToggledMeanwhile_DetectFailed_StillWarns()
+    {
+        var h = LoggedInBoth();
+        var gate = new TaskCompletionSource<JsonElement>();
+        h.Core.OnAsync("detect_access", _ => gate.Task);
+        h.Core.On("set_relay_only", _ => Status("relay", "logged_in", true, true));
+
+        var rechecking = h.Model.RecheckAccessAsync();
+        await h.Model.SetRelayOnlyAsync(true);
+        gate.SetResult(Status("both", "failed", false, true));
+        await rechecking;
+
+        Assert.AreEqual(1, h.Model.Notices.Count(n => n.Title == "没能检测 ChatGPT 登录状态"));
+        Assert.IsTrue(h.Model.RelayOnlyEnabled);
+        Assert.AreEqual("只用中转", h.Model.AccessModeName);
     }
 
     #endregion

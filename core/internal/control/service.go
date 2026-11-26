@@ -437,8 +437,8 @@ func (s *Service) SetRelayOnly(ctx context.Context, enabled bool) (Status, error
 		switch {
 		case enabled:
 			s.accessTarget = modeRelay
-		case s.settings.LastDetectedMode != nil:
-			s.accessTarget = *s.settings.LastDetectedMode
+		case s.settings.LastDetectedMode != nil && *s.settings.LastDetectedMode == modeBoth:
+			s.accessTarget = modeBoth
 		default:
 			s.accessTarget = modeRelay
 		}
@@ -500,6 +500,7 @@ func (s *Service) ApplyAccess(ctx context.Context) (Status, error) {
 }
 
 func (s *Service) detect(ctx context.Context) error {
+	prevTarget, prevDetect := s.accessTarget, s.accessDetect
 	result := codexauth.Failed
 	if codex, err := s.locateCodex(); err == nil {
 		detect := s.opts.DetectLogin
@@ -532,6 +533,7 @@ func (s *Service) detect(ctx context.Context) error {
 	}
 	if err := s.saveSettings(); err != nil {
 		s.settings.LastDetectedMode = prevLast
+		s.accessTarget, s.accessDetect = prevTarget, prevDetect
 		return err
 	}
 	return nil

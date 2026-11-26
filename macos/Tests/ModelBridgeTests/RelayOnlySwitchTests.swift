@@ -10,12 +10,13 @@ private func statusJSON(
     detect: String = "logged_in",
     relayOnly: Bool,
     loggedIn: Bool,
-    defaultRelay: String? = "配置1"
+    defaultRelay: String? = "配置1",
+    restoreBlocked: String = ""
 ) -> String {
     """
     {"version":"1.3.0","forwarding":\(forwarding),"proxy":{"running":true,"error":null},\
     "chatgpt":{"found":true,"error":null},"default_relay":\(quoted(defaultRelay)),"relays":[],\
-    "taken_over":[],"restore_blocked":[],"config_path":"/Users/example/.codex/config.toml",\
+    "taken_over":[],"restore_blocked":[\(restoreBlocked)],"config_path":"/Users/example/.codex/config.toml",\
     "update":{"latest_version":null,"url":null},\
     "access":{"mode":"\(mode)","target":\(quoted(target ?? mode)),"detect":"\(detect)",\
     "relay_only":\(relayOnly),"logged_in":\(loggedIn)}}
@@ -100,7 +101,7 @@ final class RelayOnlySwitchTests: XCTestCase {
     }
 
     func testHelpText_RelayOtherCases() {
-        let cases: [(relayOnly: Bool, loggedIn: Bool)] = [(false, false), (true, false), (false, true)]
+        let cases: [(relayOnly: Bool, loggedIn: Bool)] = [(false, false), (true, false)]
         for c in cases {
             let h = Harness(status: statusJSON(relayOnly: c.relayOnly, loggedIn: c.loggedIn))
             XCTAssertEqual(
@@ -463,5 +464,199 @@ final class RelayOnlySwitchTests: XCTestCase {
         let dark = try darkestRed(RenderedView(MainWindow(model: enabled.model)), textContaining: "只用中转 · ")
         XCTAssertLessThan(dark, 60)
         XCTAssertGreaterThan(light, 70)
+    }
+
+    func testSwitchUsable_AfterCoreDidFail_FalseAndKeepsValue() {
+        for relayOnly in [true, false] {
+            let h = Harness(status: statusJSON(mode: relayOnly ? "relay" : "both", relayOnly: relayOnly, loggedIn: true))
+            h.model.coreDidFail()
+            XCTAssertFalse(h.model.relayOnlySwitchUsable, "relayOnly=\(relayOnly)")
+            XCTAssertEqual(h.model.relayOnlyEnabled, relayOnly)
+            XCTAssertEqual(RenderedView(MainWindow(model: h.model)).isEnabled(label: "只用中转"), false)
+        }
+    }
+
+    func testSwitchUsable_DuringSetRelayOnly_FalseAndKeepsValue() async {
+        let gate = Gate()
+        let h = Harness(
+            status: statusJSON(mode: "both", relayOnly: false, loggedIn: true),
+            responses: ["set_relay_only": result(statusJSON(mode: "relay", relayOnly: true, loggedIn: true))],
+            gates: ["set_relay_only": gate]
+        )
+        let switching = Task { await h.model.setRelayOnly(true) }
+        await awaitUntil { !h.core.calls("set_relay_only").isEmpty }
+        XCTAssertFalse(h.model.relayOnlySwitchUsable)
+        XCTAssertFalse(h.model.relayOnlyEnabled)
+        XCTAssertEqual(RenderedView(MainWindow(model: h.model)).isEnabled(label: "只用中转"), false)
+        await gate.open()
+        await switching.value
+        XCTAssertTrue(h.model.relayOnlySwitchUsable)
+    }
+
+    func testSwitchUsable_DuringSetForwarding_False() async {
+        let gate = Gate()
+        let h = Harness(
+            status: statusJSON(mode: "both", relayOnly: false, loggedIn: true),
+            responses: ["set_forwarding": result(statusJSON(mode: "both", relayOnly: false, loggedIn: true))],
+            gates: ["set_forwarding": gate]
+        )
+        let toggle = Task { await h.model.toggleForwarding(enabled: false) }
+        await awaitUntil { !h.core.calls("set_forwarding").isEmpty }
+        XCTAssertFalse(h.model.relayOnlySwitchUsable)
+        await gate.open()
+        await toggle.value
+    }
+
+    func testSwitchUsable_DuringApplyAccess_False() async {
+        let gate = Gate()
+        let h = Harness(
+            status: statusJSON(mode: "relay", target: "both", relayOnly: false, loggedIn: true),
+            responses: [
+                "detect_access": result(statusJSON(mode: "relay", target: "both", relayOnly: false, loggedIn: true)),
+                "apply_access": result(statusJSON(mode: "both", relayOnly: false, loggedIn: true)),
+            ],
+            gates: ["apply_access": gate]
+        )
+        let detect = Task { await h.model.recheckAccess() }
+        await awaitUntil { !h.core.calls("apply_access").isEmpty }
+        XCTAssertFalse(h.model.relayOnlySwitchUsable)
+        await gate.open()
+        await detect.value
+    }
+
+    func testHelpText_RelayLoggedInNotRelayOnly_ExplainsFailedSwitch() {
+        let h = Harness(status: statusJSON(relayOnly: false, loggedIn: true))
+        XCTAssertEqual(h.model.accessHelpText, "已登录 ChatGPT，但没能切到「官方 + 中转」，暂时只有中转模型。点「重新检测」再试。")
+    }
+
+    func testSetRelayOnly_NoticeTitleFollowsActualMode() async {
+        let h = Harness(
+            status: statusJSON(mode: "both", relayOnly: false, loggedIn: true),
+            responses: ["set_relay_only": result(statusJSON(mode: "relay", relayOnly: true, loggedIn: true))]
+        )
+        await h.model.setRelayOnly(false)
+        XCTAssertEqual(h.model.notices.map(\.title), ["已切换到「只用中转」"])
+    }
+
+    func testSetRelayOnly_ModeUnchanged_ShowsNoSwitchNotice() async {
+        let cases: [(before: String, after: String)] = [("both", "both"), ("relay", "relay")]
+        for c in cases {
+            let h = Harness(
+                status: statusJSON(mode: c.before, relayOnly: false, loggedIn: true),
+                responses: ["set_relay_only": result(statusJSON(mode: c.after, relayOnly: false, loggedIn: true))]
+            )
+            await h.model.setRelayOnly(true)
+            XCTAssertFalse(h.model.notices.contains { $0.title.hasPrefix("已切换到") }, c.before)
+        }
+    }
+
+    func testSetRelayOnly_OnThenOffWithinDismissDelay_SwitchNoticeReplacedInPlace() async {
+        let h = Harness(
+            status: statusJSON(mode: "both", relayOnly: false, loggedIn: true),
+            responses: ["set_relay_only": result(statusJSON(mode: "relay", relayOnly: true, loggedIn: true))]
+        )
+        h.core.enqueue("detect_access", [result(statusJSON(mode: "relay", relayOnly: true, loggedIn: true))])
+        await h.model.setRelayOnly(true)
+        await h.model.recheckAccess()
+        XCTAssertEqual(h.model.notices.map(\.title), ["已切换到「只用中转」", "接入方式没有变化"])
+        h.core.setResponse("set_relay_only", result(statusJSON(mode: "both", relayOnly: false, loggedIn: true)))
+        await h.model.setRelayOnly(false)
+        XCTAssertEqual(h.model.notices.map(\.title), ["已切换到「官方 + 中转」", "接入方式没有变化"])
+    }
+
+    func testRecheckAutoSwitch_AfterManualSwitchNotice_LeavesOnlyLatestSwitchNotice() async {
+        let h = Harness(
+            status: statusJSON(mode: "both", relayOnly: false, loggedIn: true),
+            responses: [
+                "set_relay_only": result(statusJSON(mode: "relay", relayOnly: true, loggedIn: true)),
+                "apply_access": result(statusJSON(mode: "both", relayOnly: false, loggedIn: true)),
+            ]
+        )
+        h.core.enqueue("detect_access", [result(statusJSON(mode: "relay", target: "both", relayOnly: true, loggedIn: true))])
+        await h.model.setRelayOnly(true)
+        await h.model.recheckAccess()
+        XCTAssertEqual(h.model.notices.map(\.title), ["已切换到「官方 + 中转」"])
+    }
+
+    func testRecheckAutoSwitch_ManualOnOffThenRecheck_SwitchNoticeReplacedInOriginalPosition() async {
+        let h = Harness(
+            status: statusJSON(mode: "both", relayOnly: false, loggedIn: true),
+            responses: [
+                "set_relay_only": result(statusJSON(mode: "relay", relayOnly: true, loggedIn: true)),
+                "apply_access": result(statusJSON(mode: "both", relayOnly: false, loggedIn: true)),
+            ]
+        )
+        h.core.enqueue("detect_access", [result(statusJSON(mode: "relay", target: "relay", relayOnly: true, loggedIn: true))])
+        await h.model.setRelayOnly(true)
+        await h.model.recheckAccess()
+        XCTAssertEqual(h.model.notices.map(\.title), ["已切换到「只用中转」", "接入方式没有变化"])
+        h.core.setResponse("set_relay_only", result(statusJSON(mode: "relay", relayOnly: false, loggedIn: true)))
+        h.core.enqueue("detect_access", [result(statusJSON(mode: "relay", target: "both", relayOnly: false, loggedIn: true))])
+        await h.model.setRelayOnly(false)
+        await h.model.recheckAccess()
+        XCTAssertEqual(h.core.calls("apply_access").count, 1)
+        XCTAssertEqual(h.model.notices.map(\.title), ["已切换到「官方 + 中转」", "接入方式没有变化"])
+    }
+
+    func testStaleDetect_DoesNotOverrideOtherStatusFields() async {
+        let gate = Gate()
+        let before = statusJSON(mode: "both", relayOnly: false, loggedIn: true)
+        let h = Harness(
+            status: before,
+            responses: [
+                "detect_access": result(statusJSON(mode: "both", relayOnly: false, loggedIn: true, restoreBlocked: #""a""#)),
+                "set_relay_only": result(statusJSON(mode: "relay", relayOnly: true, loggedIn: true)),
+            ],
+            gates: ["detect_access": gate]
+        )
+        let detect = Task { await h.model.recheckAccess() }
+        await awaitUntil { !h.core.calls("detect_access").isEmpty }
+        await h.model.setRelayOnly(true)
+        await gate.open()
+        await detect.value
+        XCTAssertEqual(h.model.status?.restoreBlocked, [])
+        XCTAssertTrue(h.model.relayOnlyEnabled)
+        XCTAssertEqual(h.model.status?.access?.mode, "relay")
+    }
+
+    func testStaleDetect_FailedDetect_StillShowsDetectFailedWarning() async {
+        let gate = Gate()
+        let h = Harness(
+            status: statusJSON(mode: "both", relayOnly: false, loggedIn: true),
+            responses: [
+                "detect_access": result(statusJSON(mode: "both", detect: "failed", relayOnly: false, loggedIn: true)),
+                "set_relay_only": result(statusJSON(mode: "relay", relayOnly: true, loggedIn: true)),
+            ],
+            gates: ["detect_access": gate]
+        )
+        let detect = Task { await h.model.recheckAccess() }
+        await awaitUntil { !h.core.calls("detect_access").isEmpty }
+        await h.model.setRelayOnly(true)
+        await gate.open()
+        await detect.value
+        XCTAssertTrue(h.model.notices.contains { $0.title == "没能检测 ChatGPT 登录状态" && $0.kind == .warning })
+        XCTAssertTrue(h.model.relayOnlyEnabled)
+    }
+
+    func testView_LongRelayName_HelpTextIsOneLineWithFullTooltip() async {
+        let name = String(repeating: "长", count: 16)
+        let long = Harness(status: statusJSON(relayOnly: true, loggedIn: true, defaultRelay: name))
+        let reference = Harness(status: statusJSON(mode: "both", relayOnly: false, loggedIn: true))
+        func helpElement(_ h: Harness, _ text: String) -> NSObject? {
+            RenderedView(MainWindow(model: h.model).frame(width: 520)).elements.first { element in
+                element.axString("accessibilityRole") == NSAccessibility.Role.staticText.rawValue
+                    && ["accessibilityLabel", "accessibilityValue"].contains { element.axString($0)?.contains(text) == true }
+            }
+        }
+        let full = long.model.accessHelpText ?? ""
+        XCTAssertTrue(full.contains(name))
+        let element = helpElement(long, "手动选了只用中转")
+        let ref = helpElement(reference, "官方模型在上")
+        XCTAssertNotNil(element)
+        XCTAssertNotNil(ref)
+        let height = element?.axFrame()?.height ?? 0
+        XCTAssertGreaterThan(height, 0)
+        XCTAssertLessThan(height, (ref?.axFrame()?.height ?? 0) * 1.5)
+        XCTAssertEqual(element?.axString("accessibilityHelp"), full)
     }
 }

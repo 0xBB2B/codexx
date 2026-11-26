@@ -3467,3 +3467,130 @@ func TestSetForwardingFalse_AlreadyOffWithInvalidConfigKeepsOff(t *testing.T) {
 		t.Error("settings.json 的 forwarding 应仍为 false")
 	}
 }
+
+func requireDiskSettings(t *testing.T, e *env, accessMode string, relayOnly bool) {
+	t.Helper()
+	s, err := control.LoadSettings(e.dataDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.AccessMode == nil || *s.AccessMode != accessMode {
+		t.Errorf("磁盘 access_mode = %v, want %q", s.AccessMode, accessMode)
+	}
+	if s.RelayOnly != relayOnly {
+		t.Errorf("磁盘 relay_only = %v, want %v", s.RelayOnly, relayOnly)
+	}
+}
+
+func TestSwitchRollback_SetRelayOnlyApplyFailureRestoresDiskSettings(t *testing.T) {
+	ctx := context.Background()
+	e := newEnv(t, false, withDetect(codexauth.LoggedIn))
+	e.initRelay(t)
+	if _, err := e.svc.SetForwarding(ctx, true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.svc.SetRelayOnly(ctx, true); err != nil {
+		t.Fatal(err)
+	}
+	breakRelayWrite(t, e)
+
+	_, err := e.svc.SetRelayOnly(ctx, false)
+	requireCode(t, err, "config_invalid")
+
+	requireDiskSettings(t, e, "relay", true)
+	st := e.svc.Status()
+	requireAccess(t, st, "relay", "relay", "logged_in")
+	if got := accessOf(t, st)["relay_only"]; got != true {
+		t.Errorf("relay_only = %v, want true", got)
+	}
+}
+
+func TestSwitchRollback_ApplyAccessApplyFailureRestoresDiskSettings(t *testing.T) {
+	ctx := context.Background()
+	e := newEnv(t, false, withDetect(codexauth.LoggedIn))
+	e.initRelay(t)
+	if _, err := e.svc.SetForwarding(ctx, true); err != nil {
+		t.Fatal(err)
+	}
+	e.detect.set(codexauth.NotLoggedIn)
+	if _, err := e.svc.DetectAccess(ctx); err != nil {
+		t.Fatal(err)
+	}
+	breakRelayWrite(t, e)
+
+	_, err := e.svc.ApplyAccess(ctx)
+	requireCode(t, err, "config_invalid")
+
+	requireDiskSettings(t, e, "both", false)
+	if got := accessOf(t, e.svc.Status())["mode"]; got != "both" {
+		t.Errorf("mode = %v, want both", got)
+	}
+}
+
+func TestDetectAccessSaveFailure_StatusAccessUnchanged(t *testing.T) {
+	tests := []struct {
+		name          string
+		before, after codexauth.Result
+	}{
+		{"logged_in to not_logged_in", codexauth.LoggedIn, codexauth.NotLoggedIn},
+		{"not_logged_in to logged_in", codexauth.NotLoggedIn, codexauth.LoggedIn},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := context.Background()
+			e := newEnv(t, false, withDetect(tt.before))
+			e.initRelay(t)
+			if _, err := e.svc.DetectAccess(ctx); err != nil {
+				t.Fatal(err)
+			}
+			accBefore := accessOf(t, e.svc.Status())
+			e.detect.set(tt.after)
+			lockDataDir(t, e)
+
+			st, err := e.svc.DetectAccess(ctx)
+			if err == nil {
+				t.Fatal("设置文件保存失败时应返回错误")
+			}
+			for name, got := range map[string]control.Status{"返回的状态": st, "Status()": e.svc.Status()} {
+				acc := accessOf(t, got)
+				for _, k := range []string{"target", "detect", "logged_in"} {
+					if acc[k] != accBefore[k] {
+						t.Errorf("%s access.%s = %v, want %v", name, k, acc[k], accBefore[k])
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestRelayOnly_OffWithInvalidLastDetectedFallsBackToRelay(t *testing.T) {
+	ctx := context.Background()
+	e := newEnv(t, true, withDetect(codexauth.Failed),
+		withSettings(`{"forwarding":true,"relay_only":true,"access_mode":"relay","last_detected_mode":"x"}`))
+	e.initRelay(t)
+
+	st, err := e.svc.SetRelayOnly(ctx, false)
+	if err != nil {
+		t.Fatalf("SetRelayOnly: %v", err)
+	}
+	requireAccess(t, st, "relay", "relay", "failed")
+	if got := settingsJSON(t, e)["access_mode"]; got != "relay" {
+		t.Errorf("磁盘 access_mode = %v, want relay", got)
+	}
+	if cfg := e.config(t); !isRelayConfig(cfg) {
+		t.Errorf("配置不是只用中转方式: %q", cfg)
+	}
+}
+
+func TestRelayOnly_OffWithCachedBothSelectsBoth(t *testing.T) {
+	ctx := context.Background()
+	e := newEnv(t, true, withDetect(codexauth.Failed),
+		withSettings(`{"forwarding":true,"relay_only":true,"access_mode":"relay","last_detected_mode":"both"}`))
+	e.initRelay(t)
+
+	st, err := e.svc.SetRelayOnly(ctx, false)
+	if err != nil {
+		t.Fatalf("SetRelayOnly: %v", err)
+	}
+	requireAccess(t, st, "both", "both", "failed")
+}
