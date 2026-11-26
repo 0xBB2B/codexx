@@ -39,8 +39,6 @@ public partial class MainWindow : Window
 
     public bool AllowClose { get; set; }
 
-    void OverlaySizeChanged(object sender, SizeChangedEventArgs e) => AlertHost.Width = System.Math.Max(0, Overlay.ActualWidth - 48);
-
     void Refresh()
     {
         ForwardToggle.SetCurrentValue(ToggleButton.IsCheckedProperty, model.ForwardingEnabled);

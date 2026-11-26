@@ -16,7 +16,7 @@ struct MainWindow: View {
                 StatusFooter(model: model)
             }
             .overlay(alignment: .top) {
-                AlertOverlay {
+                AlertOverlay(width: 376) {
                     NoticeStack(model: model)
                     ForEach(Array(model.banners.enumerated()), id: \.offset) { _, banner in
                         bannerView(banner)

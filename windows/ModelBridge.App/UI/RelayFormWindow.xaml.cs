@@ -38,8 +38,6 @@ public partial class RelayFormWindow : Window
 
     void OnEditorChanged(object? sender, PropertyChangedEventArgs e) => Refresh();
 
-    void OverlaySizeChanged(object sender, SizeChangedEventArgs e) => AlertHost.Width = System.Math.Max(0, Overlay.ActualWidth - 48);
-
     void Refresh()
     {
         SaveButton.Content = editor.SaveButtonText;
@@ -50,8 +48,13 @@ public partial class RelayFormWindow : Window
         shownAlert = editor.SaveAlert;
         var alerts = new List<UIElement>();
         if (editor.SaveAlert is { } alert)
-            alerts.Add(AlertView.Create(AppSeverity.Danger, alert.Title, alert.Message, () => editor.SaveAlert = null));
+        {
+            var view = AlertView.Create(AppSeverity.Danger, alert.Title, alert.Message, () => editor.SaveAlert = null);
+            view.Effect = null;
+            alerts.Add(view);
+        }
         AlertView.Fill(AlertHost, alerts);
+        AlertHost.Visibility = alerts.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
     }
 
     async void SaveClick(object sender, RoutedEventArgs e)

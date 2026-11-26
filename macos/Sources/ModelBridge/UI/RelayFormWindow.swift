@@ -19,6 +19,11 @@ struct RelayFormView: View {
             .padding(.top, 24).padding(.horizontal, 24)
             .accessibilityElement(children: .combine)
             .accessibilityAddTraits(.isHeader)
+            if let alert = model.relaySaveAlert {
+                AlertBar(tone: alert.tone, title: alert.title, detail: alert.message, onClose: { model.clearRelaySaveAlert() })
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.top, 12).padding(.horizontal, 24)
+            }
             VStack(alignment: .leading, spacing: 20) {
                 FieldRow(label: "名字", required: true, help: RelayFormCopy.nameHelp, error: model.relayFieldErrors[.name]) {
                     AppTextField(
@@ -41,7 +46,7 @@ struct RelayFormView: View {
                 }
             }
             .disabled(model.relayFormLocked)
-            .padding(.top, 12).padding(.horizontal, 24).padding(.bottom, 24)
+            .padding(.top, model.relaySaveAlert == nil ? 12 : 20).padding(.horizontal, 24).padding(.bottom, 24)
             Rectangle().fill(Palette.border).frame(height: 1)
             HStack(spacing: 12) {
                 Spacer(minLength: 0)
@@ -59,13 +64,6 @@ struct RelayFormView: View {
         }
         .frame(width: 520)
         .background(RoundedRectangle(cornerRadius: 12).fill(Palette.surface))
-        .overlay(alignment: .top) {
-            if let alert = model.relaySaveAlert {
-                AlertBar(tone: alert.tone, title: alert.title, detail: alert.message, onClose: { model.clearRelaySaveAlert() })
-                    .shadow(color: Color(hex: 0x172b3a).opacity(0.16), radius: 24, x: 0, y: 16)
-                    .padding(.top, 12).padding(.horizontal, 24)
-            }
-        }
         .preferredColorScheme(.light)
         .onAppear { DispatchQueue.main.async { nameFocused = true } }
         .accessibilityElement(children: .contain)

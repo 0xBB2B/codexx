@@ -13,6 +13,7 @@
                     <RowDefinition Height="Auto" />
                     <RowDefinition Height="Auto" />
                     <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
                 </Grid.RowDefinitions>
 
                 <StackPanel Orientation="Horizontal" Margin="24,24,24,0">
@@ -20,9 +21,11 @@
                     <TextBlock x:Name="TitleText" Style="{StaticResource CardTitle}" VerticalAlignment="Center" />
                 </StackPanel>
 
-                <ui:ConnectionForm x:Name="Form" Grid.Row="1" Margin="24,12,24,24" />
+                <StackPanel x:Name="AlertHost" Grid.Row="1" Margin="24,12,24,8" Visibility="Collapsed" />
 
-                <Border Grid.Row="2" BorderBrush="{StaticResource DividerBrush}" BorderThickness="0,1,0,0" Padding="24,16"
+                <ui:ConnectionForm x:Name="Form" Grid.Row="2" Margin="24,12,24,24" />
+
+                <Border Grid.Row="3" BorderBrush="{StaticResource DividerBrush}" BorderThickness="0,1,0,0" Padding="24,16"
                         CornerRadius="0,0,12,12">
                     <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
                         <Button x:Name="CancelButton" Content="取消" Click="CancelClick" />
@@ -30,10 +33,6 @@
                                 Click="SaveClick" />
                     </StackPanel>
                 </Border>
-
-                <Canvas Grid.RowSpan="3" SizeChanged="OverlaySizeChanged" x:Name="Overlay">
-                    <StackPanel x:Name="AlertHost" Canvas.Left="24" Canvas.Top="12" />
-                </Canvas>
             </Grid>
         </Border>
     </Grid>

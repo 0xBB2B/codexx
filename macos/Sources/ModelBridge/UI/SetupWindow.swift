@@ -21,7 +21,7 @@ struct SetupWindow: View {
             }
             .padding(24)
             .overlay(alignment: .top) {
-                AlertOverlay {
+                AlertOverlay(width: 608) {
                     NoticeStack(model: model)
                     if case .failed(let title, let detail) = model.setupPhase {
                         AlertBar(tone: .danger, title: title, detail: detail, onClose: { model.dismissSetupFailure() })

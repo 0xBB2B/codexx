@@ -231,7 +231,7 @@ public class PrototypeAlignmentTests
                 Assert.IsNotNull(UiHost.FindText(window, "没有保存"));
                 var close = UiHost.All<Button>(window).FirstOrDefault(b => b.IsVisible && b.Content as string == "");
                 Assert.IsNotNull(close, "alert close button");
-                Assert.AreEqual(before, window.ActualHeight, 0.5);
+                Assert.IsTrue(window.ActualHeight > before + 0.5, $"提示出现后窗口变高: {before} -> {window.ActualHeight}");
 
                 close.RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
                 await UiHost.Settle();
