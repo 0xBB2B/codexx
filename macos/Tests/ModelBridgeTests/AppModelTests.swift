@@ -1703,12 +1703,12 @@ final class AppModelTests: XCTestCase {
             ],
             status: try accessStatus(mode: "relay", target: "relay", detect: "not_logged_in")
         )
-        h.model.noticeAutoDismissDelay = 0.4
+        h.model.noticeAutoDismissDelay = 1
         await h.model.checkUpdate()
         try? await Task.sleep(nanoseconds: 250_000_000)
         await h.model.recheckAccess()
         XCTAssertEqual(h.model.noticeTitles, ["已是最新版本", "接入方式没有变化"])
-        try? await Task.sleep(nanoseconds: 250_000_000)
+        await waitUntil { h.model.notices.count == 1 }
         XCTAssertEqual(h.model.noticeTitles, ["接入方式没有变化"])
         await waitUntil { h.model.notices.isEmpty }
         XCTAssertTrue(h.model.notices.isEmpty)
