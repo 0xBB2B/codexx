@@ -298,13 +298,16 @@ extension AlertBar where Actions == EmptyView {
 }
 
 struct AlertOverlay<Content: View>: View {
+    let width: CGFloat
     @ViewBuilder let content: Content
 
     var body: some View {
         VStack(spacing: 8) { content }
+            .frame(width: width)
             .shadow(color: Color(hex: 0x172b3a).opacity(0.16), radius: 24, x: 0, y: 16)
             .padding(.top, 12)
-            .padding(.horizontal, 24)
+            .padding(.leading, 24)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 }
 

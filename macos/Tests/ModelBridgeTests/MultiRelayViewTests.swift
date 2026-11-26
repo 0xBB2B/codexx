@@ -237,7 +237,7 @@ final class RelayFormViewTests: XCTestCase {
         await task.value
     }
 
-    func testCoreFailure_FloatsRedAlertWithoutChangingHeight() async {
+    func testCoreFailure_InsertsRedAlertAboveFieldsAndGrowsHeight() async throws {
         let f = await ViewFixture.make(responses: ["save_relay": .failure(.remote(code: "relay_401", keys: []))])
         f.model.beginAddRelay()
         f.model.draftName = "新"
@@ -246,9 +246,15 @@ final class RelayFormViewTests: XCTestCase {
         let view = RenderedView(RelayFormView(model: f.model))
         let before = view.size.height
         await f.model.saveRelay()
-        XCTAssertTrue(view.has("没有保存"))
+        view.makeKeyOffscreen()
+        defer { view.close() }
         XCTAssertTrue(view.has("中转服务返回 401"))
-        XCTAssertEqual(view.size.height, before, accuracy: 1)
+        XCTAssertGreaterThan(view.size.height, before + 1)
+        let alert = try XCTUnwrap(view.frame(ofExactText: "没有保存"))
+        let heading = try XCTUnwrap(view.frame(ofExactText: "添加配置"))
+        let name = try XCTUnwrap(view.frame(ofExactText: "名字"))
+        XCTAssertLessThanOrEqual(alert.maxY, heading.minY)
+        XCTAssertGreaterThanOrEqual(alert.minY, name.maxY)
         XCTAssertTrue(f.model.showRelayForm)
     }
 }

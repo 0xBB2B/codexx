@@ -220,8 +220,8 @@
             </StackPanel>
         </ScrollViewer>
     </DockPanel>
-    <Canvas x:Name="Overlay" SizeChanged="OverlaySizeChanged">
-        <StackPanel x:Name="AlertHost" Canvas.Left="24" Canvas.Top="44" />
+    <Canvas>
+        <StackPanel x:Name="AlertHost" Width="376" Canvas.Left="24" Canvas.Top="44" />
     </Canvas>
     </Grid>
 </Window>

@@ -38,8 +38,6 @@ public partial class SetupWindow : Window
 
     void OnModelChanged(object? sender, PropertyChangedEventArgs e) => Refresh();
 
-    void OverlaySizeChanged(object sender, SizeChangedEventArgs e) => AlertHost.Width = System.Math.Max(0, Overlay.ActualWidth - 48);
-
     void Refresh()
     {
         if (model.Page == AppPage.Main)

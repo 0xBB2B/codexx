@@ -26,8 +26,8 @@
                         Click="FinishClick" />
             </StackPanel>
         </Grid>
-        <Canvas x:Name="Overlay" SizeChanged="OverlaySizeChanged">
-            <StackPanel x:Name="AlertHost" Canvas.Left="24" Canvas.Top="12" />
+        <Canvas>
+            <StackPanel x:Name="AlertHost" Width="608" Canvas.Left="24" Canvas.Top="12" />
         </Canvas>
     </Grid>
 </Window>
