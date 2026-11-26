@@ -37,6 +37,11 @@ type client struct {
 	events []map[string]any
 }
 
+func accessCore(v any) map[string]any {
+	full, _ := v.(map[string]any)
+	return map[string]any{"mode": full["mode"], "target": full["target"], "detect": full["detect"]}
+}
+
 func startServe(t *testing.T, opts control.Options) *client {
 	t.Helper()
 	inR, inW := io.Pipe()
@@ -627,13 +632,13 @@ func TestServe_AccessMethods(t *testing.T) {
 	e := newEnv(t, true, withDetect(codexauth.LoggedIn))
 	c := startServe(t, e.opts)
 	res := c.result("init", initParams(e))
-	if want := map[string]any{"mode": "both", "target": "both", "detect": "logged_in"}; !reflect.DeepEqual(res["access"], want) {
+	if want := map[string]any{"mode": "both", "target": "both", "detect": "logged_in"}; !reflect.DeepEqual(accessCore(res["access"]), want) {
 		t.Errorf("init access = %v, want %v", res["access"], want)
 	}
 
 	e.detect.set(codexauth.NotLoggedIn)
 	res = c.result("detect_access", nil)
-	if want := map[string]any{"mode": "both", "target": "relay", "detect": "not_logged_in"}; !reflect.DeepEqual(res["access"], want) {
+	if want := map[string]any{"mode": "both", "target": "relay", "detect": "not_logged_in"}; !reflect.DeepEqual(accessCore(res["access"]), want) {
 		t.Errorf("detect_access access = %v, want %v", res["access"], want)
 	}
 	for _, k := range []string{"version", "forwarding", "proxy", "relays", "default_relay", "config_path"} {
@@ -643,7 +648,7 @@ func TestServe_AccessMethods(t *testing.T) {
 	}
 
 	res = c.result("apply_access", map[string]any{})
-	if want := map[string]any{"mode": "relay", "target": "relay", "detect": "not_logged_in"}; !reflect.DeepEqual(res["access"], want) {
+	if want := map[string]any{"mode": "relay", "target": "relay", "detect": "not_logged_in"}; !reflect.DeepEqual(accessCore(res["access"]), want) {
 		t.Errorf("apply_access access = %v, want %v", res["access"], want)
 	}
 	if cfg := e.config(t); !isRelayConfig(cfg) {
@@ -658,7 +663,7 @@ func TestServe_AccessNullWhenForwardingOff(t *testing.T) {
 	e := newEnv(t, false, withDetect(codexauth.LoggedIn))
 	c := startServe(t, e.opts)
 	res := c.result("init", initParams(e))
-	if want := map[string]any{"mode": nil, "target": nil, "detect": nil}; !reflect.DeepEqual(res["access"], want) {
+	if want := map[string]any{"mode": nil, "target": nil, "detect": nil}; !reflect.DeepEqual(accessCore(res["access"]), want) {
 		t.Errorf("access = %v, want %v", res["access"], want)
 	}
 }
@@ -1446,7 +1451,7 @@ func TestServe_RelayOnlySurvivesSaveRelayAndRefresh(t *testing.T) {
 		t.Errorf("刷新后配置不是中转写法: %q", cfg)
 	}
 	requireRelayOnlyCatalog(t, e)
-	if want := map[string]any{"mode": "relay", "target": "relay", "detect": "not_logged_in"}; !reflect.DeepEqual(st["access"], want) {
+	if want := map[string]any{"mode": "relay", "target": "relay", "detect": "not_logged_in"}; !reflect.DeepEqual(accessCore(st["access"]), want) {
 		t.Errorf("access = %v, want %v", st["access"], want)
 	}
 }
@@ -1860,5 +1865,29 @@ func TestServe_SaveRelay_NonSuccessStatusCarriesStatusNumber(t *testing.T) {
 			}
 			requireRelaysUnchanged(t, c, before)
 		})
+	}
+}
+
+func TestServe_SetRelayOnly(t *testing.T) {
+	e := newEnv(t, true, withDetect(codexauth.LoggedIn))
+	c := startServe(t, e.opts)
+	c.result("init", initParams(e))
+
+	res := c.result("set_relay_only", map[string]any{"enabled": true})
+	acc, _ := res["access"].(map[string]any)
+	if acc["relay_only"] != true || acc["mode"] != "relay" {
+		t.Errorf("access = %v, want relay_only=true mode=relay", acc)
+	}
+	if _, ok := res["forwarding"]; !ok {
+		t.Errorf("应返回完整状态: %v", res)
+	}
+}
+
+func TestServe_SetRelayOnly_BadParams(t *testing.T) {
+	e := newEnv(t, true, withDetect(codexauth.LoggedIn))
+	c := startServe(t, e.opts)
+	c.result("init", initParams(e))
+	if code := c.errCode("set_relay_only", map[string]any{"enabled": "yes"}); code != "bad_params" {
+		t.Errorf("code = %q, want bad_params", code)
 	}
 }

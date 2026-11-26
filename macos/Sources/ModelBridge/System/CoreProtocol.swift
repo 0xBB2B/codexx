@@ -99,6 +99,8 @@ struct CoreStatus: Codable, Sendable, Equatable {
         var mode: String?
         var target: String?
         var detect: String?
+        var relayOnly: Bool?
+        var loggedIn: Bool?
     }
 
     var version: String

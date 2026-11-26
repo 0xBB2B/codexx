@@ -262,8 +262,8 @@
                             <Ellipse x:Name="Knob" Width="16" Height="16" Fill="{StaticResource BorderStrongBrush}"
                                      HorizontalAlignment="Left" Margin="3,0,0,0" />
                         </Border>
-                        <TextBlock x:Name="Label" Text="已关闭" FontSize="13" FontWeight="SemiBold" Margin="12,0,0,0" VerticalAlignment="Center"
-                                   Foreground="{StaticResource TextBrush}" />
+                        <TextBlock x:Name="Label" FontSize="13" Margin="8,0,0,0" VerticalAlignment="Center"
+                                   Foreground="{StaticResource TextBrush}"><Run Text="{Binding Content, RelativeSource={RelativeSource TemplatedParent}}" /><Run x:Name="State" Text="已关闭" FontWeight="SemiBold" /></TextBlock>
                     </StackPanel>
                     <ControlTemplate.Triggers>
                         <Trigger Property="Tag" Value="NoLabel">
@@ -273,7 +273,7 @@
                             <Setter TargetName="Track" Property="Background" Value="{StaticResource PrimaryBrush}" />
                             <Setter TargetName="Track" Property="BorderBrush" Value="{StaticResource PrimaryBrush}" />
                             <Setter TargetName="Knob" Property="Fill" Value="#FFFFFF" />
-                            <Setter TargetName="Label" Property="Text" Value="已开启" />
+                            <Setter TargetName="State" Property="Text" Value="已开启" />
                             <Trigger.EnterActions>
                                 <BeginStoryboard>
                                     <Storyboard>

@@ -745,12 +745,12 @@ final class MultiRelayAppModelTests: XCTestCase {
     func testOverview_RelayOnlyWithDefault() async {
         let h = await Harness.make(status: statusJSON(mode: "relay", defaultRelay: "中转", relays: [entry("1", "中转")]))
         XCTAssertEqual(h.model.accessModeName, "只用中转")
-        XCTAssertEqual(h.model.accessHelpText, "不用登录 ChatGPT。只有中转模型，默认选中「中转 · auto」。")
+        XCTAssertEqual(h.model.accessHelpText, "没有登录 ChatGPT，只能用中转模型，默认选中「中转 · auto」。登录后才能改接入方式。")
     }
 
     func testOverview_RelayOnlyWithoutDefault() async {
         let h = await Harness.make(status: statusJSON(mode: "relay", defaultRelay: nil, relays: [entry("1", "中转")]))
-        XCTAssertEqual(h.model.accessHelpText, "不用登录 ChatGPT。只有中转模型，没有默认选中的模型。")
+        XCTAssertEqual(h.model.accessHelpText, "没有登录 ChatGPT，只能用中转模型，没有默认选中的模型。登录后才能改接入方式。")
     }
 
     func testOverview_ForwardingOffHelp() async {

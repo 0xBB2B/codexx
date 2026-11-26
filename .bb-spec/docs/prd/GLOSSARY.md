@@ -14,7 +14,8 @@
 | local-proxy | 本工具在本机提供、只接受本机连接的转发服务；按请求里的模型把请求转到官方服务或中转 | 简体「本机转发服务」「本机代理」「本机分流」 |
 | forwarding | 本工具的开关状态：开启时 Codex 配置写入了接入项，Codex 请求经过本机转发服务；关闭时 Codex 配置是开启前的样子 | 简体「转发」 |
 | access-entries | 本工具在 Codex 用户配置里写入或移除的几项。「官方 + 中转」方式：`openai_base_url`、`model_catalog_json`、`model`、`[desktop]` 表里的 `enabled-reasoning-efforts`，以及被移除的 `model_provider`；「只用中转」方式：`model_provider`、`[model_providers.modelbridge]` 表、`model_catalog_json`、`model` | 简体「接入项」 |
-| access-mode | 转发开着时本工具改 Codex 配置的方式，由 Codex 是否已登录自动决定：「官方 + 中转」（已登录，官方模型和中转模型并列）或「只用中转」（没登录，Codex 只连本工具、不需要登录，只有中转模型） | 简体「接入方式」 |
+| access-mode | 转发开着时本工具改 Codex 配置的方式：「官方 + 中转」（官方模型和中转模型并列，Codex 用 ChatGPT 账号登录）或「只用中转」（Codex 只连本工具、不需要登录，只有中转模型）。「只用中转」开关开着时是「只用中转」；关着时由 Codex 是否已登录决定，已登录「官方 + 中转」，没登录「只用中转」 | 简体「接入方式」 |
+| relay-only-switch | 主窗口「接入方式」一行里的开关，检测到已登录时能点；打开后接入方式固定为「只用中转」，直到用户自己关掉 | 简体「「只用中转」开关」 |
 | login-start | 用户登录系统后自动启动本工具的设置，默认开启，可以在菜单里关闭 | 简体「登录时启动」 |
 | project-site | 发布在 GitHub Pages 上、介绍本工具的中英双语单页网站 | 简体「官网」 |
 | app-icon | 本工具在 macOS、Windows 上的应用图标：主色圆角底板上的白色双向箭头；菜单栏、托盘用同一图形的单色版 | 简体「应用图标」「图标」 |

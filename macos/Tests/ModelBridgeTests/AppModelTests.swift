@@ -1201,7 +1201,7 @@ final class AppModelTests: XCTestCase {
         XCTAssertEqual(h.model.accessReasonText, "· 没有检测到 ChatGPT 登录")
         XCTAssertEqual(
             h.model.accessHelpText,
-            "不用登录 ChatGPT。只有中转模型，没有默认选中的模型。"
+            "没有登录 ChatGPT，只能用中转模型，没有默认选中的模型。登录后才能改接入方式。"
         )
     }
 

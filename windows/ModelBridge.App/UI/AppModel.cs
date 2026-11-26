@@ -132,6 +132,7 @@ public sealed class AppModel : IRelayFields
     readonly IConfirmer confirmer;
     RelayEditorModel? activeEditor;
     int forwardingToggles;
+    int relayOnlyToggles;
 
     string nameInput = DefaultRelayName;
     string baseUrlInput = "";
@@ -158,6 +159,8 @@ public sealed class AppModel : IRelayFields
     bool coreRunning;
     string? accessMode;
     string? accessDetect;
+    bool relayOnly;
+    bool loggedIn;
     bool isDetectingAccess;
     bool startupAligned;
     IReadOnlyList<RelayConfig> configs = [];
@@ -313,6 +316,7 @@ public sealed class AppModel : IRelayFields
             if (!Set(ref coreRunning, value)) return;
             Raise(nameof(CoreStatusText));
             Raise(nameof(ToggleEnabled));
+            Raise(nameof(RelayOnlySwitchUsable));
         }
     }
 
@@ -323,6 +327,7 @@ public sealed class AppModel : IRelayFields
         {
             if (!Set(ref busy, value)) return;
             Raise(nameof(ToggleEnabled));
+            Raise(nameof(RelayOnlySwitchUsable));
             RebuildRelays();
         }
     }
@@ -358,11 +363,17 @@ public sealed class AppModel : IRelayFields
         : accessMode switch
         {
             "both" => "官方模型在上，中转模型在下；选官方模型时仍访问官方服务。",
-            "relay" => defaultRelay is { } name
-                ? $"不用登录 ChatGPT。只有中转模型，默认选中「{name} · auto」。"
-                : "不用登录 ChatGPT。只有中转模型，没有默认选中的模型。",
+            "relay" when !loggedIn => "没有登录 ChatGPT，只能用中转模型，" + DefaultRelayText + "登录后才能改接入方式。",
+            "relay" when relayOnly => "已登录 ChatGPT，手动选了只用中转。只有中转模型，" + DefaultRelayText,
+            "relay" => "已登录 ChatGPT，但没能切到「官方 + 中转」，暂时只有中转模型。点「重新检测」再试。",
             _ => null,
         };
+
+    public bool RelayOnlyEnabled => relayOnly;
+
+    string DefaultRelayText => defaultRelay is { } name ? $"默认选中「{name} · auto」。" : "没有默认选中的模型。";
+
+    public bool RelayOnlySwitchUsable => forwardingEnabled && loggedIn && coreRunning && !busy;
 
     const string UnsupportedHelp = "当前 ChatGPT 版本暂不支持，暂时不能打开。";
 
@@ -568,11 +579,43 @@ public sealed class AppModel : IRelayFields
         }
     }
 
+    public async Task SetRelayOnlyAsync(bool enabled)
+    {
+        if (busy) return;
+        IsBusy = true;
+        relayOnlyToggles++;
+        var previousMode = accessMode;
+        try
+        {
+            try
+            {
+                ApplyStatus(await core.CallAsync("set_relay_only", Params("enabled", enabled)));
+            }
+            catch (Exception ex) when (ex is CoreCallException or CoreProcessExitedException)
+            {
+                AddNotice(new AppNotice(AccessSwitchFailed, "没能修改 Codex 配置，接入方式保持原样。请稍后再试。"));
+                return;
+            }
+
+            RemoveNotices(AccessSwitchFailed);
+            if (!chatGpt.IsRunning() || accessMode == previousMode) return;
+            ReplaceSwitchNotices(new AppNotice(
+                $"已切换到「{ModeName(accessMode)}」",
+                RestartHint + $"重启后请新建对话：用「{ModeName(previousMode)}」聊过的旧对话接不上。",
+                AppSeverity.Success));
+        }
+        finally
+        {
+            IsBusy = false;
+        }
+    }
+
     public async Task RecheckAccessAsync()
     {
         RemoveNotices(DetectFailedTitle);
         IsDetectingAccess = true;
         var togglesBefore = forwardingToggles;
+        var relayOnlyTogglesBefore = relayOnlyToggles;
         try
         {
             JsonElement status;
@@ -587,6 +630,11 @@ public sealed class AppModel : IRelayFields
             }
 
             RemoveNotices(RecheckFailedTitle);
+            if (relayOnlyToggles != relayOnlyTogglesBefore)
+            {
+                if (Str(Prop(status, "access"), "detect") == "failed") AddNotice(DetectFailedNotice());
+                return;
+            }
             var toggledMeanwhile = forwardingToggles != togglesBefore;
             var forwardingNow = forwardingEnabled;
             ApplyStatus(status);
@@ -605,6 +653,7 @@ public sealed class AppModel : IRelayFields
             {
                 var detail = mode switch
                 {
+                    "relay" when relayOnly && loggedIn => "仍然检测到 ChatGPT 登录。你手动选了只用中转，继续只用中转模型。",
                     "relay" => "仍然没有检测到 ChatGPT 登录，继续只用中转模型。",
                     "both" => "仍然检测到 ChatGPT 登录，继续同时使用官方模型和中转模型。",
                     _ => null,
@@ -677,7 +726,7 @@ public sealed class AppModel : IRelayFields
         }
 
         if (!chatGpt.IsRunning()) return;
-        AddNotice(target == "both"
+        ReplaceSwitchNotices(target == "both"
             ? new AppNotice("已切换到「官方 + 中转」", "已检测到 ChatGPT 登录。重启 ChatGPT 后生效。", AppSeverity.Success)
             : new AppNotice("已切换到「只用中转」", "没有检测到 ChatGPT 登录。重启 ChatGPT 后生效。", AppSeverity.Success));
     }
@@ -1300,6 +1349,10 @@ public sealed class AppModel : IRelayFields
         var access = Prop(s, "access");
         accessMode = Str(access, "mode");
         accessDetect = Str(access, "detect");
+        relayOnly = Flag(access, "relay_only", false);
+        loggedIn = Flag(access, "logged_in", false);
+        Raise(nameof(RelayOnlyEnabled));
+        Raise(nameof(RelayOnlySwitchUsable));
         Raise(nameof(AccessModeName));
         Raise(nameof(AccessReasonText));
         Raise(nameof(OverviewTitle));
@@ -1425,12 +1478,36 @@ public sealed class AppModel : IRelayFields
     {
         lock (noticeLock)
         {
-            if (notices.Any(n => n.Title == notice.Title && n.Severity == notice.Severity)) return;
-            Notices = [.. notices, notice];
+            var index = notices.ToList().FindIndex(n => n.Title == notice.Title && n.Severity == notice.Severity);
+            if (index < 0) Notices = [.. notices, notice];
+            else
+            {
+                var next = notices.ToList();
+                next[index] = notice;
+                Notices = next;
+            }
         }
 
         if (notice.Severity is AppSeverity.Success or AppSeverity.Info)
             _ = DismissAfterDelayAsync(notice.Id, NoticeAutoDismissDelay);
+    }
+
+    void ReplaceSwitchNotices(AppNotice notice)
+    {
+        lock (noticeLock)
+        {
+            var list = notices.ToList();
+            var index = list.FindIndex(n => n.Title.StartsWith("已切换到"));
+            if (index < 0) list.Add(notice);
+            else
+            {
+                list.RemoveAll(n => n.Title.StartsWith("已切换到"));
+                list.Insert(index, notice);
+            }
+            Notices = list;
+        }
+
+        _ = DismissAfterDelayAsync(notice.Id, NoticeAutoDismissDelay);
     }
 
     async Task DismissAfterDelayAsync(Guid id, TimeSpan delay)

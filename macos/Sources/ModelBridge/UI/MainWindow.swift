@@ -85,6 +85,9 @@ struct ForwardingOverview: View {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(model.forwardingTitle).font(Fonts.sectionTitle).foregroundColor(Palette.text)
                     Text(subtitle).font(Fonts.caption).foregroundColor(Palette.textMuted)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                        .help(subtitle)
                 }
                 Spacer(minLength: 0)
                 SwitchRow(label: "使用中转", isOn: Binding(
@@ -97,6 +100,11 @@ struct ForwardingOverview: View {
                 HStack(spacing: 12) {
                     LabelValue(label: "接入方式", value: name, note: model.accessReasonText)
                     Spacer(minLength: 0)
+                    SwitchRow(label: "只用中转", isOn: Binding(
+                        get: { model.relayOnlyEnabled },
+                        set: { value in Task { await model.setRelayOnly(value) } }
+                    ), showsName: true, hint: subtitle)
+                    .disabled(!model.relayOnlySwitchUsable)
                     Button { Task { await model.recheckAccess() } } label: {
                         BusyLabel(text: model.isDetectingAccess ? "正在检测…" : "重新检测", busy: model.isDetectingAccess)
                     }
