@@ -153,6 +153,8 @@ public sealed class AppModel : IRelayFields
     bool chatGptFound = true;
     bool chatGptUnsupported;
     bool coreForwarding;
+    int? lastOfficialModelsRevision;
+    const string OfficialModelsUpdatedTitle = "官方模型已按当前账号更新";
     bool quitRestore;
     bool isRechecking;
     bool loginStartEnabled;
@@ -1336,6 +1338,7 @@ public sealed class AppModel : IRelayFields
         var unsupported = Str(chatgpt, "error") == "chatgpt_unsupported";
         coreForwarding = Flag(s, "forwarding", false);
         ForwardingEnabled = ForwardingUsable(s);
+        ApplyOfficialModelsRevision(s);
         ChatGptFound = found;
         ChatGptUnsupported = unsupported;
         Version = Str(s, "version") is { } v ? "v" + v : "";
@@ -1474,7 +1477,18 @@ public sealed class AppModel : IRelayFields
         ConfigPath = configPath,
     };
 
-    void AddNotice(AppNotice notice)
+    void ApplyOfficialModelsRevision(JsonElement s)
+    {
+        var field = Prop(s, "official_models_revision");
+        var current = field.ValueKind == JsonValueKind.Number && field.TryGetInt32(out var n) ? n : 0;
+        var previous = lastOfficialModelsRevision;
+        lastOfficialModelsRevision = current;
+        if (!coreForwarding) RemoveNotices(OfficialModelsUpdatedTitle);
+        else if (previous is { } p && current > p)
+            AddNotice(new AppNotice(OfficialModelsUpdatedTitle, "重启 ChatGPT 后生效。", AppSeverity.Success), autoDismiss: false);
+    }
+
+    void AddNotice(AppNotice notice, bool autoDismiss = true)
     {
         lock (noticeLock)
         {
@@ -1488,7 +1502,7 @@ public sealed class AppModel : IRelayFields
             }
         }
 
-        if (notice.Severity is AppSeverity.Success or AppSeverity.Info)
+        if (autoDismiss && notice.Severity is AppSeverity.Success or AppSeverity.Info)
             _ = DismissAfterDelayAsync(notice.Id, NoticeAutoDismissDelay);
     }
 
