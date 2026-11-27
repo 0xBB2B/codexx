@@ -1447,3 +1447,26 @@ func TestAccountModels_DropRebuildFailureRestoresListAndRetriesAfterThrottle(t *
 		return reflect.DeepEqual(e.officialSlugs(t), []any{"gpt-a", "gpt-c"})
 	})
 }
+
+func TestAccountModels_PendingSameAccountAsJustQueriedIsNotQueriedAgain(t *testing.T) {
+	e := newAcctEnv(t, cacheV)
+	e.startBoth(t)
+	gate := make(chan struct{})
+	var once sync.Once
+	release := func() { once.Do(func() { close(gate) }) }
+	t.Cleanup(release)
+	e.official.setGate(gate)
+
+	officialRequest(t, e.listenAddr, "gpt-a", tokA, acctA)
+	e.waitHits(t, 1)
+	officialRequest(t, e.listenAddr, "gpt-a", tokB, acctB)
+	officialRequest(t, e.listenAddr, "gpt-a", tokA, acctA)
+	release()
+	e.waitRevision(t, 1)
+	settle()
+
+	hits := e.official.modelsHits()
+	if len(hits) != 1 || hits[0].account != acctA {
+		t.Errorf("官方 /models 查询 = %+v, want 只有账号 A 的 1 次", hits)
+	}
+}

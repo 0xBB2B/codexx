@@ -198,6 +198,7 @@ type Service struct {
 	accountPending     *pendingQuery
 	accountDropAt      time.Time
 	accountDropRunning bool
+	accountFinishing   bool
 }
 
 type pendingQuery struct {
