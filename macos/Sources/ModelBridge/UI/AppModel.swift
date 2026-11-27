@@ -233,6 +233,8 @@ final class AppModel: ObservableObject {
     @Published var trashFailurePath: String?
 
     var noticeAutoDismissDelay: TimeInterval = 4
+    private var lastOfficialModelsRevision: Int?
+    private static let officialModelsUpdatedTitle = "官方模型已按当前账号更新"
     var onTerminate: @MainActor () -> Void = {}
     var openURL: @MainActor (URL) -> Void = { NSWorkspace.shared.open($0) }
     var onTrashFailure: @MainActor (String) async -> Void = { _ in }
@@ -884,14 +886,14 @@ final class AppModel: ObservableObject {
 
     func dismissBanner(_ banner: Banner) { dismissedBanners.insert(banner) }
 
-    private func addNotice(_ notice: Notice) {
+    private func addNotice(_ notice: Notice, autoDismiss: Bool = true) {
         if let index = notices.firstIndex(where: { $0.title == notice.title && $0.kind == notice.kind }) {
             noticeTimers.removeValue(forKey: notices[index].id)?.cancel()
             notices[index] = notice
         } else {
             notices.append(notice)
         }
-        guard notice.kind == .success || notice.kind == .info else { return }
+        guard autoDismiss, notice.kind == .success || notice.kind == .info else { return }
         let delay = noticeAutoDismissDelay
         noticeTimers[notice.id] = Task { [weak self] in
             try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
@@ -1030,11 +1032,23 @@ final class AppModel: ObservableObject {
 
     private func apply(_ value: CoreStatus) {
         status = value
+        applyOfficialModelsRevision(value)
         pruneDismissedBanners()
         if let version = value.update?.latestVersion, let url = value.update?.url {
             availableUpdate = UpdateInfo(version: version, url: url, installer: value.update?.installer ?? false)
         } else {
             availableUpdate = nil
+        }
+    }
+
+    private func applyOfficialModelsRevision(_ value: CoreStatus) {
+        let previous = lastOfficialModelsRevision
+        let current = value.officialModelsRevision ?? 0
+        lastOfficialModelsRevision = current
+        if !value.forwarding {
+            removeNotices(titled: Self.officialModelsUpdatedTitle)
+        } else if let previous, current > previous {
+            addNotice(Notice(title: Self.officialModelsUpdatedTitle, detail: "重启 ChatGPT 后生效。", kind: .success), autoDismiss: false)
         }
     }
 

@@ -4,7 +4,7 @@
 | 01 | catalog-account-slugs | done | 2026-11-27 |
 | 02 | proxy-official-hook | done | 2026-11-27 |
 | 03 | control-account-sync | pending | — |
-| 04 | macos-account-notice | in-progress | — |
+| 04 | macos-account-notice | done | 2026-11-27 |
 | 05 | windows-account-notice | in-progress | — |
 ## 当前
 阶段 1 并行组：01 catalog-account-slugs（Red）、02 proxy-official-hook（Red）、04 macos-account-notice（Red）、05 windows-account-notice（Red）。
