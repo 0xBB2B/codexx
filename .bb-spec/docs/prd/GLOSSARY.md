@@ -6,6 +6,7 @@
 |---|---|---|
 | relay | 用户另外购买、通过 Base URL 和 API Key 访问的第三方模型服务，提供 Responses API；公开内容里不出现它的真实名称和地址 | 简体「中转」；English「relay」 |
 | official-model | ChatGPT 当前版本自带模型清单里的模型，请求最终发往官方服务 | 简体「官方模型」 |
+| account-model-list | OpenAI 按当前登录的 ChatGPT 账号返回的、这个账号能用的官方模型名单；不同等级的账号不一样 | 简体「账号模型列表」 |
 | relay-model | 某个中转配置的模型列表接口返回的模型，请求最终发往该配置的中转服务；Codex 里显示为「<配置名> · <模型>」 | 简体「中转模型」 |
 | relay-config | 一组「名字 + Base URL + API Key」，代表一家中转服务；最多 10 个、同时生效，名字不区分大小写不能重复 | 简体「中转配置」「配置」 |
 | auto-model | 中转提供的、由中转自动选择具体模型的模型，模型名为 `auto` | 简体「auto 模型」「auto 智能模型」 |
