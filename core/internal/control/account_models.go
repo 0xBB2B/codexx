@@ -67,12 +67,13 @@ func (s *Service) syncAccountModels(h http.Header) {
 	}
 
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	if !s.forwarding || s.proxy == nil || s.accessMode != modeBoth {
-		return
+	active := s.forwarding && s.proxy != nil && s.accessMode == modeBoth
+	var codex string
+	if active {
+		codex, err = s.locateCodex()
 	}
-	codex, err := s.locateCodex()
-	if err != nil {
+	s.mu.Unlock()
+	if !active || err != nil {
 		return
 	}
 	official, err := catalog.LoadOfficial(ctx, codex)
@@ -81,6 +82,12 @@ func (s *Service) syncAccountModels(h http.Header) {
 	}
 	next := officialSlugSet(catalog.IntersectOfficial(official, slugs))
 	if len(next) == 0 {
+		return
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.forwarding || s.proxy == nil || s.accessMode != modeBoth {
 		return
 	}
 	if err := catalog.NewStore(s.opts.DataDir).SaveAccountModels(slugs); err != nil {

@@ -245,20 +245,10 @@ func FilterOfficial(official []Entry, accountSlugs []string) []Entry {
 	if len(accountSlugs) == 0 {
 		return official
 	}
-	allowed := make(map[string]bool, len(accountSlugs))
-	for _, slug := range accountSlugs {
-		allowed[slug] = true
+	if out := IntersectOfficial(official, accountSlugs); len(out) > 0 {
+		return out
 	}
-	var out []Entry
-	for _, e := range official {
-		if slug, ok := e["slug"].(string); ok && allowed[slug] {
-			out = append(out, e)
-		}
-	}
-	if len(out) == 0 {
-		return official
-	}
-	return out
+	return official
 }
 
 func IntersectOfficial(official []Entry, slugs []string) []Entry {

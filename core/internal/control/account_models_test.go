@@ -3,6 +3,7 @@ package control_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -710,4 +711,111 @@ func TestAccountModels_HangingQueryGivesUpAfterFiveSeconds(t *testing.T) {
 	e.clock.advance(31 * time.Minute)
 	officialRequest(t, e.listenAddr, "gpt-a", tokA, acctA)
 	e.waitHits(t, 2)
+}
+
+func (e *acctEnv) slowCodex(t *testing.T) (started, finished string) {
+	t.Helper()
+	dir := filepath.Dir(e.codexPath)
+	started, finished = filepath.Join(dir, "started"), filepath.Join(dir, "finished")
+	script := "#!/bin/sh\ntouch '" + started + "'\nsleep 1\ntouch '" + finished + "'\ncat '" + filepath.Join(dir, "out.json") + "'\n"
+	if err := os.WriteFile(e.codexPath, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return started, finished
+}
+
+func TestAccountModels_SameSetDoesNotBlockControlCommands(t *testing.T) {
+	e := newAcctEnv(t, cacheV)
+	e.startBoth(t)
+	e.official.setList(acctA, "gpt-a", "gpt-c")
+	started, finished := e.slowCodex(t)
+
+	officialRequest(t, e.listenAddr, "gpt-a", tokA, acctA)
+	waitUntil(t, "后台查询启动 codex", func() bool { return exists(started) })
+
+	begin := time.Now()
+	e.svc.Status()
+	if d := time.Since(begin); d > 500*time.Millisecond {
+		t.Errorf("后台查询期间 Status 耗时 %v, want < 500ms", d)
+	}
+	waitUntil(t, "codex 结束", func() bool { return exists(finished) })
+	settle()
+}
+
+func TestAccountModels_ModeChangeDuringQueryDiscardsResult(t *testing.T) {
+	tests := []struct {
+		name   string
+		change func(t *testing.T, e *acctEnv)
+	}{
+		{"关闭转发", func(t *testing.T, e *acctEnv) {
+			if _, err := e.svc.SetForwarding(context.Background(), false); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"只用中转", func(t *testing.T, e *acctEnv) {
+			if _, err := e.svc.SetRelayOnly(context.Background(), true); err != nil {
+				t.Fatal(err)
+			}
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			e := newAcctEnv(t, cacheV)
+			e.startBoth(t)
+			e.official.setList(acctA, "gpt-a", "gpt-b")
+			started, finished := e.slowCodex(t)
+
+			officialRequest(t, e.listenAddr, "gpt-a", tokA, acctA)
+			waitUntil(t, "后台查询启动 codex", func() bool { return exists(started) })
+			tt.change(t, e)
+			waitUntil(t, "codex 结束", func() bool { return exists(finished) })
+			settle()
+
+			if exists(e.accountFile()) {
+				t.Error("查询期间模式变了，不该写 account-models.json")
+			}
+			if got := e.revision(t); got != 0 {
+				t.Errorf("revision = %d, want 0", got)
+			}
+		})
+	}
+}
+
+type recordingTransport struct {
+	mu   sync.Mutex
+	urls []string
+}
+
+func (r *recordingTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	r.mu.Lock()
+	r.urls = append(r.urls, req.URL.String())
+	r.mu.Unlock()
+	return nil, errors.New("blocked in test")
+}
+
+func TestAccountModels_EmptyOfficialURLQueriesDefaultAddress(t *testing.T) {
+	rec := &recordingTransport{}
+	orig := http.DefaultTransport
+	http.DefaultTransport = rec
+	t.Cleanup(func() { http.DefaultTransport = orig })
+
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.toml")
+	cache := `{"client_version":"0.130.0-alpha.2","models":[]}`
+	if err := os.WriteFile(filepath.Join(dir, "models_cache.json"), []byte(cache), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s := control.NewService(control.Options{DataDir: filepath.Join(dir, "data"), ConfigPath: configPath})
+
+	h := http.Header{}
+	h.Set("Authorization", "Bearer tok-example-aaa")
+	h.Set("ChatGPT-Account-ID", "acct-example-aaa")
+	control.SyncAccountModels(s, h)
+
+	rec.mu.Lock()
+	defer rec.mu.Unlock()
+	want := "https://chatgpt.com/backend-api/codex/models?client_version=0.130.0"
+	if len(rec.urls) != 1 || rec.urls[0] != want {
+		t.Errorf("查询地址 = %v, want [%s]", rec.urls, want)
+	}
 }
