@@ -31,6 +31,7 @@ type Config struct {
 	OfficialChatGPTURL string
 	LogOutput          io.Writer
 	DataDir            string
+	OnOfficialRequest  func(http.Header)
 }
 
 type Error struct {
@@ -58,6 +59,7 @@ type Server struct {
 	summaryTransport   http.RoundTripper
 	httpServer         *http.Server
 	listener           net.Listener
+	onOfficialRequest  func(http.Header)
 }
 
 func New(cfg Config) *Server {
@@ -66,6 +68,7 @@ func New(cfg Config) *Server {
 		officialAPIURL:     cfg.OfficialAPIURL,
 		officialChatGPTURL: cfg.OfficialChatGPTURL,
 		logOutput:          cfg.LogOutput,
+		onOfficialRequest:  cfg.OnOfficialRequest,
 	}
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.ResponseHeaderTimeout = ResponseHeaderTimeout
@@ -227,6 +230,9 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	dest = "official"
+	if s.onOfficialRequest != nil && r.Header.Get("ChatGPT-Account-ID") != "" {
+		s.onOfficialRequest(r.Header.Clone())
+	}
 	body := raw
 	opts := forwardOpts{}
 	if out, changed, err := normalize.ForOfficial(plain, s.reasoningIDs); err == nil && changed {

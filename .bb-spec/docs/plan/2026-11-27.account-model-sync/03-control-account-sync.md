@@ -52,10 +52,10 @@ PROTOCOL.md 的 Status 示例加这一项，并在字段说明里加一段：
 | `Options.Now`（新字段） | 取当前时间，测试用来拨快 1 小时；nil 用 time.Now |
 | `Status.OfficialModelsRevision`（新字段） | 见成品定义 |
 | `Service.startProxy`（修改） | 构造 proxy.Config 时设 OnOfficialRequest |
-| `Service.rebuild`（修改） | 把存下的名单放进 BuildOptions.AccountSlugs；记录当前官方模型集合 |
+| `Service.rebuild`（修改） | 把存下的名单放进 BuildOptions.AccountModels；记录当前官方模型集合 |
 | `Service.statusLocked`（修改） | 填 OfficialModelsRevision |
 ## 协作关系
-proxy 官方分支 → onOfficialRequest（持锁判断时机、标记查询中）→ go syncAccountModels → fetchAccountSlugs（net/http，发往官方）→ catalog.Store.SaveAccountSlugs → catalog.Build（AccountSlugs）→ notifyLocked。依赖 catalog-account-slugs、proxy-official-hook。
+proxy 官方分支 → onOfficialRequest（持锁判断时机、标记查询中）→ go syncAccountModels → fetchAccountSlugs（net/http，发往官方）→ catalog.Store.SaveAccountModels → catalog.Build（AccountModels）→ notifyLocked。依赖 catalog-account-slugs、proxy-official-hook。
 ## 验证方式
 - 测试入口：control 包现有 newEnv（Options.OfficialChatGPTURL 指向 httptest 假官方服务，假服务对 /models 按 ChatGPT-Account-ID 返回不同名单，同时承接 /responses）；writeModelsCache 写入含 client_version 的缓存；Options.Now 用可拨动的假时钟。经本机转发服务发带账号标识的官方请求。
 - 预期结果：

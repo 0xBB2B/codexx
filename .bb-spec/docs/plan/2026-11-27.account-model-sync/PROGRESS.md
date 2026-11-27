@@ -2,7 +2,7 @@
 | 序号 | Plan | 状态 | 完成时间 |
 |---|---|---|---|
 | 01 | catalog-account-slugs | done | 2026-11-27 |
-| 02 | proxy-official-hook | in-progress | — |
+| 02 | proxy-official-hook | done | 2026-11-27 |
 | 03 | control-account-sync | pending | — |
 | 04 | macos-account-notice | in-progress | — |
 | 05 | windows-account-notice | in-progress | — |

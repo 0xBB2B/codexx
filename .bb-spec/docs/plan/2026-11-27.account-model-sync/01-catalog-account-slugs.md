@@ -28,9 +28,9 @@ description: catalog 用调用方给的账号模型名单过滤官方模型，�
 ### core/internal/catalog/catalog.go
 | 函数名 | 职责 |
 |---|---|
-| `BuildOptions.AccountSlugs`（新字段） | 调用方查到的账号模型名单；nil 表示没有，按 ModelsCachePath 过滤 |
-| `ErrNoAccountOverlap`（新错误） | 显式名单与自带清单交集为空 |
-| `Build`（修改） | 有 AccountSlugs 时按它过滤，交集为空返回 ErrNoAccountOverlap 且不写文件；否则维持现状 |
+| `BuildOptions.AccountModels`（新字段） | 调用方查到的账号模型名单；nil 表示没有，按 ModelsCachePath 过滤 |
+| `ErrNoAccountModels`（新错误） | 显式名单与自带清单交集为空 |
+| `Build`（修改） | 有 AccountSlugs 时按它过滤，交集为空返回 ErrNoAccountModels 且不写文件；否则维持现状 |
 ### core/internal/catalog/merge.go
 | 函数名 | 职责 |
 |---|---|
@@ -38,14 +38,14 @@ description: catalog 用调用方给的账号模型名单过滤官方模型，�
 ### core/internal/catalog/store.go
 | 函数名 | 职责 |
 |---|---|
-| `Store.SaveAccountSlugs`（新） | 按成品格式写 account-models.json |
-| `Store.LoadAccountSlugs`（新） | 读回名单，异常情况返回 nil |
+| `Store.SaveAccountModels`（新） | 按成品格式写 account-models.json |
+| `Store.LoadAccountModels`（新） | 读回名单，异常情况返回 nil |
 ## 协作关系
 Build → LoadOfficial → （AccountSlugs 非 nil：IntersectOfficial；否则 FilterOfficial(AccountSlugs(ModelsCachePath))）。control 在 03 里调用 Store 存取名单并把名单放进 BuildOptions。无外部依赖。
 ## 验证方式
 - 测试入口：`catalog.Build`（用现有 catalog 测试里的假 codex 程序）、`catalog.Store` 的存取方法。
 - 测试输入：自带清单含 a、b、c；AccountSlugs 分别为 [b, x]、[x, y]、nil（配 models_cache.json 含 a）。
-- 预期结果：[b, x] → 官方条目只有 b；[x, y] → 返回 ErrNoAccountOverlap，目录文件不存在或保持旧内容；nil → 按 models_cache 只有 a。
+- 预期结果：[b, x] → 官方条目只有 b；[x, y] → 返回 ErrNoAccountModels，目录文件不存在或保持旧内容；nil → 按 models_cache 只有 a。
 - [ ] SaveAccountSlugs 后文件内容是 `{"slugs":[...]}`，LoadAccountSlugs 读回同样的名单
 - [ ] 文件缺失、内容坏掉、slugs 为空 → LoadAccountSlugs 返回 nil
 - [ ] RelayOnly 时 AccountSlugs 不影响结果（没有官方条目）
