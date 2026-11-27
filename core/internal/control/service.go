@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -33,6 +34,7 @@ var uninstallFiles = []string{
 	"access-state.json",
 	"relay-models.json",
 	"relay-reasoning-ids.json",
+	"account-models.json",
 	settingsFile,
 	logFile,
 }
@@ -58,6 +60,7 @@ type Options struct {
 	UpdateRepository   string
 	UpdateClock        update.Clock
 	DetectLogin        func(ctx context.Context, codexPath string) codexauth.Result
+	Now                func() time.Time
 }
 
 const (
@@ -118,6 +121,8 @@ type Status struct {
 	ConfigPath     string             `json:"config_path"`
 	Update         UpdateInfo         `json:"update"`
 	Access         AccessStatus       `json:"access"`
+
+	OfficialModelsRevision int `json:"official_models_revision"`
 }
 
 type RelayInput struct {
@@ -181,6 +186,24 @@ type Service struct {
 	accessMode     string
 	accessTarget   string
 	accessDetect   string
+
+	officialSet      []string
+	officialRevision int
+
+	accountMu          sync.Mutex
+	accountID          string
+	accountQueried     bool
+	accountQueriedAt   time.Time
+	accountQuerying    bool
+	accountPending     *pendingQuery
+	accountDropAt      time.Time
+	accountDropRunning bool
+}
+
+type pendingQuery struct {
+	drop    bool
+	account string
+	header  http.Header
 }
 
 func NewService(opts Options) *Service {
@@ -701,7 +724,7 @@ func (s *Service) tryActivate(ctx context.Context) error {
 			return err
 		}
 	}
-	if err := s.rebuild(ctx, fetchAll(s.relays)); err != nil {
+	if err := s.rebuild(ctx, fetchAll(s.relays), nil, catalog.NewStore(s.opts.DataDir).LoadAccountModels()); err != nil {
 		return err
 	}
 	return s.enable()
@@ -742,11 +765,13 @@ func (s *Service) refreshRelay(ctx context.Context, plan relayPlan) error {
 		return s.probe(ctx, plan)
 	}
 	files := s.dataFiles(plan)
-	err := s.rebuild(ctx, plan)
+	prevOfficialSet := s.officialSet
+	err := s.rebuild(ctx, plan, nil, catalog.NewStore(s.opts.DataDir).LoadAccountModels())
 	if err == nil {
 		err = s.enable()
 	}
 	if err != nil {
+		s.officialSet = prevOfficialSet
 		if restoreErr := files.restore(); restoreErr != nil {
 			s.proxyErr, s.restoreFailed = errCode(restoreErr), true
 		}
@@ -876,7 +901,7 @@ func (s *Service) probe(ctx context.Context, plan relayPlan) error {
 	return nil
 }
 
-func (s *Service) rebuild(ctx context.Context, plan relayPlan) error {
+func (s *Service) rebuild(ctx context.Context, plan relayPlan, official []catalog.Entry, accountModels []string) error {
 	codex, err := s.locateCodex()
 	if err != nil {
 		return err
@@ -888,14 +913,17 @@ func (s *Service) rebuild(ctx context.Context, plan relayPlan) error {
 			Mode: plan.mode[r.id], Models: plan.models[r.id],
 		})
 	}
-	res, err := catalog.Build(ctx, catalog.BuildOptions{
+	buildOpts := catalog.BuildOptions{
 		CodexPath:       codex,
 		Relays:          sources,
 		RelayTimeout:    catalog.RelayTimeout,
 		DataDir:         s.opts.DataDir,
 		ModelsCachePath: s.modelsCachePath(),
 		RelayOnly:       s.accessMode == modeRelay,
-	})
+		AccountModels:   accountModels,
+		Official:        official,
+	}
+	res, err := catalog.Build(ctx, buildOpts)
 	if err != nil {
 		return err
 	}
@@ -914,6 +942,15 @@ func (s *Service) rebuild(ctx context.Context, plan relayPlan) error {
 		infos[r.ID] = info
 	}
 	s.relayInfos, s.relayShown, s.shownKnown, s.routes, s.levels = infos, res.RelayShown, true, res.Routes, res.ReasoningLevels
+	var shownOfficial []catalog.Entry
+	for _, m := range res.Models {
+		if slug, ok := m["slug"].(string); ok {
+			if _, isRelay := res.Routes[slug]; !isRelay {
+				shownOfficial = append(shownOfficial, m)
+			}
+		}
+	}
+	s.officialSet = officialSlugSet(shownOfficial)
 	s.defaultModel, s.defaultRelay = res.DefaultModel, res.Routes[res.DefaultModel].ID
 	s.pushRelay()
 	return nil
@@ -1059,6 +1096,7 @@ func (s *Service) startProxy() error {
 		OfficialChatGPTURL: s.opts.OfficialChatGPTURL,
 		LogOutput:          f,
 		DataDir:            s.opts.DataDir,
+		OnOfficialRequest:  s.onOfficialRequest,
 	})
 	if err := p.Start(); err != nil {
 		_ = f.Close()
@@ -1121,6 +1159,8 @@ func (s *Service) statusLocked() Status {
 		ConfigPath:     s.configPath,
 		Update:         s.update,
 		Access:         AccessStatus{Mode: optional(s.accessMode), Target: optional(s.accessTarget), Detect: optional(s.accessDetect), RelayOnly: s.settings.RelayOnly, LoggedIn: s.settings.LastDetectedMode != nil && *s.settings.LastDetectedMode == modeBoth},
+
+		OfficialModelsRevision: s.officialRevision,
 	}
 	return st
 }

@@ -18,10 +18,12 @@ public sealed class CoreClient : ICoreClient
         process = new CoreProcess(options, () => init);
         process.StatusReceived += status => ui.InvokeAsync(() => StatusReceived?.Invoke(status));
         process.Failed += reason => ui.InvokeAsync(() => Failed?.Invoke(reason));
+        process.Restarted += () => ui.InvokeAsync(() => Restarted?.Invoke());
     }
 
     public event Action<JsonElement>? StatusReceived;
     public event Action<string>? Failed;
+    public event Action? Restarted;
 
     public Task StartAsync(CoreInitParams initParams)
     {

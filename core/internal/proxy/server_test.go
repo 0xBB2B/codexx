@@ -618,3 +618,216 @@ func TestStart_OtherListenFailure(t *testing.T) {
 		t.Fatalf("错误码 = %q", pe.Code)
 	}
 }
+
+type headerRecorder struct {
+	mu   sync.Mutex
+	seen []http.Header
+}
+
+func (r *headerRecorder) record(h http.Header) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.seen = append(r.seen, h)
+}
+
+func (r *headerRecorder) calls() []http.Header {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]http.Header(nil), r.seen...)
+}
+
+func newEnvWithOfficialHook(t *testing.T, hook func(http.Header), relayOnly bool) *testEnv {
+	t.Helper()
+	e := &testEnv{
+		api:     newFakeUpstream(t, nil),
+		chatgpt: newFakeUpstream(t, nil),
+		relay:   newFakeUpstream(t, nil),
+		log:     &syncBuffer{},
+	}
+	e.srv = proxy.New(proxy.Config{
+		OfficialAPIURL:     e.api.URL + "/v1",
+		OfficialChatGPTURL: e.chatgpt.URL + "/backend-api/codex",
+		LogOutput:          e.log,
+		OnOfficialRequest:  hook,
+	})
+	e.srv.SetRelay(proxy.RelayConfig{
+		Routes:    map[string]proxy.RelayTarget{relayModel: e.target(relayOrigName)},
+		RelayOnly: relayOnly,
+	})
+	e.front = httptest.NewServer(e.srv.Handler())
+	t.Cleanup(e.front.Close)
+	return e
+}
+
+var officialHdr = map[string]string{
+	"Authorization":      officialKey,
+	"ChatGPT-Account-ID": accountID,
+}
+
+func TestOfficialHook_CalledOncePerAccountRequest(t *testing.T) {
+	t.Parallel()
+	rec := &headerRecorder{}
+	e := newEnvWithOfficialHook(t, rec.record, false)
+	resp, body := e.do(t, http.MethodPost, "/v1/responses", officialHdr, []byte(`{"model":"gpt-a"}`))
+	if resp.StatusCode != http.StatusOK || string(body) != upstreamReply {
+		t.Fatalf("响应 = %d %s", resp.StatusCode, body)
+	}
+	e.chatgpt.onlyHit(t)
+	calls := rec.calls()
+	if len(calls) != 1 {
+		t.Fatalf("回调应恰好 1 次，实际 %d 次", len(calls))
+	}
+	if got := calls[0].Get("Authorization"); got != officialKey {
+		t.Fatalf("回调拿到的 Authorization = %q", got)
+	}
+	if got := calls[0].Get("ChatGPT-Account-ID"); got != accountID {
+		t.Fatalf("回调拿到的 ChatGPT-Account-ID = %q", got)
+	}
+}
+
+func TestOfficialHook_CalledForEachRequest(t *testing.T) {
+	t.Parallel()
+	rec := &headerRecorder{}
+	e := newEnvWithOfficialHook(t, rec.record, false)
+	for range 3 {
+		e.do(t, http.MethodPost, "/v1/responses", officialHdr, []byte(`{"model":"gpt-a"}`))
+	}
+	if n := len(rec.calls()); n != 3 {
+		t.Fatalf("3 个请求应触发 3 次回调，实际 %d 次", n)
+	}
+}
+
+func TestOfficialHook_NotCalled(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name      string
+		relayOnly bool
+		hdr       map[string]string
+		body      string
+	}{
+		{"中转模型请求", false, nil, `{"model":"` + relayModel + `"}`},
+		{"带账号标识的中转模型请求", false, officialHdr, `{"model":"` + relayModel + `"}`},
+		{"只用中转下被拒绝的官方请求", true, officialHdr, `{"model":"gpt-a"}`},
+		{"只用中转下被拒绝且不带账号标识", true, map[string]string{"Authorization": officialKey}, `{"model":"gpt-a"}`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			rec := &headerRecorder{}
+			e := newEnvWithOfficialHook(t, rec.record, tt.relayOnly)
+			e.do(t, http.MethodPost, "/v1/responses", tt.hdr, []byte(tt.body))
+			if n := len(rec.calls()); n != 0 {
+				t.Fatalf("不应调用回调，实际 %d 次", n)
+			}
+		})
+	}
+}
+
+func TestOfficialHook_CalledOnceForRequestWithoutAccountID(t *testing.T) {
+	t.Parallel()
+	hdr := map[string]string{"Authorization": officialKey}
+	send := func(hook func(http.Header)) (*http.Response, []byte, upstreamHit) {
+		e := newEnvWithOfficialHook(t, hook, false)
+		resp, body := e.do(t, http.MethodPost, "/v1/responses", hdr, []byte(`{"model":"gpt-a"}`))
+		return resp, body, e.api.onlyHit(t)
+	}
+	rec := &headerRecorder{}
+	baseResp, baseBody, baseHit := send(nil)
+	hookResp, hookBody, hookHit := send(rec.record)
+
+	calls := rec.calls()
+	if len(calls) != 1 {
+		t.Fatalf("回调应恰好 1 次，实际 %d 次", len(calls))
+	}
+	if got := calls[0].Get("Authorization"); got != officialKey {
+		t.Errorf("回调拿到的 Authorization = %q", got)
+	}
+	if _, ok := calls[0]["Chatgpt-Account-Id"]; ok {
+		t.Errorf("回调头里不该有 ChatGPT-Account-ID：%v", calls[0])
+	}
+	if hookResp.StatusCode != baseResp.StatusCode || !bytes.Equal(hookBody, baseBody) {
+		t.Fatalf("响应不一致：%d %s 对 %d %s", hookResp.StatusCode, hookBody, baseResp.StatusCode, baseBody)
+	}
+	if hookHit.Path != baseHit.Path || hookHit.Method != baseHit.Method || !bytes.Equal(hookHit.Body, baseHit.Body) {
+		t.Fatalf("上游请求不一致：%+v 对 %+v", hookHit, baseHit)
+	}
+	for _, k := range []string{"Authorization", "ChatGPT-Account-ID", "Content-Length"} {
+		if hookHit.Header.Get(k) != baseHit.Header.Get(k) {
+			t.Errorf("上游收到的 %s 不一致：%q 对 %q", k, hookHit.Header.Get(k), baseHit.Header.Get(k))
+		}
+	}
+}
+
+func TestOfficialHook_RelayRequestStillWithoutOfficialHeaders(t *testing.T) {
+	t.Parallel()
+	rec := &headerRecorder{}
+	e := newEnvWithOfficialHook(t, rec.record, false)
+	e.do(t, http.MethodPost, "/v1/responses", officialHdr, []byte(`{"model":"`+relayModel+`"}`))
+	hit := e.relay.onlyHit(t)
+	if hit.Header.Get("ChatGPT-Account-ID") != "" {
+		t.Fatalf("中转不应收到 ChatGPT-Account-ID：%q", hit.Header.Get("ChatGPT-Account-ID"))
+	}
+	if hit.Header.Get("Authorization") != "Bearer "+relayKey {
+		t.Fatalf("中转应收到中转 Key，实际 %q", hit.Header.Get("Authorization"))
+	}
+}
+
+func TestOfficialHook_ForwardingUnchangedByHook(t *testing.T) {
+	t.Parallel()
+	send := func(hook func(http.Header)) (*http.Response, []byte, upstreamHit) {
+		e := newEnvWithOfficialHook(t, hook, false)
+		resp, body := e.do(t, http.MethodPost, "/v1/responses", officialHdr, []byte(`{"model":"gpt-a"}`))
+		return resp, body, e.chatgpt.onlyHit(t)
+	}
+	baseResp, baseBody, baseHit := send(nil)
+	hookResp, hookBody, hookHit := send(func(http.Header) {})
+
+	if hookResp.StatusCode != baseResp.StatusCode || !bytes.Equal(hookBody, baseBody) {
+		t.Fatalf("响应不一致：%d %s 对 %d %s", hookResp.StatusCode, hookBody, baseResp.StatusCode, baseBody)
+	}
+	if hookHit.Path != baseHit.Path || hookHit.Method != baseHit.Method || !bytes.Equal(hookHit.Body, baseHit.Body) {
+		t.Fatalf("上游请求不一致：%+v 对 %+v", hookHit, baseHit)
+	}
+	for _, k := range []string{"Authorization", "ChatGPT-Account-ID", "Content-Length"} {
+		if hookHit.Header.Get(k) != baseHit.Header.Get(k) {
+			t.Errorf("上游收到的 %s 不一致：%q 对 %q", k, hookHit.Header.Get(k), baseHit.Header.Get(k))
+		}
+	}
+}
+
+func TestOfficialHook_MutatingCopyDoesNotAffectForwarding(t *testing.T) {
+	t.Parallel()
+	e := newEnvWithOfficialHook(t, func(h http.Header) {
+		h.Del("Authorization")
+		h.Set("ChatGPT-Account-ID", "acct-tampered")
+		h.Set("X-Injected", "1")
+	}, false)
+	resp, body := e.do(t, http.MethodPost, "/v1/responses", officialHdr, []byte(`{"model":"gpt-a"}`))
+	if resp.StatusCode != http.StatusOK || string(body) != upstreamReply {
+		t.Fatalf("响应 = %d %s", resp.StatusCode, body)
+	}
+	hit := e.chatgpt.onlyHit(t)
+	if hit.Header.Get("Authorization") != officialKey {
+		t.Fatalf("上游 Authorization = %q，应不受回调修改影响", hit.Header.Get("Authorization"))
+	}
+	if hit.Header.Get("ChatGPT-Account-ID") != accountID {
+		t.Fatalf("上游 ChatGPT-Account-ID = %q，应不受回调修改影响", hit.Header.Get("ChatGPT-Account-ID"))
+	}
+	if hit.Header.Get("X-Injected") != "" {
+		t.Fatalf("回调里加的头不应转发到上游")
+	}
+}
+
+func TestOfficialHook_HeadersNotLogged(t *testing.T) {
+	t.Parallel()
+	rec := &headerRecorder{}
+	e := newEnvWithOfficialHook(t, rec.record, false)
+	e.do(t, http.MethodPost, "/v1/responses", officialHdr, []byte(`{"model":"gpt-a"}`))
+	waitLog(t, e.log, "200")
+	logged := e.log.String()
+	for _, forbidden := range []string{officialKey, "sk-official-0000", "Authorization", accountID} {
+		if strings.Contains(logged, forbidden) {
+			t.Errorf("日志里出现了不该记录的内容 %q：%s", forbidden, logged)
+		}
+	}
+}

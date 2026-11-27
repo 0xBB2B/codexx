@@ -11,6 +11,7 @@ import (
 const (
 	legacyRelayModelsFile = "relay-models.json"
 	catalogFile           = "model-bridge-catalog.json"
+	accountModelsFile     = "account-models.json"
 )
 
 type Store struct{ dir string }
@@ -53,6 +54,28 @@ func (s *Store) LoadRelayModels(id string) ([]RelayModel, time.Time, bool, error
 }
 
 func relayModelsFileName(id string) string { return "relay-models-" + id + ".json" }
+
+func (s *Store) SaveAccountModels(slugs []string) error {
+	return s.writeJSON(accountModelsFile, map[string]any{"slugs": slugs})
+}
+
+func (s *Store) LoadAccountModels() []string {
+	raw, err := os.ReadFile(filepath.Join(s.dir, accountModelsFile))
+	if err != nil {
+		return nil
+	}
+	var file struct {
+		Slugs []string `json:"slugs"`
+	}
+	if json.Unmarshal(raw, &file) != nil || len(file.Slugs) == 0 {
+		return nil
+	}
+	return file.Slugs
+}
+
+func (s *Store) RemoveAccountModels() error {
+	return os.Remove(filepath.Join(s.dir, accountModelsFile))
+}
 
 func (s *Store) WriteCatalog(models []Entry) error {
 	return s.writeJSON(catalogFile, map[string]any{"models": models})

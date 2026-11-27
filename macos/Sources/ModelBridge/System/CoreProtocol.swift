@@ -105,6 +105,7 @@ struct CoreStatus: Codable, Sendable, Equatable {
 
     var version: String
     var forwarding: Bool
+    var officialModelsRevision: Int?
     var proxy: Component?
     var chatgpt: Component?
     var defaultRelay: String?

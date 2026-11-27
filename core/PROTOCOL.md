@@ -44,7 +44,8 @@
   "restore_blocked": [],
   "config_path": "/Users/x/.codex/config.toml",
   "update": {"latest_version": null, "url": null, "installer": false},
-  "access": {"mode": "both", "target": "relay", "detect": "not_logged_in", "relay_only": false, "logged_in": false}
+  "access": {"mode": "both", "target": "relay", "detect": "not_logged_in", "relay_only": false, "logged_in": false},
+  "official_models_revision": 0
 }
 
 `update.url` 在 `installer` 为 true 时是本平台安装包（macOS `model-bridge-<版本>-macos.dmg`，Windows `model-bridge-<版本>-windows-setup.exe`）的下载地址；为 false 时是这个版本的发布页。
@@ -52,6 +53,8 @@
 `relays` 按配置顺序列出每个中转配置这次的模型情况：`model_count` 是这次 Codex 里可用的模型数（获取失败时为沿用的缓存数，从没成功过为 0），`fetched_at` 是最近一次成功获取的时间（从没成功过为 null），`stale` 为 true 表示这次没获取成功，`error` 是失败原因的错误码。`default_relay` 是「只用中转」方式下默认模型所在配置的名字，没有任何配置有 auto 时为 null。
 
 `access` 是接入方式：`mode` 为 Codex 配置当前按哪种方式写入（`both` 官方 + 中转，`relay` 只用中转；转发关着为 null），`target` 为按「只用中转」开关和最近一次检测得出的目标方式（转发开着且检测过之后，开关开着时总是 `relay`；没检测过为 null），`detect` 为最近一次检测结果（`logged_in`、`not_logged_in`、`failed`，没检测过为 null），`relay_only` 为「只用中转」开关是否开着，`logged_in` 为最近一次检测成功时是否已登录（从没检测成功过为 false）。
+
+`official_models_revision` 是本次 core 运行期间官方模型按 ChatGPT 账号更新的次数，从 0 开始。转发开着、「官方 + 中转」方式下，本工具在转发官方请求时查到当前账号能用的官方模型变了、重建了合并模型目录，就加 1。App 看到它比上一次收到的值大时，显示提示「官方模型已按当前账号更新」；core 启动、开转发等其他重建不会让它变化。
 
 ## 错误码
 | 码 | 界面说明 |

@@ -19,6 +19,7 @@ sealed class FakeCore(List<string> log) : ICoreClient
 
     public event Action<JsonElement>? StatusReceived;
     public event Action<string>? Failed;
+    public event Action? Restarted;
 
     public Task StartAsync(CoreInitParams init)
     {
