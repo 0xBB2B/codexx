@@ -246,6 +246,11 @@ func (e *acctEnv) officialSlugs(t *testing.T) []any {
 	return out
 }
 
+func (e *acctEnv) waitIdle(t *testing.T) {
+	t.Helper()
+	e.svc.WaitAccountIdleForTest(t)
+}
+
 func (e *acctEnv) accountFile() string { return filepath.Join(e.dataDir, "account-models.json") }
 
 func (e *acctEnv) waitHits(t *testing.T, n int) {
@@ -362,7 +367,7 @@ func TestAccountModels_WithinHourNoRequery_AfterHourRequeries(t *testing.T) {
 
 	e.clock.advance(59 * time.Minute)
 	officialRequest(t, e.listenAddr, "gpt-a", tokA, acctA)
-	settle()
+	e.waitIdle(t)
 	if n := len(e.official.modelsHits()); n != 1 {
 		t.Fatalf("59 分钟内查询次数 = %d, want 1", n)
 	}
@@ -388,7 +393,7 @@ func TestAccountModels_SameSetKeepsCatalogAndRevision(t *testing.T) {
 	e.clock.advance(61 * time.Minute)
 	officialRequest(t, e.listenAddr, "gpt-a", tokA, acctA)
 	e.waitHits(t, 2)
-	settle()
+	e.waitIdle(t)
 
 	if got := e.revision(t); got != 1 {
 		t.Errorf("revision = %d, want 1（官方模型集合没变）", got)
@@ -438,11 +443,11 @@ func TestAccountModels_ConcurrentRequestsQueryOnce(t *testing.T) {
 	}
 	wg.Wait()
 	e.waitHits(t, 1)
-	settle()
+	close(gate)
+	e.waitIdle(t)
 	if n := len(e.official.modelsHits()); n != 1 {
 		t.Errorf("并发请求触发 %d 次查询, want 1", n)
 	}
-	close(gate)
 	e.waitRevision(t, 1)
 }
 
@@ -470,7 +475,7 @@ func TestAccountModels_FailuresKeepEverything(t *testing.T) {
 				t.Fatalf("原请求状态码 = %d, want 200", code)
 			}
 			e.waitHits(t, 1)
-			settle()
+			e.waitIdle(t)
 
 			if readFile(t, e.catalogPath()) != before {
 				t.Error("合并目录不该变")
@@ -491,10 +496,10 @@ func TestAccountModels_FailureCountsAsQueried(t *testing.T) {
 	e.official.setOverride(http.StatusInternalServerError, "", false)
 	officialRequest(t, e.listenAddr, "gpt-a", tokA, acctA)
 	e.waitHits(t, 1)
-	settle()
+	e.waitIdle(t)
 
 	officialRequest(t, e.listenAddr, "gpt-a", tokA, acctA)
-	settle()
+	e.waitIdle(t)
 	if n := len(e.official.modelsHits()); n != 1 {
 		t.Fatalf("失败后 1 小时内查询次数 = %d, want 1", n)
 	}
@@ -542,7 +547,7 @@ func TestAccountModels_NoVersionAnywhereNoQuery(t *testing.T) {
 			if code := officialRequest(t, e.listenAddr, "gpt-a", tokA, acctA); code != http.StatusOK {
 				t.Fatalf("原请求状态码 = %d, want 200", code)
 			}
-			settle()
+			e.waitIdle(t)
 			if n := len(e.official.modelsHits()); n != 0 {
 				t.Errorf("查询次数 = %d, want 0", n)
 			}
@@ -592,7 +597,7 @@ func TestAccountModels_NotQueried(t *testing.T) {
 		e := newAcctEnv(t, cacheV)
 		e.startBoth(t)
 		officialRequest(t, e.listenAddr, "gpt-a", tokA, "")
-		settle()
+		e.waitIdle(t)
 		if n := len(e.official.modelsHits()); n != 0 {
 			t.Errorf("查询次数 = %d, want 0", n)
 		}
@@ -604,7 +609,7 @@ func TestAccountModels_NotQueried(t *testing.T) {
 		if code := officialRequest(t, e.listenAddr, "relay-deepseek-flash", tokA, acctA); code != http.StatusOK {
 			t.Fatalf("中转请求状态码 = %d", code)
 		}
-		settle()
+		e.waitIdle(t)
 		if n := len(e.official.modelsHits()); n != 0 {
 			t.Errorf("查询次数 = %d, want 0", n)
 		}
@@ -621,7 +626,7 @@ func TestAccountModels_NotQueried(t *testing.T) {
 		}
 		officialRequest(t, e.listenAddr, "gpt-a", tokA, acctA)
 		officialRequest(t, e.listenAddr, "relay-deepseek-flash", tokA, acctA)
-		settle()
+		e.waitIdle(t)
 		if n := len(e.official.modelsHits()); n != 0 {
 			t.Errorf("查询次数 = %d, want 0", n)
 		}
@@ -634,7 +639,7 @@ func TestAccountModels_RelayNeverSeesQuery(t *testing.T) {
 	modelHitsBefore := e.relay.hits()
 	officialRequest(t, e.listenAddr, "gpt-a", tokA, acctA)
 	e.waitRevision(t, 1)
-	settle()
+	e.waitIdle(t)
 
 	if auths := e.relay.forwardedAuths(); len(auths) != 0 {
 		t.Errorf("中转收到请求: %v", auths)
@@ -649,7 +654,7 @@ func TestAccountModels_CredentialsNotPersisted(t *testing.T) {
 	e.startBoth(t)
 	officialRequest(t, e.listenAddr, "gpt-a", tokA, acctA)
 	e.waitRevision(t, 1)
-	settle()
+	e.waitIdle(t)
 
 	secrets := []string{strings.TrimPrefix(tokA, "Bearer "), acctA}
 	err := filepath.Walk(e.dataDir, func(path string, info os.FileInfo, err error) error {
@@ -746,9 +751,12 @@ func TestAccountModels_HangingQueryGivesUpAfterFiveSeconds(t *testing.T) {
 		t.Fatalf("原请求状态码 = %d, want 200", code)
 	}
 	e.waitHits(t, 1)
-	time.Sleep(5500 * time.Millisecond)
+	begin := time.Now()
+	e.waitIdle(t)
+	if d := time.Since(begin); d < 4500*time.Millisecond || d > 6500*time.Millisecond {
+		t.Errorf("挂住的查询放弃用了 %v, want 约 5 秒（4.5s 到 6.5s）", d)
+	}
 	release()
-	settle()
 
 	if readFile(t, e.catalogPath()) != before {
 		t.Error("合并目录不该变")
@@ -762,7 +770,7 @@ func TestAccountModels_HangingQueryGivesUpAfterFiveSeconds(t *testing.T) {
 
 	e.clock.advance(30 * time.Minute)
 	officialRequest(t, e.listenAddr, "gpt-a", tokA, acctA)
-	settle()
+	e.waitIdle(t)
 	if n := len(e.official.modelsHits()); n != 1 {
 		t.Fatalf("放弃后 1 小时内查询次数 = %d, want 1", n)
 	}
@@ -797,7 +805,7 @@ func TestAccountModels_SameSetDoesNotBlockControlCommands(t *testing.T) {
 		t.Errorf("后台查询期间 Status 耗时 %v, want < 500ms", d)
 	}
 	waitUntil(t, "codex 结束", func() bool { return exists(finished) })
-	settle()
+	e.waitIdle(t)
 }
 
 func TestAccountModels_ModeChangeDuringQueryDiscardsResult(t *testing.T) {
@@ -827,7 +835,7 @@ func TestAccountModels_ModeChangeDuringQueryDiscardsResult(t *testing.T) {
 			waitUntil(t, "后台查询启动 codex", func() bool { return exists(started) })
 			tt.change(t, e)
 			waitUntil(t, "codex 结束", func() bool { return exists(finished) })
-			settle()
+			e.waitIdle(t)
 
 			if exists(e.accountFile()) {
 				t.Error("查询期间模式变了，不该写 account-models.json")
@@ -952,7 +960,7 @@ func TestAccountModels_RequestWithoutAccountDropsStoredList(t *testing.T) {
 	waitUntil(t, "官方模型回到按 models_cache.json 过滤", func() bool {
 		return reflect.DeepEqual(e.officialSlugs(t), []any{"gpt-a", "gpt-c"})
 	})
-	settle()
+	e.waitIdle(t)
 	if n := len(e.official.modelsHits()); n != hits {
 		t.Errorf("官方 /models 查询 %d -> %d, 不该再查", hits, n)
 	}
@@ -971,7 +979,7 @@ func TestAccountModels_RequestWithoutAccountAndNoStoredListDoesNothing(t *testin
 	}
 
 	officialRequest(t, e.listenAddr, "gpt-a", tokA, "")
-	settle()
+	e.waitIdle(t)
 
 	info, err := os.Stat(e.catalogPath())
 	if err != nil {
@@ -1050,7 +1058,7 @@ func TestAccountModels_RollbackRestoresOfficialSet(t *testing.T) {
 			if tt.wantRevision == 1 {
 				e.waitRevision(t, 1)
 			} else {
-				settle()
+				e.waitIdle(t)
 			}
 			if got := e.revision(t); got != tt.wantRevision {
 				t.Errorf("revision = %d, want %d", got, tt.wantRevision)
@@ -1090,7 +1098,7 @@ func TestAccountModels_QueuedQuerySkippedWhenModeChangesBeforeStart(t *testing.T
 			officialRequest(t, e.listenAddr, "gpt-a", tokB, acctB)
 			tt.change(t, e)
 			release()
-			settle()
+			e.waitIdle(t)
 
 			for _, h := range e.official.modelsHits() {
 				if h.account == acctB {
@@ -1125,13 +1133,13 @@ func TestAccountModels_FailedDropOfStoredListNotRetriedWithinHour(t *testing.T) 
 
 	officialRequest(t, e.listenAddr, "gpt-a", tokA, "")
 	waitUntil(t, "第一次删除名单尝试调用 codex", func() bool { return calls() >= 1 })
-	settle()
+	e.waitIdle(t)
 	first := calls()
 
 	for range 3 {
 		officialRequest(t, e.listenAddr, "gpt-a", tokA, "")
 	}
-	settle()
+	e.waitIdle(t)
 	if n := calls(); n != first {
 		t.Fatalf("1 小时内 codex 被调用 %d -> %d 次, 不该反复尝试", first, n)
 	}
@@ -1235,7 +1243,7 @@ func TestAccountModels_LatestRequestWins_AccountRequestAfterDrop(t *testing.T) {
 
 	e.waitHits(t, hits+1)
 	waitUntil(t, "后台处理全部结束", func() bool { return runs.started() >= 2 && !runs.running() })
-	settle()
+	e.waitIdle(t)
 
 	if runs.running() {
 		t.Error("最后到的账号 A 请求之后仍有后台处理在跑")
@@ -1278,7 +1286,7 @@ func TestAccountModels_LatestRequestWins_DropRequestAfterAccountQuery(t *testing
 		return reflect.DeepEqual(e.officialSlugs(t), []any{"gpt-a", "gpt-c"})
 	})
 	waitUntil(t, "后台处理全部结束", func() bool { return !runs.running() })
-	settle()
+	e.waitIdle(t)
 
 	if exists(e.accountFile()) {
 		t.Error("最后到的是不带账号标识的请求，名单应保持删除")
@@ -1289,18 +1297,6 @@ func TestAccountModels_LatestRequestWins_DropRequestAfterAccountQuery(t *testing
 	if got := runs.maxConcurrent(); got > 1 {
 		t.Errorf("codex 同时运行 %d 份, want 1", got)
 	}
-}
-
-func (r codexRuns) waitQuiet(t *testing.T) {
-	t.Helper()
-	for range 5 {
-		waitUntil(t, "codex 没有在跑", func() bool { return !r.running() })
-		settle()
-		if !r.running() {
-			return
-		}
-	}
-	t.Fatal("后台处理一直没结束")
 }
 
 func TestAccountModels_LatestRequestWins_DropAfterFirstQueryNeverStored(t *testing.T) {
@@ -1316,7 +1312,7 @@ func TestAccountModels_LatestRequestWins_DropAfterFirstQueryNeverStored(t *testi
 	e.waitHits(t, 1)
 	officialRequest(t, e.listenAddr, "gpt-a", tokA, "")
 	release()
-	settle()
+	e.waitIdle(t)
 
 	if exists(e.accountFile()) {
 		t.Error("最后到的是不带账号标识的请求，不该留下名单")
@@ -1337,7 +1333,7 @@ func TestAccountModels_LatestRequestWins_DropRunningThenAccountThenDrop(t *testi
 	waitUntil(t, "删名单的后台处理在跑 codex", func() bool { return runs.running() })
 	officialRequest(t, e.listenAddr, "gpt-a", tokA, acctA)
 	officialRequest(t, e.listenAddr, "gpt-a", tokA, "")
-	runs.waitQuiet(t)
+	e.waitIdle(t)
 
 	if exists(e.accountFile()) {
 		t.Error("最后到的是不带账号标识的请求，不该留下名单")
@@ -1376,7 +1372,7 @@ func TestAccountModels_SameAccountDuringStartOfQueuedWorkClearsPending(t *testin
 	e.official.setOverride(0, "", false)
 	officialRequest(t, e.listenAddr, "gpt-a", tokA, acctA)
 	wg.Wait()
-	runs.waitQuiet(t)
+	e.waitIdle(t)
 
 	if hits := e.official.modelsHits(); len(hits) != 1 || hits[0].account != acctA {
 		t.Errorf("官方 /models 查询 = %+v, want 只有账号 A 的 1 次（A 刚查过，失败也按 1 小时算）", hits)
@@ -1402,7 +1398,7 @@ func TestAccountModels_ForwardingClosedDuringDropLeavesNoThrottle(t *testing.T) 
 	if _, err := e.svc.SetForwarding(ctx, false); err != nil {
 		t.Fatal(err)
 	}
-	runs.waitQuiet(t)
+	e.waitIdle(t)
 	if _, err := e.svc.SetForwarding(ctx, true); err != nil {
 		t.Fatal(err)
 	}
@@ -1432,7 +1428,7 @@ func TestAccountModels_DropRebuildFailureRestoresListAndRetriesAfterThrottle(t *
 	}
 
 	officialRequest(t, e.listenAddr, "gpt-a", tokA, "")
-	settle()
+	e.waitIdle(t)
 	if !exists(e.accountFile()) {
 		t.Fatal("重建失败后名单文件应被恢复")
 	}
@@ -1466,7 +1462,7 @@ func TestAccountModels_PendingSameAccountAsJustQueriedIsNotQueriedAgain(t *testi
 	officialRequest(t, e.listenAddr, "gpt-a", tokA, acctA)
 	release()
 	e.waitRevision(t, 1)
-	settle()
+	e.waitIdle(t)
 
 	hits := e.official.modelsHits()
 	if len(hits) != 1 || hits[0].account != acctA {
