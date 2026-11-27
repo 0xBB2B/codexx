@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -189,11 +190,20 @@ type Service struct {
 	officialSet      []string
 	officialRevision int
 
-	accountMu        sync.Mutex
-	accountID        string
-	accountQueried   bool
-	accountQueriedAt time.Time
-	accountQuerying  bool
+	accountMu          sync.Mutex
+	accountID          string
+	accountQueried     bool
+	accountQueriedAt   time.Time
+	accountQuerying    bool
+	accountPending     *pendingQuery
+	accountDropAt      time.Time
+	accountDropRunning bool
+}
+
+type pendingQuery struct {
+	drop    bool
+	account string
+	header  http.Header
 }
 
 func NewService(opts Options) *Service {
@@ -714,7 +724,7 @@ func (s *Service) tryActivate(ctx context.Context) error {
 			return err
 		}
 	}
-	if err := s.rebuild(ctx, fetchAll(s.relays)); err != nil {
+	if err := s.rebuild(ctx, fetchAll(s.relays), nil, catalog.NewStore(s.opts.DataDir).LoadAccountModels()); err != nil {
 		return err
 	}
 	return s.enable()
@@ -755,11 +765,13 @@ func (s *Service) refreshRelay(ctx context.Context, plan relayPlan) error {
 		return s.probe(ctx, plan)
 	}
 	files := s.dataFiles(plan)
-	err := s.rebuild(ctx, plan)
+	prevOfficialSet := s.officialSet
+	err := s.rebuild(ctx, plan, nil, catalog.NewStore(s.opts.DataDir).LoadAccountModels())
 	if err == nil {
 		err = s.enable()
 	}
 	if err != nil {
+		s.officialSet = prevOfficialSet
 		if restoreErr := files.restore(); restoreErr != nil {
 			s.proxyErr, s.restoreFailed = errCode(restoreErr), true
 		}
@@ -889,7 +901,7 @@ func (s *Service) probe(ctx context.Context, plan relayPlan) error {
 	return nil
 }
 
-func (s *Service) rebuild(ctx context.Context, plan relayPlan) error {
+func (s *Service) rebuild(ctx context.Context, plan relayPlan, official []catalog.Entry, accountModels []string) error {
 	codex, err := s.locateCodex()
 	if err != nil {
 		return err
@@ -908,13 +920,10 @@ func (s *Service) rebuild(ctx context.Context, plan relayPlan) error {
 		DataDir:         s.opts.DataDir,
 		ModelsCachePath: s.modelsCachePath(),
 		RelayOnly:       s.accessMode == modeRelay,
-		AccountModels:   catalog.NewStore(s.opts.DataDir).LoadAccountModels(),
+		AccountModels:   accountModels,
+		Official:        official,
 	}
 	res, err := catalog.Build(ctx, buildOpts)
-	if errors.Is(err, catalog.ErrNoAccountModels) {
-		buildOpts.AccountModels = nil
-		res, err = catalog.Build(ctx, buildOpts)
-	}
 	if err != nil {
 		return err
 	}
@@ -933,15 +942,15 @@ func (s *Service) rebuild(ctx context.Context, plan relayPlan) error {
 		infos[r.ID] = info
 	}
 	s.relayInfos, s.relayShown, s.shownKnown, s.routes, s.levels = infos, res.RelayShown, true, res.Routes, res.ReasoningLevels
-	var official []catalog.Entry
+	var shownOfficial []catalog.Entry
 	for _, m := range res.Models {
 		if slug, ok := m["slug"].(string); ok {
 			if _, isRelay := res.Routes[slug]; !isRelay {
-				official = append(official, m)
+				shownOfficial = append(shownOfficial, m)
 			}
 		}
 	}
-	s.officialSet = officialSlugSet(official)
+	s.officialSet = officialSlugSet(shownOfficial)
 	s.defaultModel, s.defaultRelay = res.DefaultModel, res.Routes[res.DefaultModel].ID
 	s.pushRelay()
 	return nil

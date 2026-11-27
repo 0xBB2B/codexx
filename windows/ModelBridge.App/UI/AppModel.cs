@@ -56,6 +56,7 @@ public interface ICoreClient
 {
     event Action<JsonElement>? StatusReceived;
     event Action<string>? Failed;
+    event Action? Restarted;
     Task StartAsync(CoreInitParams init);
     Task StopAsync();
     Task<JsonElement> CallAsync(string method, IReadOnlyDictionary<string, object?>? parameters = null);
@@ -199,6 +200,7 @@ public sealed class AppModel : IRelayFields
         core.StatusReceived += ApplyStatus;
         core.StatusReceived += OnStatusReceived;
         core.Failed += OnCoreFailed;
+        core.Restarted += () => lastOfficialModelsRevision = null;
     }
 
     public event PropertyChangedEventHandler? PropertyChanged;
@@ -454,6 +456,7 @@ public sealed class AppModel : IRelayFields
             ShowMainWindowRequested?.Invoke();
         }
 
+        lastOfficialModelsRevision = null;
         try
         {
             await core.StartAsync(new CoreInitParams(inits, chatGpt.Locate()));
@@ -1481,10 +1484,16 @@ public sealed class AppModel : IRelayFields
     {
         var field = Prop(s, "official_models_revision");
         var current = field.ValueKind == JsonValueKind.Number && field.TryGetInt32(out var n) ? n : 0;
-        var previous = lastOfficialModelsRevision;
+        var relayOnly = Str(Prop(s, "access"), "mode") == "relay";
+        if (!coreForwarding || relayOnly) RemoveNotices(OfficialModelsUpdatedTitle);
+        if (lastOfficialModelsRevision is not { } previous)
+        {
+            lastOfficialModelsRevision = current;
+            return;
+        }
+        if (current <= previous) return;
         lastOfficialModelsRevision = current;
-        if (!coreForwarding) RemoveNotices(OfficialModelsUpdatedTitle);
-        else if (previous is { } p && current > p)
+        if (coreForwarding && !relayOnly)
             AddNotice(new AppNotice(OfficialModelsUpdatedTitle, "重启 ChatGPT 后生效。", AppSeverity.Success), autoDismiss: false);
     }
 

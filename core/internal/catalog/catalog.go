@@ -2,7 +2,6 @@ package catalog
 
 import (
 	"context"
-	"errors"
 	"sync"
 	"time"
 )
@@ -35,14 +34,17 @@ type BuildOptions struct {
 	RelayOnly       bool
 	// AccountModels 是调用方查到的账号模型名单；nil 表示没有，按 ModelsCachePath 过滤
 	AccountModels []string
+	// Official 是调用方已加载的自带官方条目；非 nil 时不再运行 codex 加载
+	Official []Entry
 }
 
-var ErrNoAccountModels = errors.New("账号可用的模型和自带清单没有交集")
-
 func Build(ctx context.Context, opts BuildOptions) (*Result, error) {
-	official, err := LoadOfficial(ctx, opts.CodexPath)
-	if err != nil {
-		return nil, err
+	official := opts.Official
+	if official == nil {
+		var err error
+		if official, err = LoadOfficial(ctx, opts.CodexPath); err != nil {
+			return nil, err
+		}
 	}
 	store := NewStore(opts.DataDir)
 
@@ -107,10 +109,8 @@ func Build(ctx context.Context, opts BuildOptions) (*Result, error) {
 		var visible []Entry
 		if opts.AccountModels != nil {
 			visible = IntersectOfficial(official, opts.AccountModels)
-			if len(visible) == 0 {
-				return nil, ErrNoAccountModels
-			}
-		} else {
+		}
+		if len(visible) == 0 {
 			visible = FilterOfficial(official, AccountSlugs(opts.ModelsCachePath))
 		}
 		res.Models = append(visible, res.Models[len(official):]...)

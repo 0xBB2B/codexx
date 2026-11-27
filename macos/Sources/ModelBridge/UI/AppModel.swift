@@ -501,7 +501,9 @@ final class AppModel: ObservableObject {
             for await event in lifecycle {
                 switch event {
                 case .failed: self?.coreDidFail()
-                case .restarted: self?.coreRunning = true
+                case .restarted:
+                    self?.coreRunning = true
+                    self?.lastOfficialModelsRevision = nil
                 }
             }
         }
@@ -1042,12 +1044,17 @@ final class AppModel: ObservableObject {
     }
 
     private func applyOfficialModelsRevision(_ value: CoreStatus) {
-        let previous = lastOfficialModelsRevision
         let current = value.officialModelsRevision ?? 0
-        lastOfficialModelsRevision = current
-        if !value.forwarding {
+        if !value.forwarding || value.access?.mode == "relay" {
             removeNotices(titled: Self.officialModelsUpdatedTitle)
-        } else if let previous, current > previous {
+        }
+        guard let previous = lastOfficialModelsRevision else {
+            lastOfficialModelsRevision = current
+            return
+        }
+        guard current > previous else { return }
+        lastOfficialModelsRevision = current
+        if value.forwarding && value.access?.mode != "relay" {
             addNotice(Notice(title: Self.officialModelsUpdatedTitle, detail: "重启 ChatGPT 后生效。", kind: .success), autoDismiss: false)
         }
     }

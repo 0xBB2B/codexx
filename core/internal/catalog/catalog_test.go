@@ -3,7 +3,6 @@ package catalog_test
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -1027,38 +1026,47 @@ func TestBuild_AccountModels_WinsOverModelsCache(t *testing.T) {
 	}
 }
 
-func TestBuild_AccountModels_NoIntersection_ReturnsErrNoAccountModelsAndWritesNoCatalog(t *testing.T) {
+func TestBuild_AccountModels_NoIntersection_FallsBackToModelsCache(t *testing.T) {
 	t.Parallel()
-	codex, _ := writeFakeCodex(t, abcOfficialJSON, 0)
-	dataDir := t.TempDir()
-	opts := buildOpts(t, codex, dataDir)
-	opts.AccountModels = []string{"x", "y"}
-	res, err := catalog.Build(context.Background(), opts)
-	if !errors.Is(err, catalog.ErrNoAccountModels) {
-		t.Fatalf("err = %v, want ErrNoAccountModels", err)
+	tests := []struct {
+		name  string
+		cache string
+		want  []any
+	}{
+		{"按 models_cache.json 过滤", `{"models":[{"slug":"a"}]}`, []any{"a"}},
+		{"缓存也没有交集时用全部自带模型", `{"models":[{"slug":"zzz"}]}`, []any{"a", "b", "c"}},
 	}
-	if res != nil {
-		t.Errorf("res = %v, want nil", res)
-	}
-	if _, statErr := os.Stat(filepath.Join(dataDir, "model-bridge-catalog.json")); !errors.Is(statErr, os.ErrNotExist) {
-		t.Errorf("目录文件不应被写入: %v", statErr)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			codex, _ := writeFakeCodex(t, abcOfficialJSON, 0)
+			dataDir := t.TempDir()
+			cache := filepath.Join(t.TempDir(), "models_cache.json")
+			if err := os.WriteFile(cache, []byte(tt.cache), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			opts := buildOpts(t, codex, dataDir)
+			opts.ModelsCachePath = cache
+			opts.AccountModels = []string{"x", "y"}
+			if got := slugs(t, build(t, opts)); !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("slugs = %v, want %v", got, tt.want)
+			}
+			if _, err := os.Stat(filepath.Join(dataDir, "model-bridge-catalog.json")); err != nil {
+				t.Errorf("目录文件应已写入: %v", err)
+			}
+		})
 	}
 }
 
-func TestBuild_AccountModels_NoIntersection_KeepsOldCatalogContent(t *testing.T) {
+func TestBuild_AccountModels_NoIntersection_FetchesRelayOnce(t *testing.T) {
 	t.Parallel()
 	codex, _ := writeFakeCodex(t, abcOfficialJSON, 0)
-	dataDir := t.TempDir()
-	build(t, buildOpts(t, codex, dataDir))
-	before := readFileT(t, filepath.Join(dataDir, "model-bridge-catalog.json"))
-
-	opts := buildOpts(t, codex, dataDir)
+	srv := idStub(t, "m1")
+	opts := buildOpts(t, codex, t.TempDir(), source("1", "主力", srv.URL))
 	opts.AccountModels = []string{"x"}
-	if _, err := catalog.Build(context.Background(), opts); !errors.Is(err, catalog.ErrNoAccountModels) {
-		t.Fatalf("err = %v, want ErrNoAccountModels", err)
-	}
-	if after := readFileT(t, filepath.Join(dataDir, "model-bridge-catalog.json")); after != before {
-		t.Errorf("目录文件被改动:\nbefore=%s\nafter=%s", before, after)
+	build(t, opts)
+	if n := srv.hits.Load(); n != 1 {
+		t.Errorf("中转 /models 请求次数 = %d, want 1", n)
 	}
 }
 

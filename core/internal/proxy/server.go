@@ -230,7 +230,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	dest = "official"
-	if s.onOfficialRequest != nil && r.Header.Get("ChatGPT-Account-ID") != "" {
+	if s.onOfficialRequest != nil {
 		s.onOfficialRequest(r.Header.Clone())
 	}
 	body := raw

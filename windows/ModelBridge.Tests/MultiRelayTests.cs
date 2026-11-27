@@ -21,6 +21,7 @@ sealed class MultiCore(List<string> log) : ICoreClient
 
     public event Action<JsonElement>? StatusReceived;
     public event Action<string>? Failed;
+    public event Action? Restarted;
 
     public Task StartAsync(CoreInitParams init)
     {
@@ -59,6 +60,7 @@ sealed class MultiCore(List<string> log) : ICoreClient
     public Params ParamsOf(string method) => Calls.Last(c => c.Method == method).Params;
     public void RaiseStatus(JsonElement status) => StatusReceived?.Invoke(status);
     public void RaiseFailed(string reason) => Failed?.Invoke(reason);
+    public void RaiseRestarted() => Restarted?.Invoke();
 }
 
 static class RelayJson

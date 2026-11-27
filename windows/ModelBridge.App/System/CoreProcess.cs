@@ -49,6 +49,7 @@ public sealed class CoreProcess(CoreProcessOptions options, Func<CoreInitParams>
 
     public event Action<JsonElement>? StatusReceived;
     public event Action<string>? Failed;
+    public event Action? Restarted;
 
     public bool HasFailed => failed;
 
@@ -263,6 +264,7 @@ public sealed class CoreProcess(CoreProcessOptions options, Func<CoreInitParams>
         {
             newGeneration = Launch(crashedGeneration);
             if (newGeneration == 0) return;
+            Restarted?.Invoke();
             await InitAsync();
         }
         catch (Exception ex) when (ex is CoreCallException or CoreProcessExitedException or Win32Exception)

@@ -73,6 +73,10 @@ func (s *Store) LoadAccountModels() []string {
 	return file.Slugs
 }
 
+func (s *Store) RemoveAccountModels() error {
+	return os.Remove(filepath.Join(s.dir, accountModelsFile))
+}
+
 func (s *Store) WriteCatalog(models []Entry) error {
 	return s.writeJSON(catalogFile, map[string]any{"models": models})
 }

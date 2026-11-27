@@ -7,7 +7,7 @@ private let revisionDetail = "重启 ChatGPT 后生效。"
 private let savedTitle = "已保存「中转」"
 private let backendTitle = "后台服务没能启动，请退出后重新打开"
 
-private func statusJSON(revision: Int? = nil, forwarding: Bool = true, marker: Int = 0) -> String {
+private func statusJSON(revision: Int? = nil, forwarding: Bool = true, mode: String = "both", marker: Int = 0) -> String {
     let field = revision.map { #""official_models_revision":\#($0),"# } ?? ""
     let entry = #"{"id":"1","name":"中转","model_count":6,"fetched_at":"2026-11-16T00:12:00Z","stale":false,"error":null}"#
     return """
@@ -15,7 +15,7 @@ private func statusJSON(revision: Int? = nil, forwarding: Bool = true, marker: I
     "chatgpt":{"found":true,"error":null},"default_relay":"中转","relays":[\(entry)],\
     "taken_over":[],"restore_blocked":[],"config_path":"/Users/example/.codex/config.toml",\
     "update":{"latest_version":null,"url":null},\
-    "access":{"mode":"both","target":"both","detect":"logged_in","relay_only":false,"logged_in":true}}
+    "access":{"mode":"\(mode)","target":"both","detect":"logged_in","relay_only":false,"logged_in":true}}
     """
 }
 
@@ -106,10 +106,10 @@ private struct Rig {
 
     private static var counter = 0
 
-    func push(_ revision: Int?, forwarding: Bool = true) async {
+    func push(_ revision: Int?, forwarding: Bool = true, mode: String = "both") async {
         Self.counter += 1
         let marker = Self.counter
-        core.statusContinuation.yield(decodeStatus(statusJSON(revision: revision, forwarding: forwarding, marker: marker)))
+        core.statusContinuation.yield(decodeStatus(statusJSON(revision: revision, forwarding: forwarding, mode: mode, marker: marker)))
         await awaitUntil { model.status?.version == "1.3.\(marker)" }
         try? await Task.sleep(nanoseconds: 60_000_000)
     }
@@ -117,6 +117,12 @@ private struct Rig {
     func saveRelay() async {
         model.beginEditRelay(id: "1")
         await model.saveRelay()
+    }
+
+    func restartCore() async {
+        model.coreDidFail()
+        core.lifecycleContinuation.yield(.restarted)
+        await awaitUntil { model.coreRunning }
     }
 
     var revisionNotices: [Notice] { model.notices.filter { $0.title == revisionTitle } }
@@ -159,14 +165,17 @@ final class AccountModelNoticeTests: XCTestCase {
         XCTAssertEqual(rig.model.notices, [first])
     }
 
-    func testRevisionDecreases_NoNoticeButRecordUpdated() async {
+    func testRevisionDecreases_RecordKeepsMax_OnlyHigherThanMaxNotifies() async {
         let rig = await Rig.make()
         await rig.push(3)
         await rig.push(1)
         XCTAssertTrue(rig.model.notices.isEmpty)
 
         await rig.push(2)
-        XCTAssertEqual(rig.revisionNotices.count, 1, "记录已降到 1，涨到 2 应提示")
+        XCTAssertTrue(rig.model.notices.isEmpty, "没超过历史最大值 3")
+
+        await rig.push(4)
+        XCTAssertEqual(rig.revisionNotices.count, 1)
     }
 
     func testMissingField_TreatedAsZero() async {
@@ -177,13 +186,15 @@ final class AccountModelNoticeTests: XCTestCase {
         XCTAssertEqual(rig.revisionNotices.count, 1)
     }
 
-    func testMissingFieldAfterPositiveRevision_CountsAsDecrease() async {
+    func testMissingFieldAfterPositiveRevision_CountsAsZeroAndKeepsMax() async {
         let rig = await Rig.make()
         await rig.push(2)
         await rig.push(nil)
         XCTAssertTrue(rig.model.notices.isEmpty)
         await rig.push(1)
-        XCTAssertEqual(rig.revisionNotices.count, 1, "缺省按 0 记录，1 比 0 大")
+        XCTAssertTrue(rig.model.notices.isEmpty, "没超过历史最大值 2")
+        await rig.push(3)
+        XCTAssertEqual(rig.revisionNotices.count, 1)
     }
 
     func testNoticeSurvivesAutoDismissDelay_OtherSuccessNoticeDoesNot() async throws {
@@ -250,6 +261,55 @@ final class AccountModelNoticeTests: XCTestCase {
         await rig.push(1, forwarding: false)
 
         XCTAssertEqual(rig.model.notices.map(\.title), [backendTitle])
+    }
+
+    func testAccessModeBecomesRelayOnly_RemovesNotice() async {
+        let rig = await Rig.make()
+        await rig.push(0)
+        await rig.push(1)
+        XCTAssertEqual(rig.revisionNotices.count, 1)
+
+        await rig.push(1, mode: "relay")
+
+        XCTAssertTrue(rig.revisionNotices.isEmpty)
+    }
+
+    func testLateLowerRevisionAfterDismiss_SameRunDoesNotReshowNotice() async throws {
+        let rig = await Rig.make()
+        await rig.push(0)
+        await rig.push(1)
+        rig.model.dismissNotice(try XCTUnwrap(rig.revisionNotices.first).id)
+
+        await rig.push(0)
+        await rig.push(1)
+
+        XCTAssertTrue(rig.revisionNotices.isEmpty)
+    }
+
+    func testCoreRestart_FirstStatusOnlyRecordsEvenIfHigher() async throws {
+        let rig = await Rig.make()
+        await rig.push(0)
+        await rig.push(1)
+        rig.model.dismissNotice(try XCTUnwrap(rig.revisionNotices.first).id)
+
+        await rig.restartCore()
+        await rig.push(2)
+
+        XCTAssertTrue(rig.revisionNotices.isEmpty)
+    }
+
+    func testCoreRestart_RevisionRestartsFromZeroAndStillNotifies() async throws {
+        let rig = await Rig.make()
+        await rig.push(0)
+        await rig.push(3)
+        rig.model.dismissNotice(try XCTUnwrap(rig.revisionNotices.first).id)
+
+        await rig.restartCore()
+        await rig.push(0)
+        XCTAssertTrue(rig.revisionNotices.isEmpty)
+        await rig.push(1)
+
+        XCTAssertEqual(rig.revisionNotices.count, 1)
     }
 }
 

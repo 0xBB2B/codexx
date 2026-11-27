@@ -23,15 +23,15 @@ public class AccountModelNoticeTests
         return h;
     }
 
-    static JsonElement Status(MultiHarness h, int? revision, bool forwarding = true)
+    static JsonElement Status(MultiHarness h, int? revision, bool forwarding = true, string mode = "both")
     {
-        var status = JsonNode.Parse(RelayJson.Status(forwarding, h.Core.Entries.ToArray(), "中转").GetRawText())!;
+        var status = JsonNode.Parse(RelayJson.Status(forwarding, h.Core.Entries.ToArray(), "中转", mode).GetRawText())!;
         if (revision is { } r) status["official_models_revision"] = r;
         return RelayJson.Parse(status.ToJsonString());
     }
 
-    static void Push(MultiHarness h, int? revision, bool forwarding = true) =>
-        h.Core.RaiseStatus(Status(h, revision, forwarding));
+    static void Push(MultiHarness h, int? revision, bool forwarding = true, string mode = "both") =>
+        h.Core.RaiseStatus(Status(h, revision, forwarding, mode));
 
     static string[] Titles(MultiHarness h) => h.Model.Notices.Select(n => n.Title).ToArray();
 
@@ -72,8 +72,11 @@ public class AccountModelNoticeTests
     public async Task FirstStatus_OnlyRecordsRevision_NoNotice()
     {
         var h = await StartedAsync(5);
-
         Assert.AreEqual(0, h.Model.Notices.Count);
+
+        Push(h, 6);
+
+        Assert.AreEqual(UpdatedTitle, h.Model.Notices.Single().Title);
     }
 
     [TestMethod]
@@ -116,14 +119,45 @@ public class AccountModelNoticeTests
     }
 
     [TestMethod]
-    public async Task RevisionDrops_OnlyUpdatesRecord_ThenRiseAboveDroppedValueNotifies()
+    public async Task RevisionDrops_KeepsRecord_OnlyRiseAboveHistoricMaxNotifies()
     {
         var h = await StartedAsync(5);
 
         Push(h, 2);
+        Push(h, 3);
+        Push(h, 5);
         Assert.AreEqual(0, h.Model.Notices.Count);
 
-        Push(h, 3);
+        Push(h, 6);
+        Assert.AreEqual(UpdatedTitle, h.Model.Notices.Single().Title);
+    }
+
+    [TestMethod]
+    public async Task LateLowerRevision_AfterDismiss_RiseBackToSeenValue_NoNewNotice()
+    {
+        var h = await StartedAsync();
+        Push(h, 0);
+        Push(h, 1);
+        h.Model.DismissNotice(h.Model.Notices.Single().Id);
+
+        Push(h, 0);
+        Push(h, 1);
+
+        Assert.AreEqual(0, h.Model.Notices.Count);
+    }
+
+    [TestMethod]
+    public async Task CoreRestarted_FirstStatusOnlyRecords_ThenRiseFromZeroNotifies()
+    {
+        var h = await StartedAsync(5);
+        Push(h, 7);
+        h.Model.DismissNotice(h.Model.Notices.Single().Id);
+
+        h.Core.OnAsync("status", _ => Task.FromResult(Status(h, 0)));
+        await h.Model.StartAsync();
+        Assert.AreEqual(0, h.Model.Notices.Count);
+
+        Push(h, 1);
         Assert.AreEqual(UpdatedTitle, h.Model.Notices.Single().Title);
     }
 
@@ -133,9 +167,10 @@ public class AccountModelNoticeTests
         var h = await StartedAsync(3);
 
         Push(h, null);
+        Push(h, 1);
         Assert.AreEqual(0, h.Model.Notices.Count);
 
-        Push(h, 1);
+        Push(h, 4);
         Assert.AreEqual(UpdatedTitle, h.Model.Notices.Single().Title);
     }
 
@@ -207,6 +242,35 @@ public class AccountModelNoticeTests
         await SaveRelayAsync(h);
 
         Push(h, 1, forwarding: false);
+
+        CollectionAssert.AreEqual(new[] { SavedTitle }, Titles(h));
+    }
+
+    [TestMethod]
+    public async Task CoreAutoRestarted_FirstStatusOnlyRecords_ThenRiseFromZeroNotifies()
+    {
+        var h = await StartedAsync(5);
+        Push(h, 7);
+        h.Model.DismissNotice(h.Model.Notices.Single().Id);
+
+        h.Core.RaiseRestarted();
+        Push(h, 0);
+        Assert.AreEqual(0, h.Model.Notices.Count);
+
+        Push(h, 1);
+        Assert.AreEqual(UpdatedTitle, h.Model.Notices.Single().Title);
+    }
+
+    [TestMethod]
+    public async Task AccessModeBecomesRelay_WhileForwardingOn_RemovesNotice_KeepsOthers()
+    {
+        var h = await StartedAsync();
+        h.Model.NoticeAutoDismissDelay = TimeSpan.FromMinutes(5);
+        Push(h, 0);
+        Push(h, 1);
+        await SaveRelayAsync(h);
+
+        Push(h, 1, mode: "relay");
 
         CollectionAssert.AreEqual(new[] { SavedTitle }, Titles(h));
     }
@@ -309,7 +373,7 @@ public class AccountModelNoticeTests
     {
         var h = await StartedAsync();
         h.ChatGpt.Running = true;
-        h.Model.NoticeAutoDismissDelay = TimeSpan.FromMilliseconds(800);
+        h.Model.NoticeAutoDismissDelay = TimeSpan.FromSeconds(3);
         Push(h, 0);
 
         await UiHost.RunAsync(async () =>
