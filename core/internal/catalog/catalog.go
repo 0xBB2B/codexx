@@ -2,6 +2,7 @@ package catalog
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"time"
 )
@@ -32,7 +33,11 @@ type BuildOptions struct {
 	// ModelsCachePath 是 Codex 的 models_cache.json，用来把官方条目限定在当前账号可用的模型
 	ModelsCachePath string
 	RelayOnly       bool
+	// AccountModels 是调用方查到的账号模型名单；nil 表示没有，按 ModelsCachePath 过滤
+	AccountModels []string
 }
+
+var ErrNoAccountModels = errors.New("账号可用的模型和自带清单没有交集")
 
 func Build(ctx context.Context, opts BuildOptions) (*Result, error) {
 	official, err := LoadOfficial(ctx, opts.CodexPath)
@@ -99,7 +104,16 @@ func Build(ctx context.Context, opts BuildOptions) (*Result, error) {
 	if opts.RelayOnly {
 		res.Models = res.Models[len(official):]
 	} else {
-		res.Models = append(FilterOfficial(official, AccountSlugs(opts.ModelsCachePath)), res.Models[len(official):]...)
+		var visible []Entry
+		if opts.AccountModels != nil {
+			visible = IntersectOfficial(official, opts.AccountModels)
+			if len(visible) == 0 {
+				return nil, ErrNoAccountModels
+			}
+		} else {
+			visible = FilterOfficial(official, AccountSlugs(opts.ModelsCachePath))
+		}
+		res.Models = append(visible, res.Models[len(official):]...)
 	}
 	for _, src := range opts.Relays {
 		if _, ok := res.Routes[RelaySlug(src.ID, "auto")]; ok {

@@ -3,6 +3,7 @@ package catalog_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -982,5 +983,123 @@ func TestBuild_CacheOnly_UnusableCacheFile_CarriesError(t *testing.T) {
 				t.Errorf("缓存不可用时配置 1 应带错误, 得到 %+v", r)
 			}
 		})
+	}
+}
+
+const abcOfficialJSON = `{"models":[{"slug":"a","priority":1},{"slug":"b","priority":2},{"slug":"c","priority":3}]}`
+
+func TestBuild_AccountModels_OfficialEntriesAreBundledSlugsInList(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name    string
+		account []string
+		want    []any
+	}{
+		{"部分命中", []string{"b", "x"}, []any{"b"}},
+		{"全部命中按自带清单顺序", []string{"c", "a", "b"}, []any{"a", "b", "c"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			codex, _ := writeFakeCodex(t, abcOfficialJSON, 0)
+			opts := buildOpts(t, codex, t.TempDir(), idSource(t, "1", "主力", "auto"))
+			opts.AccountModels = tt.account
+			want := append(append([]any{}, tt.want...), "relay-auto")
+			if got := slugs(t, build(t, opts)); !reflect.DeepEqual(got, want) {
+				t.Errorf("slugs = %v, want %v", got, want)
+			}
+		})
+	}
+}
+
+func TestBuild_AccountModels_WinsOverModelsCache(t *testing.T) {
+	t.Parallel()
+	codex, _ := writeFakeCodex(t, abcOfficialJSON, 0)
+	cache := filepath.Join(t.TempDir(), "models_cache.json")
+	if err := os.WriteFile(cache, []byte(`{"models":[{"slug":"a"}]}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	opts := buildOpts(t, codex, t.TempDir())
+	opts.ModelsCachePath = cache
+	opts.AccountModels = []string{"b", "x"}
+	if got, want := slugs(t, build(t, opts)), []any{"b"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("slugs = %v, want %v", got, want)
+	}
+}
+
+func TestBuild_AccountModels_NoIntersection_ReturnsErrNoAccountModelsAndWritesNoCatalog(t *testing.T) {
+	t.Parallel()
+	codex, _ := writeFakeCodex(t, abcOfficialJSON, 0)
+	dataDir := t.TempDir()
+	opts := buildOpts(t, codex, dataDir)
+	opts.AccountModels = []string{"x", "y"}
+	res, err := catalog.Build(context.Background(), opts)
+	if !errors.Is(err, catalog.ErrNoAccountModels) {
+		t.Fatalf("err = %v, want ErrNoAccountModels", err)
+	}
+	if res != nil {
+		t.Errorf("res = %v, want nil", res)
+	}
+	if _, statErr := os.Stat(filepath.Join(dataDir, "model-bridge-catalog.json")); !errors.Is(statErr, os.ErrNotExist) {
+		t.Errorf("目录文件不应被写入: %v", statErr)
+	}
+}
+
+func TestBuild_AccountModels_NoIntersection_KeepsOldCatalogContent(t *testing.T) {
+	t.Parallel()
+	codex, _ := writeFakeCodex(t, abcOfficialJSON, 0)
+	dataDir := t.TempDir()
+	build(t, buildOpts(t, codex, dataDir))
+	before := readFileT(t, filepath.Join(dataDir, "model-bridge-catalog.json"))
+
+	opts := buildOpts(t, codex, dataDir)
+	opts.AccountModels = []string{"x"}
+	if _, err := catalog.Build(context.Background(), opts); !errors.Is(err, catalog.ErrNoAccountModels) {
+		t.Fatalf("err = %v, want ErrNoAccountModels", err)
+	}
+	if after := readFileT(t, filepath.Join(dataDir, "model-bridge-catalog.json")); after != before {
+		t.Errorf("目录文件被改动:\nbefore=%s\nafter=%s", before, after)
+	}
+}
+
+func TestBuild_NilAccountModels_FiltersByModelsCache(t *testing.T) {
+	t.Parallel()
+	codex, _ := writeFakeCodex(t, abcOfficialJSON, 0)
+	cache := filepath.Join(t.TempDir(), "models_cache.json")
+	if err := os.WriteFile(cache, []byte(`{"models":[{"slug":"a"}]}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	opts := buildOpts(t, codex, t.TempDir())
+	opts.ModelsCachePath = cache
+	opts.AccountModels = nil
+	if got, want := slugs(t, build(t, opts)), []any{"a"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("slugs = %v, want %v", got, want)
+	}
+}
+
+func TestBuild_NilAccountModels_CacheNoIntersection_UsesAllOfficial(t *testing.T) {
+	t.Parallel()
+	codex, _ := writeFakeCodex(t, abcOfficialJSON, 0)
+	cache := filepath.Join(t.TempDir(), "models_cache.json")
+	if err := os.WriteFile(cache, []byte(`{"models":[{"slug":"zzz"}]}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	opts := buildOpts(t, codex, t.TempDir())
+	opts.ModelsCachePath = cache
+	if got, want := slugs(t, build(t, opts)), []any{"a", "b", "c"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("slugs = %v, want %v", got, want)
+	}
+}
+
+func TestBuild_RelayOnly_AccountModelsDoNotAffectResult(t *testing.T) {
+	t.Parallel()
+	for _, account := range [][]string{{"b"}, {"x", "y"}} {
+		codex, _ := writeFakeCodex(t, abcOfficialJSON, 0)
+		opts := buildOpts(t, codex, t.TempDir(), idSource(t, "1", "主力", "auto"))
+		opts.RelayOnly = true
+		opts.AccountModels = account
+		if got, want := slugs(t, build(t, opts)), []any{"relay-auto"}; !reflect.DeepEqual(got, want) {
+			t.Errorf("AccountModels=%v slugs = %v, want %v", account, got, want)
+		}
 	}
 }

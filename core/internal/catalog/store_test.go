@@ -198,3 +198,69 @@ func TestStore_WriteFailsWhenDirMissing(t *testing.T) {
 		t.Error("数据目录不存在时应报错")
 	}
 }
+
+func TestStore_AccountModels_SaveWritesSlugsFileAndLoadsBack(t *testing.T) {
+	t.Parallel()
+	dataDir := t.TempDir()
+	store := catalog.NewStore(dataDir)
+	if err := store.SaveAccountModels([]string{"gpt-a", "gpt-b"}); err != nil {
+		t.Fatal(err)
+	}
+	file := readJSONMap(t, filepath.Join(dataDir, "account-models.json"))
+	if want := map[string]any{"slugs": []any{"gpt-a", "gpt-b"}}; !reflect.DeepEqual(file, want) {
+		t.Errorf("文件内容 = %#v, want %#v", file, want)
+	}
+	if got, want := store.LoadAccountModels(), []string{"gpt-a", "gpt-b"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("读回 = %v, want %v", got, want)
+	}
+}
+
+func TestStore_AccountModels_SaveOverwritesPrevious(t *testing.T) {
+	t.Parallel()
+	store := catalog.NewStore(t.TempDir())
+	for _, slugs := range [][]string{{"a", "b"}, {"c"}} {
+		if err := store.SaveAccountModels(slugs); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got, want := store.LoadAccountModels(), []string{"c"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("读回 = %v, want %v", got, want)
+	}
+}
+
+func TestStore_AccountModels_UnusableFileLoadsNil(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name    string
+		content *string
+		asDir   bool
+	}{
+		{name: "文件不存在"},
+		{name: "JSON 坏掉", content: ptr(`{"slugs":[`)},
+		{name: "slugs 为空", content: ptr(`{"slugs":[]}`)},
+		{name: "没有 slugs 字段", content: ptr(`{}`)},
+		{name: "读失败", asDir: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			dataDir := t.TempDir()
+			path := filepath.Join(dataDir, "account-models.json")
+			switch {
+			case tt.asDir:
+				if err := os.Mkdir(path, 0o755); err != nil {
+					t.Fatal(err)
+				}
+			case tt.content != nil:
+				if err := os.WriteFile(path, []byte(*tt.content), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if got := catalog.NewStore(dataDir).LoadAccountModels(); got != nil {
+				t.Errorf("读回 = %#v, want nil", got)
+			}
+		})
+	}
+}
+
+func ptr(s string) *string { return &s }

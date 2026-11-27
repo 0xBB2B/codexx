@@ -261,6 +261,20 @@ func FilterOfficial(official []Entry, accountSlugs []string) []Entry {
 	return out
 }
 
+func IntersectOfficial(official []Entry, slugs []string) []Entry {
+	allowed := make(map[string]bool, len(slugs))
+	for _, slug := range slugs {
+		allowed[slug] = true
+	}
+	var out []Entry
+	for _, e := range official {
+		if slug, ok := e["slug"].(string); ok && allowed[slug] {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
 func AccountSlugs(modelsCachePath string) []string {
 	b, err := os.ReadFile(modelsCachePath)
 	if err != nil {
