@@ -51,7 +51,7 @@ func (s *Service) onOfficialRequest(h http.Header) {
 		return
 	}
 	if s.accountQuerying {
-		if !s.accountDropRunning && !s.accountFinishing && account == s.accountID {
+		if !s.accountDropRunning && account == s.accountID {
 			s.accountPending = nil
 			return
 		}
@@ -83,7 +83,6 @@ func (s *Service) finishQuery() {
 		s.accountMu.Unlock()
 		return
 	}
-	s.accountFinishing = true
 	s.accountMu.Unlock()
 
 	s.mu.Lock()
@@ -94,7 +93,7 @@ func (s *Service) finishQuery() {
 	defer s.accountMu.Unlock()
 	p := s.accountPending
 	s.accountPending = nil
-	s.accountQuerying, s.accountDropRunning, s.accountFinishing = false, false, false
+	s.accountQuerying, s.accountDropRunning = false, false
 	if p != nil && active {
 		s.startLocked(p)
 	}

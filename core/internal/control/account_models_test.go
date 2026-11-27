@@ -1347,7 +1347,7 @@ func TestAccountModels_LatestRequestWins_DropRunningThenAccountThenDrop(t *testi
 	}
 }
 
-func TestAccountModels_RequestDuringStartOfQueuedWorkIsNotIgnored(t *testing.T) {
+func TestAccountModels_SameAccountDuringStartOfQueuedWorkClearsPending(t *testing.T) {
 	e := newAcctEnv(t, cacheV)
 	e.startBoth(t)
 	runs := e.loggedSlowCodex(t)
@@ -1378,11 +1378,14 @@ func TestAccountModels_RequestDuringStartOfQueuedWorkIsNotIgnored(t *testing.T) 
 	wg.Wait()
 	runs.waitQuiet(t)
 
-	if !exists(e.accountFile()) {
-		t.Error("最后到的是账号 A 的请求，account-models.json 应存在")
+	if hits := e.official.modelsHits(); len(hits) != 1 || hits[0].account != acctA {
+		t.Errorf("官方 /models 查询 = %+v, want 只有账号 A 的 1 次（A 刚查过，失败也按 1 小时算）", hits)
 	}
-	if got := e.officialSlugs(t); !reflect.DeepEqual(got, []any{"gpt-a", "gpt-b"}) {
-		t.Errorf("官方模型 = %v, want [gpt-a gpt-b]（按账号 A 的名单）", got)
+	if exists(e.accountFile()) {
+		t.Error("没有新的查询成功，不该存下名单")
+	}
+	if got := e.officialSlugs(t); !reflect.DeepEqual(got, []any{"gpt-a", "gpt-c"}) {
+		t.Errorf("官方模型 = %v, want [gpt-a gpt-c]", got)
 	}
 }
 
