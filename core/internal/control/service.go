@@ -33,6 +33,7 @@ var uninstallFiles = []string{
 	"access-state.json",
 	"relay-models.json",
 	"relay-reasoning-ids.json",
+	"account-models.json",
 	settingsFile,
 	logFile,
 }
@@ -58,6 +59,7 @@ type Options struct {
 	UpdateRepository   string
 	UpdateClock        update.Clock
 	DetectLogin        func(ctx context.Context, codexPath string) codexauth.Result
+	Now                func() time.Time
 }
 
 const (
@@ -118,6 +120,8 @@ type Status struct {
 	ConfigPath     string             `json:"config_path"`
 	Update         UpdateInfo         `json:"update"`
 	Access         AccessStatus       `json:"access"`
+
+	OfficialModelsRevision int `json:"official_models_revision"`
 }
 
 type RelayInput struct {
@@ -181,6 +185,15 @@ type Service struct {
 	accessMode     string
 	accessTarget   string
 	accessDetect   string
+
+	officialSet      []string
+	officialRevision int
+
+	accountMu        sync.Mutex
+	accountID        string
+	accountQueried   bool
+	accountQueriedAt time.Time
+	accountQuerying  bool
 }
 
 func NewService(opts Options) *Service {
@@ -888,14 +901,20 @@ func (s *Service) rebuild(ctx context.Context, plan relayPlan) error {
 			Mode: plan.mode[r.id], Models: plan.models[r.id],
 		})
 	}
-	res, err := catalog.Build(ctx, catalog.BuildOptions{
+	buildOpts := catalog.BuildOptions{
 		CodexPath:       codex,
 		Relays:          sources,
 		RelayTimeout:    catalog.RelayTimeout,
 		DataDir:         s.opts.DataDir,
 		ModelsCachePath: s.modelsCachePath(),
 		RelayOnly:       s.accessMode == modeRelay,
-	})
+		AccountModels:   catalog.NewStore(s.opts.DataDir).LoadAccountModels(),
+	}
+	res, err := catalog.Build(ctx, buildOpts)
+	if errors.Is(err, catalog.ErrNoAccountModels) {
+		buildOpts.AccountModels = nil
+		res, err = catalog.Build(ctx, buildOpts)
+	}
 	if err != nil {
 		return err
 	}
@@ -914,6 +933,15 @@ func (s *Service) rebuild(ctx context.Context, plan relayPlan) error {
 		infos[r.ID] = info
 	}
 	s.relayInfos, s.relayShown, s.shownKnown, s.routes, s.levels = infos, res.RelayShown, true, res.Routes, res.ReasoningLevels
+	var official []catalog.Entry
+	for _, m := range res.Models {
+		if slug, ok := m["slug"].(string); ok {
+			if _, isRelay := res.Routes[slug]; !isRelay {
+				official = append(official, m)
+			}
+		}
+	}
+	s.officialSet = officialSlugSet(official)
 	s.defaultModel, s.defaultRelay = res.DefaultModel, res.Routes[res.DefaultModel].ID
 	s.pushRelay()
 	return nil
@@ -1059,6 +1087,7 @@ func (s *Service) startProxy() error {
 		OfficialChatGPTURL: s.opts.OfficialChatGPTURL,
 		LogOutput:          f,
 		DataDir:            s.opts.DataDir,
+		OnOfficialRequest:  s.onOfficialRequest,
 	})
 	if err := p.Start(); err != nil {
 		_ = f.Close()
@@ -1121,6 +1150,8 @@ func (s *Service) statusLocked() Status {
 		ConfigPath:     s.configPath,
 		Update:         s.update,
 		Access:         AccessStatus{Mode: optional(s.accessMode), Target: optional(s.accessTarget), Detect: optional(s.accessDetect), RelayOnly: s.settings.RelayOnly, LoggedIn: s.settings.LastDetectedMode != nil && *s.settings.LastDetectedMode == modeBoth},
+
+		OfficialModelsRevision: s.officialRevision,
 	}
 	return st
 }

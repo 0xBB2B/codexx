@@ -89,7 +89,7 @@ func New(cfg Config) *Server {
 		s.officialAPIURL = defaultOfficialAPIURL
 	}
 	if s.officialChatGPTURL == "" {
-		s.officialChatGPTURL = defaultOfficialChatGPTURL
+		s.officialChatGPTURL = DefaultOfficialChatGPTURL
 	}
 	if s.logOutput == nil {
 		s.logOutput = io.Discard

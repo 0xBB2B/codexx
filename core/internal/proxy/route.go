@@ -10,7 +10,7 @@ import (
 
 const (
 	defaultOfficialAPIURL     = "https://api.openai.com/v1"
-	defaultOfficialChatGPTURL = "https://chatgpt.com/backend-api/codex"
+	DefaultOfficialChatGPTURL = "https://chatgpt.com/backend-api/codex"
 )
 
 type RelayTarget struct {
